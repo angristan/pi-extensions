@@ -33,7 +33,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | [`auto-compact-continue`](extensions/auto-compact-continue/) | Automatically continues the agent after pi triggers threshold-based context compaction |
 | [`auto-session-title`](extensions/auto-session-title/) | Generates and maintains short, descriptive titles for your pi sessions |
 | [`background-jobs`](extensions/background-jobs/) | Run long-lived shell commands in the background with live status, without blocking the agent transcript |
-| [`backtrack`](extensions/backtrack/) | Fork from an earlier user prompt and restore it to the editor |
+| [`rewind`](extensions/rewind/) | Fork from an earlier user prompt and restore it to the editor (`/undo` is an alias) |
 | [`cached-line-resets`](extensions/cached-line-resets/) | Caches pi's per-line ANSI reset application so rendering large transcript regions stays fast |
 | [`code-blocks`](extensions/code-blocks/) | Renders fenced code blocks as bordered, syntax-highlighted boxes instead of plain text |
 | [`context-inspector`](extensions/context-inspector/) | Inspect where your context window is being spent |
