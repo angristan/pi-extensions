@@ -1,0 +1,11 @@
+{
+  "name": "pi-extensions",
+  "version": "0.1.0",
+  "description": "A collection of TUI extensions for the pi coding agent: nicer tool-block rendering, context telemetry, goal/plan tracking, background jobs, and more.",
+  "keywords": ["pi-package"],
+  "private": true,
+  "license": "MIT",
+  "pi": {
+    "extensions": ["./extensions/*"]
+  }
+}
