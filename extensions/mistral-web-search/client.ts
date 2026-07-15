@@ -1,0 +1,405 @@
+import { Buffer } from "node:buffer";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+const DEFAULT_PROVIDER_ID = "mistral";
+const DEFAULT_API_KEY_ENV = "MISTRAL_API_KEY";
+const DEFAULT_BASE_URL = "https://api.mistral.ai";
+const DEFAULT_TIMEOUT_MS = 120_000;
+const MCP_PROTOCOL_VERSION = "2025-06-18";
+const MAX_OUTPUT_BYTES = 50 * 1024;
+const MAX_OUTPUT_LINES = 2_000;
+const MAX_SNIPPETS_PER_RESULT = 3;
+const MAX_SNIPPET_CHARS = 900;
+
+export interface RagResult {
+	id: string;
+	url: string | null;
+	title: string | null;
+	description: string | null;
+	snippets: string[];
+	date: string | null;
+	rank: number;
+	source: string;
+	metadata: Record<string, unknown> | null;
+	canOpen: boolean;
+}
+
+export interface WebSearchResult {
+	provider: "mistral-web-search-mcp";
+	tool: "web_search";
+	query: string;
+	startDate?: string;
+	endDate?: string;
+	limit: number;
+	results: RagResult[];
+	elapsedMs: number;
+}
+
+export interface NewsSearchResult {
+	provider: "mistral-web-search-mcp";
+	tool: "news_search";
+	query: string;
+	startDate?: string;
+	endDate?: string;
+	lang?: string;
+	limit: number;
+	results: RagResult[];
+	elapsedMs: number;
+}
+
+export interface OpenUrlResult {
+	provider: "mistral-web-search-mcp";
+	tool: "open_url";
+	url: string;
+	content: string;
+	elapsedMs: number;
+	truncated: boolean;
+	originalBytes: number;
+	originalLines: number;
+}
+
+interface ProviderConfig {
+	baseUrl?: string;
+	apiKey?: string;
+}
+
+interface ModelsConfig {
+	providers?: Record<string, ProviderConfig>;
+}
+
+export interface MistralMcpOptions {
+	agentDir?: string;
+	providerId?: string;
+	baseUrl?: string;
+	apiKey?: string;
+	timeoutMs?: number;
+	signal?: AbortSignal;
+}
+
+export interface WebSearchArgs {
+	query: string;
+	startDate?: string;
+	endDate?: string;
+	limit?: number;
+}
+
+export interface NewsSearchArgs extends WebSearchArgs {
+	lang?: string;
+}
+
+function agentDir(): string {
+	return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+}
+
+function readModelsConfig(dir: string): ModelsConfig | undefined {
+	try {
+		return JSON.parse(readFileSync(join(dir, "models.json"), "utf8")) as ModelsConfig;
+	} catch {
+		return undefined;
+	}
+}
+
+function resolveEnvReference(value: string): string | undefined {
+	const trimmed = value.trim();
+	const braced = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(trimmed);
+	if (braced) return process.env[braced[1]!];
+	const bare = /^\$([A-Za-z_][A-Za-z0-9_]*)$/.exec(trimmed);
+	if (bare) return process.env[bare[1]!];
+	return undefined;
+}
+
+function resolveApiKey(reference: string | undefined, fallbackEnv: string): string | undefined {
+	if (reference?.trim()) {
+		const envValue = resolveEnvReference(reference);
+		if (envValue !== undefined) return envValue;
+		if (reference.trim().startsWith("!")) {
+			// Pi provider configs can support command substitution, but extensions should
+			// not execute arbitrary configured commands just to search the web.
+			throw new Error("Command-backed Mistral API keys are not supported by mistral_web_search.");
+		}
+		if (!reference.trim().startsWith("$")) return reference;
+	}
+	return process.env[fallbackEnv];
+}
+
+function connectorEndpoint(baseUrl: string): string {
+	const trimmed = baseUrl.replace(/\/+$/, "");
+	const root = trimmed.replace(/\/v\d+(?:\/.*)?$/i, "");
+	return `${root}/v1/connectors-gateway/web_search/mcp`;
+}
+
+function textContent(value: unknown): string[] {
+	if (!value || typeof value !== "object") return [];
+	const content = (value as { content?: unknown }).content;
+	if (!Array.isArray(content)) return [];
+	return content
+		.filter((part): part is { type?: unknown; text: string } => Boolean(part) && typeof part === "object" && typeof (part as { text?: unknown }).text === "string")
+		.map((part) => part.text);
+}
+
+function parseMaybeSse(text: string): unknown {
+	if (!text.startsWith("event:") && !text.startsWith("data:")) return JSON.parse(text);
+	const data = text
+		.split("\n")
+		.filter((line) => line.startsWith("data:"))
+		.map((line) => line.slice(5).trimStart())
+		.join("\n")
+		.trim();
+	if (!data) throw new Error("Mistral MCP returned an empty SSE payload.");
+	return JSON.parse(data);
+}
+
+async function withTimeout<T>(signal: AbortSignal | undefined, timeoutMs: number, fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
+	const timeoutSignal = AbortSignal.timeout(timeoutMs);
+	const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+	return fn(requestSignal);
+}
+
+async function callMcpTool(toolName: string, args: Record<string, unknown>, options: MistralMcpOptions = {}): Promise<{ result: unknown; elapsedMs: number }> {
+	const dir = options.agentDir ?? agentDir();
+	const provider = readModelsConfig(dir)?.providers?.[options.providerId ?? DEFAULT_PROVIDER_ID];
+	const apiKey = options.apiKey ?? resolveApiKey(provider?.apiKey, DEFAULT_API_KEY_ENV);
+	if (!apiKey) throw new Error(`${DEFAULT_API_KEY_ENV} is not set.`);
+
+	const baseUrl = options.baseUrl ?? provider?.baseUrl ?? DEFAULT_BASE_URL;
+	const timeoutMs = options.timeoutMs ?? Number(process.env.PI_MISTRAL_WEB_SEARCH_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);
+	const started = performance.now();
+
+	const payload = await withTimeout(options.signal, timeoutMs, async (requestSignal) => {
+		const response = await fetch(connectorEndpoint(baseUrl), {
+			method: "POST",
+			headers: {
+				Accept: "application/json, text/event-stream",
+				Authorization: `Bearer ${apiKey}`,
+				"Content-Type": "application/json",
+				"MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
+			},
+			body: JSON.stringify({
+				jsonrpc: "2.0",
+				id: Date.now(),
+				method: "tools/call",
+				params: { name: toolName, arguments: args },
+			}),
+			signal: requestSignal,
+		});
+		const text = await response.text();
+		if (!response.ok) throw new Error(`Mistral MCP error: HTTP ${response.status}: ${text || response.statusText}`);
+		return parseMaybeSse(text);
+	});
+
+	if (!payload || typeof payload !== "object") throw new Error("Mistral MCP returned an invalid JSON-RPC payload.");
+	const record = payload as { error?: unknown; result?: unknown };
+	if (record.error) throw new Error(`Mistral MCP error: ${JSON.stringify(record.error)}`);
+	return { result: record.result, elapsedMs: performance.now() - started };
+}
+
+function asNullableString(value: unknown): string | null {
+	return typeof value === "string" && value.trim() ? value : null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+	return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function parseRagResults(result: unknown): RagResult[] {
+	const texts = textContent(result);
+	if (texts.length === 0) return [];
+	const parsed = JSON.parse(texts.join("\n")) as unknown;
+	const root = asRecord(parsed);
+	if (!root) throw new Error("Mistral MCP search result was not an object.");
+
+	return Object.entries(root)
+		.map(([id, value]) => {
+			const record = asRecord(value);
+			if (!record) return undefined;
+			const snippets = Array.isArray(record.snippets)
+				? record.snippets.filter((snippet): snippet is string => typeof snippet === "string")
+				: [];
+			return {
+				id,
+				url: asNullableString(record.url),
+				title: asNullableString(record.title),
+				description: asNullableString(record.description),
+				snippets,
+				date: asNullableString(record.date),
+				rank: typeof record.rank === "number" ? record.rank : Number.MAX_SAFE_INTEGER,
+				source: typeof record.source === "string" && record.source.trim() ? record.source : "unknown",
+				metadata: asRecord(record.metadata),
+				canOpen: typeof record.can_open === "boolean" ? record.can_open : true,
+			} satisfies RagResult;
+		})
+		.filter((result): result is RagResult => result !== undefined)
+		.sort((a, b) => a.rank - b.rank);
+}
+
+function trimDate(value: string | undefined): string | undefined {
+	const trimmed = value?.trim();
+	return trimmed || undefined;
+}
+
+function clampLimit(value: number | undefined, fallback: number, max: number): number {
+	if (!Number.isFinite(value)) return fallback;
+	return Math.max(1, Math.min(max, Math.trunc(value!)));
+}
+
+export async function searchMistralWeb(args: WebSearchArgs | string, options: MistralMcpOptions = {}): Promise<WebSearchResult> {
+	const input = typeof args === "string" ? { query: args } : args;
+	const query = input.query.trim();
+	if (!query) throw new Error("query must not be empty");
+	const limit = clampLimit(input.limit, 20, 20);
+	const startDate = trimDate(input.startDate);
+	const endDate = trimDate(input.endDate);
+	const mcpArgs: Record<string, unknown> = { query, limit };
+	if (startDate) mcpArgs.start_date = startDate;
+	if (endDate) mcpArgs.end_date = endDate;
+
+	const { result, elapsedMs } = await callMcpTool("web_search", mcpArgs, options);
+	return {
+		provider: "mistral-web-search-mcp",
+		tool: "web_search",
+		query,
+		startDate,
+		endDate,
+		limit,
+		results: parseRagResults(result),
+		elapsedMs,
+	};
+}
+
+export async function searchMistralNews(args: NewsSearchArgs, options: MistralMcpOptions = {}): Promise<NewsSearchResult> {
+	const query = args.query.trim();
+	if (!query) throw new Error("query must not be empty");
+	const limit = clampLimit(args.limit, 10, 400);
+	const startDate = trimDate(args.startDate);
+	const endDate = trimDate(args.endDate);
+	const lang = args.lang?.trim() || undefined;
+	const mcpArgs: Record<string, unknown> = { query, limit };
+	if (startDate) mcpArgs.start_date = startDate;
+	if (endDate) mcpArgs.end_date = endDate;
+	if (lang) mcpArgs.lang = lang;
+
+	const { result, elapsedMs } = await callMcpTool("news_search", mcpArgs, options);
+	return {
+		provider: "mistral-web-search-mcp",
+		tool: "news_search",
+		query,
+		startDate,
+		endDate,
+		lang,
+		limit,
+		results: parseRagResults(result),
+		elapsedMs,
+	};
+}
+
+function truncateText(text: string): { content: string; truncated: boolean; originalBytes: number; originalLines: number } {
+	const lines = text.split("\n");
+	const originalLines = lines.length;
+	const originalBytes = Buffer.byteLength(text, "utf8");
+	let selected = lines.slice(0, MAX_OUTPUT_LINES).join("\n");
+	let truncated = lines.length > MAX_OUTPUT_LINES;
+	while (Buffer.byteLength(selected, "utf8") > MAX_OUTPUT_BYTES) {
+		selected = selected.slice(0, Math.max(0, Math.floor(selected.length * 0.9)));
+		truncated = true;
+	}
+	if (truncated) {
+		selected = `${selected.trimEnd()}\n\n[Content truncated: ${originalLines} line(s), ${originalBytes} byte(s) before truncation.]`;
+	}
+	return { content: selected, truncated, originalBytes, originalLines };
+}
+
+function parseOpenUrlContent(result: unknown): string {
+	const text = textContent(result).join("\n").trim();
+	if (!text) return "";
+	try {
+		const parsed = JSON.parse(text) as unknown;
+		if (Array.isArray(parsed)) {
+			const nested = parsed
+				.filter((part): part is { text: string } => Boolean(part) && typeof part === "object" && typeof (part as { text?: unknown }).text === "string")
+				.map((part) => part.text)
+				.join("\n");
+			if (nested.trim()) return nested.trim();
+		}
+	} catch {
+		// Some connector responses are already plain text.
+	}
+	return text;
+}
+
+export async function openMistralUrl(url: string, options: MistralMcpOptions = {}): Promise<OpenUrlResult> {
+	const trimmedUrl = url.trim();
+	if (!trimmedUrl) throw new Error("url must not be empty");
+	const { result, elapsedMs } = await callMcpTool("open_url", { url: trimmedUrl }, options);
+	const truncated = truncateText(parseOpenUrlContent(result));
+	return {
+		provider: "mistral-web-search-mcp",
+		tool: "open_url",
+		url: trimmedUrl,
+		content: truncated.content,
+		elapsedMs,
+		truncated: truncated.truncated,
+		originalBytes: truncated.originalBytes,
+		originalLines: truncated.originalLines,
+	};
+}
+
+function shorten(value: string, maxChars: number): string {
+	const normalized = value.replace(/\s+/g, " ").trim();
+	return normalized.length <= maxChars ? normalized : `${normalized.slice(0, maxChars).trimEnd()}…`;
+}
+
+function formatResultItem(result: RagResult, index: number): string[] {
+	const lines = [
+		`${index + 1}. ${result.title ?? result.url ?? result.id}`,
+		`   URL: ${result.url ?? "n/a"}`,
+		`   Rank: ${result.rank}`,
+		`   Source: ${result.source}`,
+	];
+	if (result.date) lines.push(`   Date: ${result.date}`);
+	if (result.description) lines.push(`   Description: ${shorten(result.description, 600)}`);
+	if (result.snippets.length > 0) {
+		lines.push("   Snippets:");
+		for (const snippet of result.snippets.slice(0, MAX_SNIPPETS_PER_RESULT)) {
+			lines.push(`   - ${shorten(snippet, MAX_SNIPPET_CHARS)}`);
+		}
+	}
+	if (!result.canOpen) lines.push("   Can open: false");
+	return lines;
+}
+
+export function formatSearchResults(result: WebSearchResult | NewsSearchResult): string {
+	const lines = [
+		`query: ${result.query}`,
+		`provider: ${result.provider}`,
+		`tool: ${result.tool}`,
+		`limit: ${result.limit}`,
+		`elapsed_ms: ${Math.round(result.elapsedMs)}`,
+		`result_count: ${result.results.length}`,
+	];
+	if (result.startDate) lines.push(`start_date: ${result.startDate}`);
+	if (result.endDate) lines.push(`end_date: ${result.endDate}`);
+	if (result.tool === "news_search" && result.lang) lines.push(`lang: ${result.lang}`);
+	lines.push("", "results:");
+	if (result.results.length === 0) lines.push("No results returned.");
+	for (let index = 0; index < result.results.length; index++) {
+		lines.push(...formatResultItem(result.results[index]!, index));
+	}
+	return truncateText(lines.join("\n")).content;
+}
+
+export function formatOpenUrlResult(result: OpenUrlResult): string {
+	return [
+		`url: ${result.url}`,
+		`provider: ${result.provider}`,
+		`tool: ${result.tool}`,
+		`elapsed_ms: ${Math.round(result.elapsedMs)}`,
+		`truncated: ${result.truncated}`,
+		`original_bytes: ${result.originalBytes}`,
+		`original_lines: ${result.originalLines}`,
+		"",
+		"content:",
+		result.content,
+	].join("\n");
+}
