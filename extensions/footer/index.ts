@@ -18,6 +18,8 @@ const FOOTER_COLORS = {
 	thread: [156, 222, 211], // entity.name.section
 	path: [171, 223, 167], // string
 	branch: [143, 179, 239], // entity.name.function
+	addition: [166, 227, 161], // diff added
+	deletion: [243, 139, 168], // diff removed
 	model: [246, 226, 183], // entity.name.type
 	usage: [242, 181, 144], // constant.numeric
 	timing: [185, 170, 224], // balanced accent for ttft/tps
@@ -32,6 +34,8 @@ const FOOTER_THEME_TOKEN: Record<StatusSegment["accent"], string> = {
 	thread: "mdCode",        // session identity — orange, distinct from cost
 	path: "mdLink",          // cwd — blue
 	branch: "success",      // git branch + cache-good — green status
+	addition: "toolDiffAdded", // git additions — diff green
+	deletion: "toolDiffRemoved", // git deletions — diff red
 	model: "syntaxType",    // model name — yellow
 	usage: "text",          // ↓/↑ token values — cream (semantic parallel)
 	timing: "thinkingMedium", // ctx — aqua
@@ -45,7 +49,7 @@ interface BranchChanges {
 }
 
 interface StatusSegment {
-	accent: "thread" | "path" | "branch" | "model" | "usage" | "timing" | "cost" | "warning";
+	accent: "thread" | "path" | "branch" | "addition" | "deletion" | "model" | "usage" | "timing" | "cost" | "warning";
 	text: string;
 	/** Optional leading label (e.g. "↓", "↑", "ctx") rendered in the muted tone,
 	 * mirroring turn-stats' muted-label + colored-value pattern. */
@@ -438,11 +442,15 @@ export default function (pi: ExtensionAPI) {
 					const contextWindow = usage?.contextWindow ?? current.model?.contextWindow ?? 0;
 					const totals = currentUsageTotals(current);
 					const branch = footerData.getGitBranch();
-					let branchText = branch && branch !== "detached" ? branch : "";
-					if (branchText && branchChangeSummary) {
-						branchText += branchChangeSummary.additions === 0 && branchChangeSummary.deletions === 0
-							? " clean"
-							: ` +${branchChangeSummary.additions} -${branchChangeSummary.deletions}`;
+					const branchSegments: StatusSegment[] = branch && branch !== "detached"
+						? [{ accent: "branch", text: branch }]
+						: [];
+					if (branchSegments.length > 0 && branchChangeSummary
+						&& (branchChangeSummary.additions > 0 || branchChangeSummary.deletions > 0)) {
+						branchSegments.push(
+							{ accent: "addition", text: `+${branchChangeSummary.additions}` },
+							{ accent: "deletion", text: `-${branchChangeSummary.deletions}` },
+						);
 					}
 
 					const hasCache = totals.cacheRead > 0 || totals.cacheWrite > 0;
@@ -475,7 +483,7 @@ export default function (pi: ExtensionAPI) {
 					const groups: FooterGroup[] = [
 						{ segments: [{ accent: "thread", text: threadTitle(current) }], priority: 0, required: true },
 						{ segments: [{ accent: "path", text: formatDirectory(current.cwd) }], priority: 8 },
-						{ segments: branchText ? [{ accent: "branch", text: branchText }] : [], priority: 6 },
+						{ segments: branchSegments, priority: 6 },
 						{ segments: modelSegments, priority: 7 },
 						{
 							segments: contextWindow > 0
