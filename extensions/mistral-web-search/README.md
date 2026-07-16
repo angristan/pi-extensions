@@ -14,16 +14,16 @@ Results render as tree-structured rows:
 ```
 • Searched “auth middleware docs”
   └ 20 results · <1s
-    1. RFC 9449 — OAuth 2.0 Pushed Authorization — datatracker.ietf.org · 2024
+    1. RFC 9449 — OAuth 2.0 Pushed Authorization — datatracker.ietf.org · via Brave · 2024
        Defines the pushed authorization request endpoint and request flow…
-    2. Middleware patterns in web frameworks — owasp.org · 2023
+    2. Middleware patterns in web frameworks — owasp.org · via Brave · 2023
        Security guidance for authentication and authorization middleware…
     5 shown · 15 more
 ```
 
 Agent-facing content and human-facing display details are bounded separately.
 Search output truncates only between complete result records, while the compact
-renderer keeps clickable titles, source/date metadata, and one evidence line.
+renderer keeps clickable titles, website/search-engine/date metadata, and one clean evidence line.
 
 ## Config
 
