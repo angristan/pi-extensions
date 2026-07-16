@@ -128,6 +128,14 @@ describe("mistral web search renderer", () => {
 		expect(render(openUrl, toolResult, { url: "https://example.com/docs" }, { isError: true })).toMatchSnapshot();
 	});
 
+	test("bot challenges render as blocked rather than opened", () => {
+		const toolResult = { content: [{
+			type: "text",
+			text: "title: JavaScript is disabled\nIn order to continue, verify that you're not a robot. This requires JavaScript.",
+		}] };
+		expect(render(openUrl, toolResult, { url: "https://guide.example.com/restaurants" }, { isError: true })).toMatchSnapshot();
+	});
+
 	test("expanded open content strips terminal controls", () => {
 		const toolResult = {
 			content: [{ type: "text", text: "stored content" }],

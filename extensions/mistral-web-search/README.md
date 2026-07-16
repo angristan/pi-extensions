@@ -27,7 +27,8 @@ renderer keeps clickable titles, website/search-engine/date metadata, and one
 clean evidence line. Shared search-engine attribution appears once in the
 summary; mixed engines remain labeled per result. Remote text is stripped of
 terminal control sequences, hyperlinks accept only normalized HTTP(S) URLs,
-and connector timeout text renders as an explicit `Open failed` state.
+connector timeouts render as `Open failed`, and JavaScript/CAPTCHA challenge
+pages render as `Open blocked`.
 
 ## Config
 

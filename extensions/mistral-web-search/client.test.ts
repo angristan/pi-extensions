@@ -131,8 +131,23 @@ describe("search tool persistence", () => {
 		expect(normalizeHttpUrl("https://www.example.com/path")).toBe("https://www.example.com/path");
 	});
 
-	test("detects connector timeout text as an open failure", () => {
-		expect(detectOpenUrlFailure("Timed out while opening this page. You may retry once, or try a different source.")).toContain("Timed out while opening this page.");
+	test("classifies connector timeout and bot-challenge responses", () => {
+		expect(detectOpenUrlFailure("Timed out while opening this page. You may retry once, or try a different source.")).toEqual({
+			kind: "failed",
+			message: "Timed out while opening this page. You may retry once, or try a different source.",
+		});
+		expect(detectOpenUrlFailure([
+			"title: JavaScript is disabled",
+			"# JavaScript is disabled",
+			"In order to continue, we need to verify that you're not a robot. This requires JavaScript.",
+		].join("\n"))).toEqual({
+			kind: "blocked",
+			message: "Page requires JavaScript and bot verification.",
+		});
+		expect(detectOpenUrlFailure("Error: Open blocked: Website denied automated access.")).toEqual({
+			kind: "blocked",
+			message: "Website denied automated access.",
+		});
 		expect(detectOpenUrlFailure("Page content loaded normally.")).toBeUndefined();
 	});
 
