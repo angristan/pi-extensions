@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 
 type Status = "pending" | "in_progress" | "completed";
 interface PlanItem { step: string; status: Status }
@@ -201,6 +201,49 @@ function planLines(state: PlanState, theme: any): string[] {
 	return lines;
 }
 
+function indentedWrap(content: string, width: number, firstPrefix: string, continuationPrefix = firstPrefix): string[] {
+	const maxWidth = Math.max(1, width);
+	const contentWidth = Math.max(1, maxWidth - visibleWidth(firstPrefix));
+	return wrapTextWithAnsi(content, contentWidth).map((line, index) =>
+		truncateToWidth(`${index === 0 ? firstPrefix : continuationPrefix}${line}`, maxWidth, ""),
+	);
+}
+
+function renderedPlanLines(state: PlanState, theme: any, width: number): string[] {
+	const maxWidth = Math.max(1, width);
+	const lines = [truncateToWidth(`${theme.fg("muted", "•")} ${theme.bold("Updated Plan")}`, maxWidth, "")];
+	if (state.explanation?.trim()) {
+		lines.push(...indentedWrap(theme.fg("dim", theme.italic(state.explanation.trim())), maxWidth, "  "));
+	}
+	for (const item of state.items) {
+		let marker: string;
+		let step: string;
+		if (item.status === "completed") {
+			marker = theme.fg("muted", "✓ ");
+			step = theme.fg("muted", theme.strikethrough(item.step));
+		} else if (item.status === "in_progress") {
+			marker = theme.fg("accent", theme.bold("● "));
+			step = theme.fg("accent", theme.bold(item.step));
+		} else {
+			marker = theme.fg("dim", "○ ");
+			step = theme.fg("muted", item.step);
+		}
+		lines.push(...indentedWrap(step, maxWidth, `  └ ${marker}`, "      "));
+	}
+	if (!state.items.length) lines.push(...indentedWrap(theme.fg("dim", "(no steps)"), maxWidth, "  └ ", "    "));
+	return lines;
+}
+
+class PlanResult implements Component {
+	constructor(private readonly state: PlanState, private readonly theme: any) {}
+
+	render(width: number): string[] {
+		return renderedPlanLines(this.state, this.theme, width);
+	}
+
+	invalidate(): void {}
+}
+
 function boundedWrap(content: string, width: number, maxRows: number, theme: any): string[] {
 	const wrapped = wrapTextWithAnsi(content, Math.max(1, width));
 	if (wrapped.length <= maxRows) return wrapped;
@@ -330,7 +373,7 @@ export default function (pi: ExtensionAPI) {
 		renderCall: () => new Text("", 0, 0),
 		renderResult: (result: any, _options: any, theme: any) => {
 			const details = result.details as PlanState | undefined;
-			return new Text(planLines(details ?? { items: [] }, theme).join("\n"), 0, 0);
+			return new PlanResult(details ?? { items: [] }, theme);
 		},
 		renderShell: "self",
 	});
