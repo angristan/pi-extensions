@@ -1,4 +1,4 @@
-export const TITLE_STATE_TYPE = "auto-session-title-state-v1";
+export const TITLE_STATE_TYPE = "auto-session-title-state-v2";
 export const MAX_TITLE_CONTEXT_CHARS = 8_000;
 export const MAX_CURRENT_USER_CHARS = 2_000;
 export const MAX_CURRENT_ASSISTANT_CHARS = 2_000;
@@ -7,7 +7,7 @@ export const MAX_TURN_SUMMARY_CHARS = 300;
 export const MAX_RECENT_TURN_SUMMARIES = 8;
 
 export interface TitleState {
-	version: 1;
+	version: 2;
 	turnSummary: string;
 	focusSummary: string;
 	title: string;
@@ -58,7 +58,7 @@ function stateFromEntry(entry: any): TitleState | undefined {
 	if (entry?.type !== "custom" || entry.customType !== TITLE_STATE_TYPE) return undefined;
 	const data = entry.data;
 	if (
-		data?.version !== 1
+		data?.version !== 2
 		|| typeof data.turnSummary !== "string"
 		|| typeof data.focusSummary !== "string"
 		|| typeof data.title !== "string"
@@ -68,7 +68,7 @@ function stateFromEntry(entry: any): TitleState | undefined {
 	const title = oneLine(data.title);
 	if (!turnSummary || !focusSummary || !title) return undefined;
 	return {
-		version: 1,
+		version: 2,
 		turnSummary,
 		focusSummary,
 		title,
@@ -112,7 +112,10 @@ export function buildTitleContext(entries: readonly any[], provisionalUser?: str
 			.slice(-MAX_RECENT_TURN_SUMMARIES)
 			.map((state) => clip(state.turnSummary, MAX_TURN_SUMMARY_CHARS)!)
 			.filter(Boolean),
-		currentUserRequest: clip(provisionalUser ?? userTexts.join("\n"), MAX_CURRENT_USER_CHARS),
+		currentUserRequest: clip(
+			provisionalUser ?? (latestState ? userTexts.join("\n") : userTexts.at(-1)),
+			MAX_CURRENT_USER_CHARS,
+		),
 		currentAssistantOutcome: provisionalUser
 			? undefined
 			: clip(assistantTexts.at(-1), MAX_CURRENT_ASSISTANT_CHARS),
@@ -165,7 +168,7 @@ export function createTitleState(
 	basedOnLeafId?: string,
 ): TitleState {
 	return {
-		version: 1,
+		version: 2,
 		turnSummary: clip(response.turnSummary, MAX_TURN_SUMMARY_CHARS)!,
 		focusSummary: clip(response.focusSummary, MAX_FOCUS_SUMMARY_CHARS)!,
 		title: oneLine(response.title),

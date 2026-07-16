@@ -81,8 +81,10 @@ turn_summary:
 focus_summary:
 - Maintain the active session focus using previous_focus, recent_turn_summaries, and the current turn.
 - Use 600 characters maximum.
-- Weight sustained recent work over the initial umbrella topic.
-- Let repeated work narrow a broad focus, but ignore a brief aside or temporary debugging detour.
+- Treat a completed implementation or configuration outcome in the current turn as strong evidence of the active focus.
+- Weight sustained recent work over the initial umbrella topic and correct stale previous focus when the current outcome is more specific.
+- Let repeated work narrow a broad focus, but ignore a brief conversational aside, lookup, or temporary debugging detour.
+- Name the feature being changed, not supporting tools mentioned in historical discussion.
 
 title:
 - Return one specific noun phrase in title case, using 3 words maximum.

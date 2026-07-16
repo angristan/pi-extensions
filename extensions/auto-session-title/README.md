@@ -26,7 +26,8 @@ raw diffs. Its 8,000-character context budget contains:
 The same model call returns the turn summary, focus summary, and title. Completed
 summary state is stored as hidden session metadata, stays out of agent context,
 and is restored from the active branch after reloads, resumes, forks, and tree
-navigation.
+navigation. Existing sessions without compatible summary state bootstrap from
+only their latest completed turn so old umbrella topics do not dominate.
 
 ## Config
 
