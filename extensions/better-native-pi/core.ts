@@ -217,7 +217,7 @@ function expandedLines(name: string, args: Record<string, unknown>, result: any,
 	const diff = result?.details?.diff as string | undefined;
 	if (diff && diff.trim()) {
 		const path = typeof args.path === "string" ? args.path : undefined;
-		for (const dl of colorizeDiff(diff.replace(/\s+$/, ""), path)) out.push(`${INDENT}${dl}`);
+		for (const dl of colorizeDiff(diff.replace(/\s+$/, ""), path, theme)) out.push(`${INDENT}${dl}`);
 		return out;
 	}
 
@@ -270,7 +270,7 @@ export function buildToolBlock(
 		&& Boolean(diff?.trim());
 	if (showsInlineDiff) {
 		const path = typeof rest.path === "string" ? rest.path : undefined;
-		lines.push(...colorizeDiff(diff!.replace(/\s+$/, ""), path).map((line) => `${INDENT}${line}`));
+		lines.push(...colorizeDiff(diff!.replace(/\s+$/, ""), path, theme).map((line) => `${INDENT}${line}`));
 	}
 
 	// A write expansion still usefully reveals the complete written content.

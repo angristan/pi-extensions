@@ -274,13 +274,17 @@ function parseDiffLine(line: string): ParsedDiffLine | undefined {
 }
 
 /** Syntax-highlight Pi's line-numbered diff using the `N +/-content` layout. */
-export function colorizeDiff(diff: string, path?: string): string[] {
+export function colorizeDiff(diff: string, path?: string, theme?: any): string[] {
 	const rawLines = diff.split("\n");
 	const parsedLines = rawLines.map(parseDiffLine);
 	const language = path ? getLanguageFromPath(path) : undefined;
 	const syntaxLines = language
 		? highlightCode(parsedLines.map((line) => line?.content ?? "").join("\n"), language)
 		: [];
+
+	const add = (t: string) => (typeof theme?.fg === "function" ? theme.fg("toolDiffAdded", t) : `${GREEN}${t}${RESET}`);
+	const del = (t: string) => (typeof theme?.fg === "function" ? theme.fg("toolDiffRemoved", t) : `${RED}${t}${RESET}`);
+	const ctx = (t: string) => (typeof theme?.fg === "function" ? theme.fg("toolDiffContext", t) : `${CYAN}${t}${RESET}`);
 
 	return rawLines.map((line, index) => {
 		const numbered = parsedLines[index];
@@ -290,21 +294,21 @@ export function colorizeDiff(diff: string, path?: string): string[] {
 			const syntax = syntaxLines[index] ?? content;
 			if (marker === "+") {
 				return language
-					? `${prefix}${GREEN}+${RESET}${syntax}`
-					: `${prefix}${GREEN}+${content}${RESET}`;
+					? `${prefix}${add("+")}${syntax}`
+					: `${prefix}${add("+" + content)}`;
 			}
 			if (marker === "-") {
 				return language
-					? `${prefix}${RED}-${RESET}${syntax}`
-					: `${prefix}${RED}-${content}${RESET}`;
+					? `${prefix}${del("-")}${syntax}`
+					: `${prefix}${del("-" + content)}`;
 			}
 			return language
 				? `${prefix} ${syntax}`
 				: `${prefix} ${content}`;
 		}
-		if (line.startsWith("+") && !line.startsWith("+++")) return `${GREEN}${line}${RESET}`;
-		if (line.startsWith("-") && !line.startsWith("---")) return `${RED}${line}${RESET}`;
-		if (line.startsWith("@@")) return `${CYAN}${line}${RESET}`;
+		if (line.startsWith("+") && !line.startsWith("+++")) return add(line);
+		if (line.startsWith("-") && !line.startsWith("---")) return del(line);
+		if (line.startsWith("@@")) return ctx(line);
 		return line;
 	});
 }
