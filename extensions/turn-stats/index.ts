@@ -201,8 +201,8 @@ export default function (pi: ExtensionAPI) {
 		const timing = data.timing;
 		if (timing) {
 			const bits: string[] = [];
-			if (timing.ttftMs !== undefined) bits.push(`${theme.fg("muted", "ttft")} ${theme.fg("accent", formatLatency(timing.ttftMs))}`);
-			if (timing.tokensPerSecond !== undefined) bits.push(`${theme.fg("muted", "tps")} ${theme.fg("accent", formatTokensPerSecond(timing.tokensPerSecond))}`);
+			if (timing.ttftMs !== undefined) bits.push(`${theme.fg("muted", "ttft")} ${theme.fg("thinkingMedium", formatLatency(timing.ttftMs))}`);
+			if (timing.tokensPerSecond !== undefined) bits.push(`${theme.fg("muted", "tps")} ${theme.fg("thinkingMedium", formatTokensPerSecond(timing.tokensPerSecond))}`);
 			if (bits.length > 0) groups.push(bits.join(theme.fg("dim", "  ")));
 		}
 
