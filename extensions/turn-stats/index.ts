@@ -4,9 +4,28 @@ import {
 	type AssistantMessageEvent,
 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Text, type Component } from "@earendil-works/pi-tui";
 
 const ENTRY_TYPE = "turn-stats";
+
+/**
+ * Full-width dim `─` rule, followed by the stats text. The rule gives a clear
+ * visual boundary above the turn's completion summary so it's easy to spot
+ * where each turn's stats begin in the transcript.
+ */
+class StatsRow implements Component {
+	constructor(
+		private readonly stats: string,
+		private readonly theme: any,
+	) {}
+	render(width: number): string[] {
+		const rule = this.theme.fg("dim", "─".repeat(Math.max(0, width)));
+		// Render the stats line through Text so margins/wrapping match the rest
+		// of the transcript; combine with the rule above it.
+		const statsLines = new Text(this.stats, 1, 0).render(width);
+		return [rule, ...statsLines];
+	}
+}
 
 // Minimum token-window before context-% becomes meaningful. Matches the footer's
 // baseline so the two views don't drift apart.
@@ -230,7 +249,7 @@ export default function (pi: ExtensionAPI) {
 			groups.push(`${theme.fg("dim", prefix)}${amount}`);
 		}
 
-		return new Text(groups.join(groupSep), 1, 0);
+		return new StatsRow(groups.join(groupSep), theme);
 	});
 
 	const resetResponseTiming = () => {
