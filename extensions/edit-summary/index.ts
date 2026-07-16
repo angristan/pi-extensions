@@ -16,9 +16,17 @@ import {
 	type OverlayHandle,
 	type TUI,
 } from "@earendil-works/pi-tui";
+import {
+	PLAN_OVERLAY_LAYOUT_EVENT,
+	PLAN_OVERLAY_LAYOUT_REQUEST_EVENT,
+	parsePlanOverlayLayout,
+	type PlanOverlayLayout,
+} from "../plan-progress/layout.js";
 
 const ENTRY_TYPE = "edit-summary-state-v1";
 const MAX_VISIBLE_FILES = 8;
+const DEFAULT_TOP_MARGIN = 1;
+const OVERLAY_GAP = 1;
 
 interface FileSummary {
 	path: string;
@@ -113,6 +121,12 @@ function sortedFiles(files: Iterable<FileSummary>): FileSummary[] {
 	return [...files].sort((a, b) => a.path.localeCompare(b.path));
 }
 
+function summaryHeight(summary: DisplaySummary): number {
+	const visibleFiles = Math.min(summary.files.length, MAX_VISIBLE_FILES);
+	const overflowRow = summary.files.length > visibleFiles ? 1 : 0;
+	return 6 + visibleFiles + overflowRow;
+}
+
 class EditSummaryOverlay implements Component {
 	constructor(
 		private readonly theme: Theme,
@@ -182,12 +196,29 @@ export default function (pi: ExtensionAPI) {
 	let overlayHandle: OverlayHandle | undefined;
 	let closeOverlay: (() => void) | undefined;
 	let overlayGeneration = 0;
+	let renderQueued = false;
+	let planLayout: PlanOverlayLayout = { visible: false, height: 0 };
 
+	const requestOverlayRender = () => {
+		if (renderQueued) return;
+		renderQueued = true;
+		queueMicrotask(() => {
+			renderQueued = false;
+			overlayTui?.requestRender();
+		});
+	};
 	const syncOverlay = () => {
 		const shouldShow = enabled && displaySummary.files.length > 0;
 		overlayHandle?.setHidden(!shouldShow);
-		overlayTui?.requestRender();
+		requestOverlayRender();
 	};
+	const stopPlanLayoutUpdates = pi.events.on(PLAN_OVERLAY_LAYOUT_EVENT, (value) => {
+		const next = parsePlanOverlayLayout(value);
+		if (!next) return;
+		if (next.visible === planLayout.visible && next.height === planLayout.height) return;
+		planLayout = next;
+		requestOverlayRender();
+	});
 
 	const unmountOverlay = () => {
 		overlayGeneration++;
@@ -209,13 +240,20 @@ export default function (pi: ExtensionAPI) {
 			},
 			{
 				overlay: true,
-				overlayOptions: {
-					anchor: "top-right",
-					width: 46,
-					maxHeight: "80%",
-					margin: { top: 1, right: 1 },
-					nonCapturing: true,
-					visible: (terminalWidth: number) => terminalWidth >= 72,
+				overlayOptions: () => {
+					const top = planLayout.visible && planLayout.height > 0
+						? DEFAULT_TOP_MARGIN + planLayout.height + OVERLAY_GAP
+						: DEFAULT_TOP_MARGIN;
+					return {
+						anchor: "top-right",
+						width: 46,
+						maxHeight: "80%",
+						margin: { top, right: 2 },
+						nonCapturing: true,
+						visible: (terminalWidth: number, terminalHeight: number) => (
+							terminalWidth >= 72 && terminalHeight >= top + summaryHeight(displaySummary)
+						),
+					};
 				},
 				onHandle: (handle: OverlayHandle) => {
 					overlayHandle = handle;
@@ -305,8 +343,10 @@ export default function (pi: ExtensionAPI) {
 		runActive = false;
 		snapshots = new Map();
 		currentFiles = new Map();
+		planLayout = { visible: false, height: 0 };
 		displaySummary = restoreLastSummary(ctx);
 		mountOverlay(ctx);
+		pi.events.emit(PLAN_OVERLAY_LAYOUT_REQUEST_EVENT, undefined);
 	});
 
 	pi.on("before_agent_start", () => {
@@ -345,6 +385,7 @@ export default function (pi: ExtensionAPI) {
 		runActive = false;
 		snapshots.clear();
 		currentFiles.clear();
+		stopPlanLayoutUpdates();
 		unmountOverlay();
 	});
 }
