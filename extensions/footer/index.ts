@@ -32,8 +32,9 @@ const FOOTER_THEME_TOKEN: Record<StatusSegment["accent"], string> = {
 	branch: "success",      // git branch + cache-good — green status
 	model: "syntaxType",    // model name — yellow
 	usage: "text",          // ↓/↑ token values — cream (semantic parallel)
-	timing: "warning",      // ctx + cache-bad — yellow
+	timing: "thinkingMedium", // ctx — aqua, distinct from model yellow
 	cost: "mdCode",         // cost — orange, the standout metric
+	warning: "warning",     // cache-bad — yellow, matches turn-stats
 };
 
 interface BranchChanges {
@@ -42,7 +43,7 @@ interface BranchChanges {
 }
 
 interface StatusSegment {
-	accent: "thread" | "path" | "branch" | "model" | "usage" | "timing" | "cost";
+	accent: "thread" | "path" | "branch" | "model" | "usage" | "timing" | "cost" | "warning";
 	text: string;
 	/** Optional leading label (e.g. "↓", "↑", "ctx") rendered in the muted tone,
 	 * mirroring turn-stats' muted-label + colored-value pattern. */
@@ -449,7 +450,7 @@ export default function (pi: ExtensionAPI) {
 					// like turn-stats' cache hit rate, instead of folding into the input text.
 					// Cache detail colored by hit rate like turn-stats: success green when
 					// ≥50%, warning yellow otherwise. Distinct from ctx (mdListBullet).
-					const cacheHitColor = (totals.sessionCacheHit ?? 0) >= 50 ? "branch" : "timing";
+					const cacheHitColor = (totals.sessionCacheHit ?? 0) >= 50 ? "branch" : "warning";
 					const fullCacheSegments: StatusSegment[] = [];
 					if (totals.cacheRead > 0) fullCacheSegments.push({ accent: cacheHitColor, label: "cached", text: formatTokensCompact(totals.cacheRead) });
 					if (totals.cacheWrite > 0) fullCacheSegments.push({ accent: cacheHitColor, label: "written", text: formatTokensCompact(totals.cacheWrite) });
