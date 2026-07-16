@@ -12,7 +12,7 @@ import {
 	wrapTextWithAnsi,
 	type TUI,
 } from "@earendil-works/pi-tui";
-import { highlightShellCommand } from "../better-native-pi/core.js";
+import { fitToolLine, highlightShellCommand } from "../better-native-pi/core.js";
 import { BoundedOutput, CursorOutput, type CursorRead } from "./output.js";
 import { clearBackgroundTerminalService, setBackgroundTerminalService, type BackgroundTerminalService } from "./service.js";
 import { isPtySupported, spawnTerminal } from "./terminal-process.js";
@@ -293,6 +293,42 @@ function jobEntry(data: JobSnapshot, expanded: boolean, theme: any): Text {
 	const command = `  ${highlightShellCommand(compactCommand(data.command, 140), theme)}`;
 	if (!expanded) return new Text(`${header}\n${command}`, 0, 0);
 	return new Text(`${header}\n${command}\n${theme.fg("dim", formatSnapshotText(data))}`, 0, 0);
+}
+
+class TerminalInteractionComponent {
+	constructor(
+		private readonly details: JobToolDetails | undefined,
+		private readonly args: any,
+		private readonly expanded: boolean,
+		private readonly theme: any,
+		private readonly action: "read" | "write",
+	) {}
+
+	render(width: number): string[] {
+		const max = Math.max(1, width);
+		const details = this.details;
+		if (!details) return [];
+		const wrote = this.action === "write" && typeof this.args?.chars === "string" && this.args.chars.length > 0;
+		const verb = this.action === "read" ? "Read output from" : wrote ? "Interacted with" : "Waited for";
+		const color = statusColor(details.status);
+		const name = details.description || details.id;
+		const elapsed = compactDuration(duration(details));
+		const header = `${this.theme.fg(color, this.action === "read" ? "↳" : wrote ? "↪" : "↳")} ${this.theme.bold(verb)} ${name} ${this.theme.fg("dim", `· ${details.status} in ${elapsed}`)}`;
+		const output = details.output?.replace(/\s+$/, "") || "(no new output)";
+		const bodyWidth = Math.max(1, max - 4);
+		let rows = output.split("\n").flatMap((line) => wrapTextWithAnsi(line, bodyWidth));
+		if (!this.expanded && rows.length > 5) {
+			const omitted = rows.length - 4;
+			rows = [...rows.slice(0, 2), `… +${omitted} lines (Ctrl+O)`, ...rows.slice(-2)];
+		}
+		return [
+			fitToolLine(header, max),
+			...rows.map((row) => truncateToWidth(`${this.theme.fg("dim", "  │ ")}${row}`, max, "…")),
+			fitToolLine(`  └ ${this.theme.fg(color, statusSymbol(details.status))} ${this.theme.fg("dim", `${details.id}${details.tty ? " · tty" : ""}`)}`, max),
+		];
+	}
+
+	invalidate(): void {}
 }
 
 class LiveJobComponent {
@@ -651,7 +687,24 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		const prefix = isActive(job) ? `Terminal ${job.id} is still running. Use terminal_write or job_output with job_id=${job.id}.\n` : "";
 		return { content: [{ type: "text", text: `${prefix}${formatDeltaText(job, read)}` }], details };
 	};
-	const terminalService: BackgroundTerminalService = { execute: executeUnified, renderResult: liveResult };
+	const terminalService: BackgroundTerminalService = {
+		execute: executeUnified,
+		getView: (id, fallback, maxOutputBytes) => {
+			const job = jobs.get(id);
+			if (job) {
+				return {
+					details: { managedTerminal: true, ...snapshot(job, PERSISTED_OUTPUT_BYTES) },
+					output: job.output.read(0, maxOutputBytes).text,
+				};
+			}
+			const details = fallback ?? {};
+			return {
+				details,
+				output: details.output ?? [details.stdout, details.stderr].filter(Boolean).join("\n"),
+			};
+		},
+		renderResult: liveResult,
+	};
 	setBackgroundTerminalService(terminalService);
 
 	// Completion entries persist final state but intentionally render nothing:
@@ -770,8 +823,9 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			const { read, details } = readDelta(job, cursor, !explicitCursor);
 			return { content: [{ type: "text", text: formatDeltaText(job, read) }], details };
 		},
-		renderCall: (args: any, theme: any) => new Text(`${theme.fg("accent", "•")} Reading terminal ${theme.fg("accent", args.job_id ?? "")}`, 0, 0),
-		renderResult: (result: any, _options: any, _theme: any) => new Text(result?.content?.[0]?.text ?? "", 0, 0),
+		renderCall: () => new Container(),
+		renderResult: (result: any, options: any, theme: any, context: any) =>
+			new TerminalInteractionComponent(result.details as JobToolDetails | undefined, context.args, Boolean(options.expanded), theme, "read"),
 		renderShell: "self",
 	});
 
@@ -802,8 +856,9 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			const { read, details } = readDelta(job, cursor, true);
 			return { content: [{ type: "text", text: formatDeltaText(job, read) }], details };
 		},
-		renderCall: (args: any, theme: any) => new Text(`${theme.fg("accent", "↳")} ${args.chars ? "Interacting with" : "Waiting for"} terminal ${theme.fg("accent", args.job_id ?? "")}`, 0, 0),
-		renderResult: (result: any) => new Text(result?.content?.[0]?.text ?? "", 0, 0),
+		renderCall: () => new Container(),
+		renderResult: (result: any, options: any, theme: any, context: any) =>
+			new TerminalInteractionComponent(result.details as JobToolDetails | undefined, context.args, Boolean(options.expanded), theme, "write"),
 		renderShell: "self",
 	});
 

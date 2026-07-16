@@ -1,5 +1,10 @@
 import type { Component } from "@earendil-works/pi-tui";
 
+export interface BackgroundTerminalView {
+	details: any;
+	output: string;
+}
+
 export interface BackgroundTerminalService {
 	execute(
 		toolCallId: string,
@@ -8,6 +13,7 @@ export interface BackgroundTerminalService {
 		onUpdate: ((result: any) => void) | undefined,
 		ctx: any,
 	): Promise<any>;
+	getView(id: string, fallback: any, maxOutputBytes: number): BackgroundTerminalView;
 	renderResult(result: any, options: any, theme: any, context: any): Component;
 }
 

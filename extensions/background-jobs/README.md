@@ -24,6 +24,23 @@ dependency.
 
 ## User experience
 
+Managed commands keep the same reason-first headline, bordered command, and
+`│` output gutter as `better-native-pi`. The final muted row carries terminal
+metadata without mixing it into command output:
+
+```text
+• Running exercise live terminal updates 10s
+  ╭ bash ─────────────────────────────╮
+  │ for i in {1..12}; do …            │
+  ╰───────────────────────────────────╯
+  │ demo tick 09
+  │ demo tick 10
+  └ ● demo-loop-a1b2c3d4 · running · /ps
+```
+
+`terminal_write` and `job_output` use compact `↪ Interacted with` / `↳ Waited
+for` rows with the same output gutter.
+
 While terminals are active, the footer shows:
 
 ```text
