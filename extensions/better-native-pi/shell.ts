@@ -7,6 +7,7 @@
  * core's argDetail/expandedLines. Depends only on the palette (render.ts).
  */
 
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { CYAN, GREEN, MAGENTA, RESET } from "./render.js";
 
 
@@ -208,4 +209,185 @@ export function highlightShellCommand(command: string, theme?: any): string {
 	if (!normalized) return "";
 	const newline = ` ${typeof theme?.fg === "function" ? theme.fg("accent", "↵") : `${CYAN}↵${RESET}`} `;
 	return normalized.split("\n").map((line) => highlightedShellLine(line.trim(), theme)).join(newline);
+}
+
+interface DisplaySegment {
+	text: string;
+	operator?: string;
+}
+
+/** Split a long shell line at top-level chain operators without touching quotes. */
+function displaySegments(line: string): DisplaySegment[] {
+	const segments: DisplaySegment[] = [];
+	let start = 0;
+	let quote = "";
+	let parenDepth = 0;
+	let braceDepth = 0;
+	let testDepth = 0;
+
+	for (let index = 0; index < line.length; index++) {
+		const character = line[index]!;
+		if (quote) {
+			if (character === "\\" && quote !== "'") index += 1;
+			else if (character === quote) quote = "";
+			continue;
+		}
+		if (character === "'" || character === '"' || character === "`") {
+			quote = character;
+			continue;
+		}
+		if (character === "\\") {
+			index += 1;
+			continue;
+		}
+		if (line.startsWith("[[", index)) {
+			testDepth += 1;
+			index += 1;
+			continue;
+		}
+		if (testDepth > 0 && line.startsWith("]]", index)) {
+			testDepth -= 1;
+			index += 1;
+			continue;
+		}
+		if (character === "(") {
+			parenDepth += 1;
+			continue;
+		}
+		if (character === ")" && parenDepth > 0) {
+			parenDepth -= 1;
+			continue;
+		}
+		if (character === "{") {
+			braceDepth += 1;
+			continue;
+		}
+		if (character === "}" && braceDepth > 0) {
+			braceDepth -= 1;
+			continue;
+		}
+		if (character === "#" && (index === 0 || /\s/.test(line[index - 1]!))) break;
+		if (parenDepth > 0 || braceDepth > 0 || testDepth > 0) continue;
+
+		let operator: string | undefined;
+		if (line.startsWith("&&", index) || line.startsWith("||", index) || line.startsWith("|&", index)) {
+			operator = line.slice(index, index + 2);
+		} else if (character === "|") {
+			operator = character;
+		} else if (character === ";" && line[index - 1] !== ";" && ![";", "&"].includes(line[index + 1] ?? "")) {
+			operator = character;
+		}
+		if (!operator) continue;
+
+		const text = line.slice(start, index).trim();
+		if (text) segments.push({ text, operator });
+		start = index + operator.length;
+		index += operator.length - 1;
+	}
+
+	const tail = line.slice(start).trim();
+	if (tail) segments.push({ text: tail });
+	return segments.length > 0 ? segments : [{ text: line.trim() }];
+}
+
+/** Split display words while preserving whitespace inside shell quotes/groups. */
+function displayWords(text: string): string[] {
+	const words: string[] = [];
+	let start = -1;
+	let quote = "";
+	let parenDepth = 0;
+	let braceDepth = 0;
+
+	const flush = (end: number) => {
+		if (start >= 0) words.push(text.slice(start, end));
+		start = -1;
+	};
+	for (let index = 0; index < text.length; index++) {
+		const character = text[index]!;
+		if (quote) {
+			if (character === "\\" && quote !== "'") index += 1;
+			else if (character === quote) quote = "";
+			continue;
+		}
+		if (character === "'" || character === '"' || character === "`") {
+			if (start < 0) start = index;
+			quote = character;
+			continue;
+		}
+		if (character === "\\") {
+			if (start < 0) start = index;
+			index += 1;
+			continue;
+		}
+		if (character === "(") parenDepth += 1;
+		else if (character === ")" && parenDepth > 0) parenDepth -= 1;
+		else if (character === "{") braceDepth += 1;
+		else if (character === "}" && braceDepth > 0) braceDepth -= 1;
+		if (/\s/.test(character) && parenDepth === 0 && braceDepth === 0) {
+			flush(index);
+			continue;
+		}
+		if (start < 0) start = index;
+	}
+	flush(text.length);
+	return words;
+}
+
+function wrapDisplayWords(words: string[], firstIndent: string, continuationIndent: string, width: number): string[] {
+	const rows: string[][] = [];
+	let row: string[] = [];
+	for (const word of words) {
+		const indent = rows.length === 0 ? firstIndent : continuationIndent;
+		const candidate = `${indent}${[...row, word].join(" ")}`;
+		if (row.length === 0 || visibleWidth(candidate) <= width) {
+			row.push(word);
+		} else {
+			rows.push(row);
+			row = [word];
+		}
+	}
+	if (row.length > 0) rows.push(row);
+
+	// Avoid an operator stranded on its own continuation row.
+	const last = rows.at(-1);
+	const previous = rows.at(-2);
+	if (last?.length === 1 && /^(?:&&|\|\||\||\|&|;)$/.test(last[0]!) && previous && previous.length > 1) {
+		last.unshift(previous.pop()!);
+	}
+	return rows.map((wordsInRow, index) => `${index === 0 ? firstIndent : continuationIndent}${wordsInRow.join(" ")}`);
+}
+
+/**
+ * Format a command for display only. Existing short/source lines stay untouched;
+ * long lines break at shell chain operators, then at quote-aware word boundaries.
+ */
+export function formatShellCommandForDisplay(command: string, width: number): string[] {
+	const max = Math.max(1, width);
+	const output: string[] = [];
+	for (const sourceLine of command.split("\n")) {
+		if (visibleWidth(sourceLine) <= max) {
+			output.push(sourceLine);
+			continue;
+		}
+		const sourceIndent = sourceLine.match(/^\s*/)?.[0] ?? "";
+		const lineRows: string[] = [];
+		for (const segment of displaySegments(sourceLine.trim())) {
+			const firstIndent = sourceIndent;
+			const continuationIndent = `${sourceIndent}  `;
+			const words = displayWords(segment.text);
+			if (segment.operator) words.push(segment.operator);
+			lineRows.push(...wrapDisplayWords(words, firstIndent, continuationIndent, max));
+		}
+		for (let index = 0; index < lineRows.length - 1; index++) {
+			const operator = lineRows[index]!.trim();
+			if (!/^(?:&&|\|\||\||\|&|;)$/.test(operator)) continue;
+			const indent = lineRows[index]!.match(/^\s*/)?.[0] ?? "";
+			const merged = `${indent}${operator} ${lineRows[index + 1]!.trimStart()}`;
+			if (visibleWidth(merged) > max) continue;
+			lineRows.splice(index, 2, merged);
+			index -= 1;
+		}
+		output.push(...lineRows);
+	}
+	return output.length > 0 ? output : [""];
 }

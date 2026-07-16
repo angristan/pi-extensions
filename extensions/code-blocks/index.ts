@@ -198,19 +198,28 @@ function applyStyleToLine(applier: StyleApplier | undefined, line: string): stri
 	return applier.apply(withPrefix);
 }
 
-function renderCodeBlock(instance: any, token: any, width: number, nextTokenType?: string): string[] {
-	const theme = instance.theme;
+export interface CodeBoxOptions {
+	defaultTextStyle?: any;
+	maxRows?: number;
+	renderOmission?: (omitted: number, innerWidth: number) => string;
+}
+
+/** Render the same bordered code box used by patched Markdown code blocks. */
+export function renderCodeBox(
+	code: string,
+	lang: unknown,
+	width: number,
+	theme: any,
+	options: CodeBoxOptions = {},
+): string[] {
 	const maxWidth = Math.max(1, width);
-	const label = fitBorderLabel(languageLabel(token.lang), maxWidth);
+	const label = fitBorderLabel(languageLabel(lang), maxWidth);
 
 	// Very narrow panes cannot support a useful box. They still get highlighted
 	// code without exposing Markdown fence markers.
 	if (maxWidth < 8) {
-		const styleApplier = buildStyleApplier(theme, instance.defaultTextStyle);
-		const rawLines = String(token.text ?? "").split("\n");
-		const lines = rawLines.map((line) => applyStyleToLine(styleApplier, theme.codeBlock(line)));
-		if (nextTokenType && nextTokenType !== "space") lines.push("");
-		return lines;
+		const styleApplier = buildStyleApplier(theme, options.defaultTextStyle);
+		return code.split("\n").map((line) => applyStyleToLine(styleApplier, theme.codeBlock(line)));
 	}
 
 	const innerWidth = Math.max(1, maxWidth - 4);
@@ -219,27 +228,42 @@ function renderCodeBlock(instance: any, token: any, width: number, nextTokenType
 	const lines = [theme.codeBlockBorder(`╭${labelText}${topFill}╮`)];
 
 	const highlighted = theme.highlightCode
-		? theme.highlightCode(String(token.text ?? ""), token.lang)
-		: String(token.text ?? "").split("\n").map((line: string) => theme.codeBlock(line));
+		? theme.highlightCode(code, lang)
+		: code.split("\n").map((line: string) => theme.codeBlock(line));
 	const sourceLines = highlighted.length > 0 ? highlighted : [""];
 
 	// Re-apply the parent block's default style (e.g. thinking: dim + italic) on
 	// top of the syntax-highlighted lines. Syntax token colors win for their own
 	// spans; the thinking color fills the gaps and italic composes throughout.
-	const styleApplier = buildStyleApplier(theme, instance.defaultTextStyle);
-
+	const styleApplier = buildStyleApplier(theme, options.defaultTextStyle);
+	let bodyRows: string[] = [];
 	for (const sourceLine of sourceLines) {
 		const wrapped = wrapTextWithAnsi(applyStyleToLine(styleApplier, sourceLine), innerWidth);
-		for (const row of wrapped.length > 0 ? wrapped : [""]) {
-			const fitted = visibleWidth(row) <= innerWidth ? row : truncateToWidth(row, innerWidth, "");
-			const padding = " ".repeat(Math.max(0, innerWidth - visibleWidth(fitted)));
-			lines.push(
-				`${theme.codeBlockBorder("│ ")}${fitted}${padding}${theme.codeBlockBorder(" │")}`,
-			);
-		}
+		bodyRows.push(...(wrapped.length > 0 ? wrapped : [""]));
+	}
+
+	if (options.maxRows && options.maxRows > 0 && bodyRows.length > options.maxRows) {
+		const kept = Math.max(0, options.maxRows - 1);
+		const omitted = bodyRows.length - kept;
+		const omission = options.renderOmission?.(omitted, innerWidth)
+			?? theme.codeBlock(`… +${omitted} lines`);
+		bodyRows = [...bodyRows.slice(0, kept), omission];
+	}
+
+	for (const row of bodyRows) {
+		const fitted = visibleWidth(row) <= innerWidth ? row : truncateToWidth(row, innerWidth, "");
+		const padding = " ".repeat(Math.max(0, innerWidth - visibleWidth(fitted)));
+		lines.push(`${theme.codeBlockBorder("│ ")}${fitted}${padding}${theme.codeBlockBorder(" │")}`);
 	}
 
 	lines.push(theme.codeBlockBorder(`╰${"─".repeat(Math.max(0, maxWidth - 2))}╯`));
+	return lines;
+}
+
+function renderCodeBlock(instance: any, token: any, width: number, nextTokenType?: string): string[] {
+	const lines = renderCodeBox(String(token.text ?? ""), token.lang, width, instance.theme, {
+		defaultTextStyle: instance.defaultTextStyle,
+	});
 	if (nextTokenType && nextTokenType !== "space") lines.push("");
 	return lines;
 }
