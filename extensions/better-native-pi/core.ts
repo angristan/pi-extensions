@@ -261,11 +261,10 @@ export function buildToolBlock(
 	const headlineTone = headline
 		? (typeof theme?.fg === "function" ? theme.fg("warning", headline) : `${headline}`)
 		: "";
-	// Slightly mute the command detail with the ANSI DIM attribute so the
-	// colorful syntax highlighting recedes relative to the reasoning headline.
-	// wrapBranchLine re-applies the leading SGR to continuation lines, so DIM
-	// survives wrapping across all rows (not just the first).
-	const dimmedDetail = hasDetail ? `${DIM}${detail}${RESET}` : "";
+	// Command stays full-color: it's naturally brighter than the DIM'd output
+	// below, giving a clear hierarchy (command > reasoning > output) without
+	// an extra dim attribute that competes with the output's dim.
+	const dimmedDetail = hasDetail ? detail : "";
 	const metadata = hasDetail
 		? `${dimmedDetail} · ${summary}`
 		: summary;
