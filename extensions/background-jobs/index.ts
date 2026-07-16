@@ -14,6 +14,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { highlightShellCommand } from "../better-native-pi/core.js";
 import { BoundedOutput, CursorOutput, type CursorRead } from "./output.js";
+import { clearBackgroundTerminalService, setBackgroundTerminalService, type BackgroundTerminalService } from "./service.js";
 import { isPtySupported, spawnTerminal } from "./terminal-process.js";
 
 export { BoundedOutput, CursorOutput } from "./output.js";
@@ -53,6 +54,7 @@ export interface JobSnapshot {
 }
 
 interface JobToolDetails extends JobSnapshot {
+	managedTerminal: true;
 	output?: string;
 	cursor?: number;
 	outputOmittedBytes?: number;
@@ -581,6 +583,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		return {
 			read,
 			details: {
+				managedTerminal: true,
 				...snapshot(job, PERSISTED_OUTPUT_BYTES),
 				output: read.text,
 				cursor: read.cursor,
@@ -625,10 +628,63 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		} else component.update(data, Boolean(options.expanded));
 		return component;
 	};
+	const executeUnified = async (_id: string, rawParams: any, signal: AbortSignal | undefined, onUpdate: any, ctx: any) => {
+		const params = { ...rawParams, timeoutSeconds: rawParams.timeoutSeconds ?? rawParams.timeout };
+		const yieldMs = params["yield-time_ms"] ?? DEFAULT_YIELD_MS;
+		if (!Number.isInteger(yieldMs) || yieldMs < 250 || yieldMs > 30_000) throw new Error("yield-time_ms must be an integer between 250 and 30000");
+		const job = startJob(params, ctx);
+		const initialCursor = 0;
+		let lastUpdate = 0;
+		const update = () => {
+			const now = Date.now();
+			if (!onUpdate || now - lastUpdate < 100) return;
+			lastUpdate = now;
+			const partial = job.output.read(initialCursor, PARTIAL_OUTPUT_BYTES);
+			onUpdate({
+				content: [{ type: "text", text: formatDeltaText(job, partial) }],
+				details: { managedTerminal: true, ...snapshot(job, PERSISTED_OUTPUT_BYTES) },
+			});
+		};
+		job.activityListeners.add(update);
+		try { await waitForYield(job, yieldMs, signal); } finally { job.activityListeners.delete(update); }
+		const { read, details } = readDelta(job, initialCursor, true);
+		const prefix = isActive(job) ? `Terminal ${job.id} is still running. Use terminal_write or job_output with job_id=${job.id}.\n` : "";
+		return { content: [{ type: "text", text: `${prefix}${formatDeltaText(job, read)}` }], details };
+	};
+	const terminalService: BackgroundTerminalService = { execute: executeUnified, renderResult: liveResult };
+	setBackgroundTerminalService(terminalService);
 
 	// Completion entries persist final state but intentionally render nothing:
 	// the original tool card reads the live/restored job and updates in place.
 	pi.registerEntryRenderer<JobSnapshot>(ENTRY_TYPE, () => new Container());
+
+	pi.registerTool({
+		name: "bash",
+		label: "bash",
+		description: "Run a shell command. Quick commands return normally; long-running commands yield a managed terminal ID. Set tty=true for prompts, REPLs, and control characters, then use terminal_write to interact.",
+		promptSnippet: "Run shell commands with automatic background yielding and optional PTY interaction",
+		promptGuidelines: [
+			"Use bash for shell commands. Quick commands return normally; long-running commands automatically yield a terminal ID.",
+			"Set bash tty=true for interactive prompts, REPLs, watch processes, or when terminal_write may need to send control characters such as Ctrl+C.",
+		],
+		parameters: {
+			type: "object",
+			properties: {
+				command: { type: "string", description: "Shell command to run" },
+				timeout: { type: "integer", minimum: 1, maximum: MAX_TIMEOUT_SECONDS, description: `Optional hard timeout from 1 to ${MAX_TIMEOUT_SECONDS} seconds` },
+				cwd: { type: "string", description: "Working directory, relative to the current project unless absolute" },
+				tty: { type: "boolean", description: "Allocate a PTY for prompts, REPLs, and control characters", default: false },
+				"yield-time_ms": { type: "integer", minimum: 250, maximum: 30_000, description: `Wait before yielding a terminal ID (default ${DEFAULT_YIELD_MS} ms)` },
+				reasoning: { type: "string", description: "Goal or intent behind running this command" },
+			},
+			required: ["command", "reasoning"],
+		} as any,
+		executionMode: "sequential",
+		execute: executeUnified,
+		renderCall: (args: any, theme: any) => new Text(`${theme.fg("accent", "●")} ${theme.bold("Running bash")} ${args.reasoning || highlightShellCommand(compactCommand(args.command || ""), theme)}`, 0, 0),
+		renderResult: liveResult,
+		renderShell: "self",
+	});
 
 	pi.registerTool({
 		name: "terminal_exec",
@@ -650,25 +706,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			required: ["command", "reasoning"],
 		} as any,
 		executionMode: "sequential",
-		async execute(_id: string, params: any, signal: AbortSignal | undefined, onUpdate: any, ctx: any) {
-			const yieldMs = params["yield-time_ms"] ?? DEFAULT_YIELD_MS;
-			if (!Number.isInteger(yieldMs) || yieldMs < 250 || yieldMs > 30_000) throw new Error("yield-time_ms must be an integer between 250 and 30000");
-			const job = startJob(params, ctx);
-			const initialCursor = 0;
-			let lastUpdate = 0;
-			const update = () => {
-				const now = Date.now();
-				if (!onUpdate || now - lastUpdate < 100) return;
-				lastUpdate = now;
-				const partial = job.output.read(initialCursor, PARTIAL_OUTPUT_BYTES);
-				onUpdate({ content: [{ type: "text", text: formatDeltaText(job, partial) }], details: snapshot(job, PERSISTED_OUTPUT_BYTES) });
-			};
-			job.activityListeners.add(update);
-			try { await waitForYield(job, yieldMs, signal); } finally { job.activityListeners.delete(update); }
-			const { read, details } = readDelta(job, initialCursor, true);
-			const prefix = isActive(job) ? `Terminal ${job.id} is still running. Use terminal_write or job_output with job_id=${job.id}.\n` : "";
-			return { content: [{ type: "text", text: `${prefix}${formatDeltaText(job, read)}` }], details };
-		},
+		execute: executeUnified,
 		renderCall: (args: any, theme: any) => new Text(`${theme.fg("accent", "●")} ${theme.bold("Running terminal")} ${args.reasoning || highlightShellCommand(compactCommand(args.command || ""), theme)}`, 0, 0),
 		renderResult: liveResult,
 		renderShell: "self",
@@ -696,7 +734,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			const job = startJob(params, ctx);
 			return {
 				content: [{ type: "text", text: `Background terminal ${job.id} started in ${job.cwd}. Use terminal_write or job_output to inspect it.` }],
-				details: snapshot(job, PERSISTED_OUTPUT_BYTES),
+				details: { managedTerminal: true, ...snapshot(job, PERSISTED_OUTPUT_BYTES) },
 			};
 		},
 		renderCall: (args: any, theme: any) => new Text(`${theme.fg("accent", "●")} ${theme.bold("Starting background terminal")} ${args.reasoning || highlightShellCommand(compactCommand(args.command || ""), theme)}`, 0, 0),
@@ -849,6 +887,11 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	pi.on("session_start", (_event, ctx) => {
 		sessionGeneration += 1;
 		activeCtx = ctx;
+		const activeTools = pi.getActiveTools();
+		const aliases = new Set(["terminal_exec", "background_bash"]);
+		const normalizedTools = activeTools.filter((name) => !aliases.has(name));
+		if (normalizedTools.length !== activeTools.length && !normalizedTools.includes("bash")) normalizedTools.push("bash");
+		if (normalizedTools.length !== activeTools.length || normalizedTools.some((name, index) => name !== activeTools[index])) pi.setActiveTools(normalizedTools);
 		jobs.clear();
 		for (const entry of ctx.sessionManager.getEntries()) {
 			if (entry.type !== "custom" || entry.customType !== ENTRY_TYPE || !entry.data) continue;
@@ -870,6 +913,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		await Promise.all(stopping.map((job) => job.completion));
 		activeCtx?.ui.setStatus(STATUS_KEY, undefined);
 		jobs.clear();
+		clearBackgroundTerminalService(terminalService);
 		activeCtx = undefined;
 	});
 }

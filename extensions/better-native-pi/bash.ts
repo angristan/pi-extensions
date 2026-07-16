@@ -11,6 +11,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBashTool, createBashToolDefinition, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Container, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { getBackgroundTerminalService } from "../background-jobs/service.js";
 import { renderCodeBox } from "../code-blocks/index.js";
 import { buildToolBlock, fitToolLine, formatShellCommandForDisplay, highlightedShellLine, withReasoning } from "./core.js";
 
@@ -56,6 +57,19 @@ function stripReasoning(params: any): { reasoning?: string; rest: any } {
 	if (!params || typeof params !== "object") return { rest: params };
 	const { reasoning, ...rest } = params;
 	return { reasoning: typeof reasoning === "string" ? reasoning : undefined, rest };
+}
+
+function withTerminalParameters(parameters: any): any {
+	const base = withReasoning(parameters) as any;
+	return {
+		...base,
+		properties: {
+			...base.properties,
+			cwd: { type: "string", description: "Working directory, relative to the current project unless absolute" },
+			tty: { type: "boolean", description: "Allocate a PTY for prompts, REPLs, and control characters", default: false },
+			"yield-time_ms": { type: "integer", minimum: 250, maximum: 30_000, description: "Wait before yielding a terminal ID (default 10000 ms)" },
+		},
+	};
 }
 
 function resultText(result: any): string {
@@ -165,18 +179,27 @@ class CommandComponent {
 
 export default function bash(pi: ExtensionAPI) {
 	const bashTool = createBashToolDefinition(process.cwd());
+	const terminalEnabled = Boolean(getBackgroundTerminalService());
 	pi.registerTool({
 		name: "bash",
 		label: "bash",
-		description: bashTool.description,
+		description: terminalEnabled
+			? `${bashTool.description} Quick commands return normally; long-running commands yield a managed terminal ID. Set tty=true for prompts and REPLs.`
+			: bashTool.description,
 		promptSnippet: bashTool.promptSnippet,
-		parameters: withReasoning(bashTool.parameters),
+		parameters: terminalEnabled ? withTerminalParameters(bashTool.parameters) : withReasoning(bashTool.parameters),
 		promptGuidelines: [
 			...(bashTool.promptGuidelines ?? []),
 			'Always pass a "reasoning" phrase to bash: state the GOAL/intent, not the command.',
+			...(terminalEnabled ? [
+				"Bash automatically yields long-running commands as managed terminals; use terminal_write or job_output with the returned job ID.",
+				"Set bash tty=true for interactive prompts, REPLs, watch processes, or control characters such as Ctrl+C.",
+			] : []),
 		],
 		renderShell: "self",
 		execute: async (id: string, params: any, signal: AbortSignal, onUpdate: any, ctx: any) => {
+			const terminal = getBackgroundTerminalService();
+			if (terminal) return terminal.execute(id, params, signal, onUpdate, ctx);
 			const { rest } = stripReasoning(params);
 			return createBashTool(ctx.cwd).execute(id, rest, signal, onUpdate);
 		},
@@ -193,6 +216,8 @@ export default function bash(pi: ExtensionAPI) {
 		},
 		renderResult: (result: any, options: any, theme: any, context: any) => {
 			if (options?.isPartial) return new Container();
+			const terminal = getBackgroundTerminalService();
+			if (terminal && result?.details?.managedTerminal) return terminal.renderResult(result, options, theme, context);
 			context.state.startedAt ??= Date.now();
 			context.state.endedAt ??= Date.now();
 			return new CommandComponent(context.args ?? {}, result, {
