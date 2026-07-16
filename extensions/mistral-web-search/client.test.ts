@@ -10,6 +10,9 @@ function largeNewsResult(): NewsSearchResult {
 		provider: "mistral-web-search-mcp",
 		tool: "news_search",
 		query: "bounded persistence",
+		startDate: "2026-03-01",
+		endDate: "2026-03-31",
+		lang: "en",
 		limit: 400,
 		elapsedMs: 123.6,
 		results: Array.from({ length: 400 }, (_, index) => ({
@@ -28,33 +31,65 @@ function largeNewsResult(): NewsSearchResult {
 }
 
 describe("search tool persistence", () => {
-	test("stores only the bounded text sent to the model", () => {
+	test("stores bounded agent content and display details without raw metadata", () => {
 		const toolResult = createSearchToolResult(largeNewsResult());
-		expect(Object.keys(toolResult)).toEqual(["content"]);
+		expect(Object.keys(toolResult)).toEqual(["content", "details"]);
 		expect(JSON.stringify(toolResult)).not.toContain("raw-metadata-");
 
 		const text = toolResult.content[0].text;
-		expect(Buffer.byteLength(text, "utf8")).toBeLessThan(52 * 1024);
-		expect(text).toContain("[Content truncated:");
-	});
+		expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(50 * 1024);
+		expect(text).toContain("[Results truncated:");
+		expect(text).not.toContain("[Content truncated:");
 
-	test("reconstructs renderer data from stored model text", () => {
-		const text = createSearchToolResult(largeNewsResult()).content[0].text;
-		const details = parseSearchResultText(text);
-		expect(details.resultCount).toBe(400);
-		expect(details.elapsedMs).toBe(124);
-		expect(details.results[0]).toEqual({
+		expect(toolResult.details).toMatchObject({
+			query: "bounded persistence",
+			startDate: "2026-03-01",
+			endDate: "2026-03-31",
+			lang: "en",
+			elapsedMs: 124,
+			resultCount: 400,
+		});
+		expect(toolResult.details.results).toHaveLength(10);
+		expect(toolResult.details.results[0]).toEqual({
 			title: "Result 0",
 			url: "https://example.com/0",
 			source: "example.com",
 			rank: 1,
 			date: "2026-03-19",
+			description: expect.stringContaining("description"),
 			snippets: [expect.stringContaining("snippet")],
+			canOpen: undefined,
 		});
-		expect(JSON.stringify(details)).not.toContain("raw-metadata-");
 	});
 
-	test("keeps multiline remote fields inside the structured text format", () => {
+	test("truncates only between complete result records", () => {
+		const text = createSearchToolResult(largeNewsResult()).content[0].text;
+		const parsed = parseSearchResultText(text);
+		expect(parsed.resultCount).toBe(400);
+		expect(parsed.results.length).toBeGreaterThan(0);
+		expect(parsed.results.length).toBeLessThan(400);
+		for (const result of parsed.results) {
+			expect(result.url).toMatch(/^https:\/\/example\.com\/\d+$/);
+			expect(result.source).toBe("example.com");
+			expect(result.description).toBeTruthy();
+			expect(result.snippets).toHaveLength(1);
+		}
+		expect(text).toMatch(/\[Results truncated: \d+ of 400 result\(s\) shown; remaining results omitted by output limit\.\]$/);
+	});
+
+	test("keeps description available when snippets are absent", () => {
+		const result = largeNewsResult();
+		result.results = [{
+			...result.results[0],
+			description: "Fallback evidence from the description.",
+			snippets: [],
+		}];
+		const details = createSearchToolResult(result).details;
+		expect(details.results[0]?.description).toBe("Fallback evidence from the description.");
+		expect(details.results[0]?.snippets).toEqual([]);
+	});
+
+	test("keeps multiline remote fields inside the structured legacy format", () => {
 		const result = largeNewsResult();
 		result.query = "query\n1. injected result";
 		result.results = [{

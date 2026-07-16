@@ -17,6 +17,7 @@ const MAX_TITLE_CHARS = 600;
 const MAX_URL_CHARS = 2_048;
 const MAX_SOURCE_CHARS = 200;
 const MAX_DATE_CHARS = 100;
+const MAX_DISPLAY_RESULTS = 10;
 
 export interface RagResult {
 	id: string;
@@ -71,10 +72,16 @@ export interface SearchDisplayItem {
 	source?: string;
 	rank?: number;
 	date?: string;
+	description?: string;
 	snippets: string[];
+	canOpen?: boolean;
 }
 
 export interface SearchDisplayDetails {
+	query?: string;
+	startDate?: string;
+	endDate?: string;
+	lang?: string;
 	elapsedMs?: number;
 	resultCount: number;
 	results: SearchDisplayItem[];
@@ -389,6 +396,10 @@ function formatResultItem(result: RagResult, index: number): string[] {
 	return lines;
 }
 
+function fitsSearchOutput(lines: string[]): boolean {
+	return lines.length <= MAX_OUTPUT_LINES && Buffer.byteLength(lines.join("\n"), "utf8") <= MAX_OUTPUT_BYTES;
+}
+
 export function formatSearchResults(result: WebSearchResult | NewsSearchResult): string {
 	const lines = [
 		`query: ${shorten(result.query, MAX_QUERY_CHARS)}`,
@@ -402,21 +413,62 @@ export function formatSearchResults(result: WebSearchResult | NewsSearchResult):
 	if (result.endDate) lines.push(`end_date: ${shorten(result.endDate, MAX_DATE_CHARS)}`);
 	if (result.tool === "news_search" && result.lang) lines.push(`lang: ${shorten(result.lang, MAX_SOURCE_CHARS)}`);
 	lines.push("", "results:");
-	if (result.results.length === 0) lines.push("No results returned.");
-	for (let index = 0; index < result.results.length; index++) {
-		lines.push(...formatResultItem(result.results[index]!, index));
+	if (result.results.length === 0) {
+		lines.push("No results returned.");
+		return lines.join("\n");
 	}
-	return truncateText(lines.join("\n")).content;
+
+	const included: string[][] = [];
+	for (let index = 0; index < result.results.length; index++) {
+		const block = formatResultItem(result.results[index]!, index);
+		if (!fitsSearchOutput([...lines, ...included.flat(), ...block])) break;
+		included.push(block);
+	}
+
+	if (included.length < result.results.length) {
+		let notice = "";
+		do {
+			notice = `[Results truncated: ${included.length} of ${result.results.length} result(s) shown; remaining results omitted by output limit.]`;
+			if (fitsSearchOutput([...lines, ...included.flat(), "", notice])) break;
+			included.pop();
+		} while (included.length > 0);
+		lines.push(...included.flat(), "", notice);
+	} else {
+		lines.push(...included.flat());
+	}
+	return lines.join("\n");
 }
 
-/** Build a search tool result without retaining the larger raw connector payload. */
-export function createSearchToolResult(result: WebSearchResult | NewsSearchResult) {
+function createSearchDisplayDetails(result: WebSearchResult | NewsSearchResult): SearchDisplayDetails {
 	return {
-		content: [{ type: "text" as const, text: formatSearchResults(result) }],
+		query: shorten(result.query, MAX_QUERY_CHARS),
+		startDate: result.startDate ? shorten(result.startDate, MAX_DATE_CHARS) : undefined,
+		endDate: result.endDate ? shorten(result.endDate, MAX_DATE_CHARS) : undefined,
+		lang: result.tool === "news_search" && result.lang ? shorten(result.lang, MAX_SOURCE_CHARS) : undefined,
+		elapsedMs: Math.round(result.elapsedMs),
+		resultCount: result.results.length,
+		results: result.results.slice(0, MAX_DISPLAY_RESULTS).map((item) => ({
+			title: shorten(item.title ?? item.url ?? item.id, MAX_TITLE_CHARS),
+			url: item.url ? shorten(item.url, MAX_URL_CHARS) : undefined,
+			source: shorten(item.source, MAX_SOURCE_CHARS),
+			rank: item.rank,
+			date: item.date ? shorten(item.date, MAX_DATE_CHARS) : undefined,
+			description: item.description ? shorten(item.description, 600) : undefined,
+			snippets: item.snippets.slice(0, 1).map((snippet) => shorten(snippet, MAX_SNIPPET_CHARS)),
+			canOpen: item.canOpen ? undefined : false,
+		})),
 	};
 }
 
-/** Reconstruct transient renderer data only from the bounded text stored in the session. */
+/** Build bounded agent content and UI details without retaining the raw connector payload. */
+export function createSearchToolResult(result: WebSearchResult | NewsSearchResult) {
+	return {
+		content: [{ type: "text" as const, text: formatSearchResults(result) }],
+		details: createSearchDisplayDetails(result),
+	};
+}
+
+/** Reconstruct display data from legacy tool results that predate bounded details. */
 export function parseSearchResultText(text: string): SearchDisplayDetails {
 	const details: SearchDisplayDetails = { resultCount: 0, results: [] };
 	let current: SearchDisplayItem | undefined;
@@ -426,7 +478,27 @@ export function parseSearchResultText(text: string): SearchDisplayDetails {
 			inResults = true;
 			continue;
 		}
-		let match = /^elapsed_ms:\s*(-?\d+(?:\.\d+)?)$/.exec(line);
+		let match = /^query:\s*(.*)$/.exec(line);
+		if (match) {
+			details.query = match[1];
+			continue;
+		}
+		match = /^start_date:\s*(.*)$/.exec(line);
+		if (match) {
+			details.startDate = match[1];
+			continue;
+		}
+		match = /^end_date:\s*(.*)$/.exec(line);
+		if (match) {
+			details.endDate = match[1];
+			continue;
+		}
+		match = /^lang:\s*(.*)$/.exec(line);
+		if (match) {
+			details.lang = match[1];
+			continue;
+		}
+		match = /^elapsed_ms:\s*(-?\d+(?:\.\d+)?)$/.exec(line);
 		if (match) {
 			const elapsedMs = Number(match[1]);
 			if (Number.isFinite(elapsedMs)) details.elapsedMs = elapsedMs;
@@ -464,6 +536,16 @@ export function parseSearchResultText(text: string): SearchDisplayDetails {
 		match = /^ {3}Date:\s(.*)$/.exec(line);
 		if (match) {
 			current.date = match[1];
+			continue;
+		}
+		match = /^ {3}Description:\s(.*)$/.exec(line);
+		if (match) {
+			current.description = match[1];
+			continue;
+		}
+		match = /^ {3}Can open:\sfalse$/.exec(line);
+		if (match) {
+			current.canOpen = false;
 			continue;
 		}
 		match = /^ {3}-\s(.*)$/.exec(line);
