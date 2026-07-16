@@ -120,7 +120,7 @@ class OverlayStackComponent implements Component {
 		const selected: OverlayCardDefinition[] = [];
 		for (const card of activeCards(this.terminalWidth, this.terminalHeight)) {
 			const next = [...selected, card];
-			const shellRows = next.length + 1; // top + section dividers + bottom
+			const shellRows = next.length * 2 + Math.max(0, next.length - 1); // borders + gaps
 			const minimumBodyRows = next.reduce((total, item) => total + minimumBodyHeight(item), 0);
 			if (shellRows + minimumBodyRows <= maxRows) selected.push(card);
 		}
@@ -138,7 +138,7 @@ class OverlayStackComponent implements Component {
 		if (selected.length === 0) return [];
 
 		const contentWidth = Math.max(1, width - 4);
-		const shellRows = selected.length + 1;
+		const shellRows = selected.length * 2 + Math.max(0, selected.length - 1);
 		let remainingBodyRows = maxRows - shellRows;
 		const sections: Array<{ title: string; body: string[] }> = [];
 
@@ -166,12 +166,10 @@ class OverlayStackComponent implements Component {
 
 		if (sections.length === 0) return [];
 
-		const borderLine = (left: string, right: string, rawTitle: string, leadingRuleWidth = 0) => {
-			const leadingRule = "─".repeat(Math.min(leadingRuleWidth, Math.max(0, width - 2)));
-			const title = truncateToWidth(rawTitle, Math.max(1, width - visibleWidth(leadingRule) - 2), "…");
-			const trailingRuleWidth = Math.max(0, width - visibleWidth(leadingRule) - visibleWidth(title) - 2);
-			const styledLeadingRule = leadingRule ? accentBorder(leadingRule) : "";
-			return `${accentBorder(left)}${styledLeadingRule}${title}${accentBorder("─".repeat(trailingRuleWidth))}${accentBorder(right)}`;
+		const topBorder = (rawTitle: string) => {
+			const title = truncateToWidth(rawTitle, Math.max(1, width - 2), "…");
+			const ruleWidth = Math.max(0, width - visibleWidth(title) - 2);
+			return `${accentBorder("╭")}${title}${accentBorder("─".repeat(ruleWidth))}${accentBorder("╮")}`;
 		};
 		const contentLine = (content: string) => {
 			const fitted = truncateToWidth(content, contentWidth, "…");
@@ -182,15 +180,11 @@ class OverlayStackComponent implements Component {
 		const lines: string[] = [];
 		for (let index = 0; index < sections.length; index++) {
 			const section = sections[index]!;
-			lines.push(borderLine(
-				index === 0 ? "╭" : "├",
-				index === 0 ? "╮" : "┤",
-				section.title,
-				index === 0 ? 0 : 2,
-			));
+			if (index > 0) lines.push(" ".repeat(width));
+			lines.push(topBorder(section.title));
 			for (const bodyLine of section.body) lines.push(contentLine(bodyLine));
+			lines.push(accentBorder(`╰${"─".repeat(Math.max(0, width - 2))}╯`));
 		}
-		lines.push(accentBorder(`╰${"─".repeat(Math.max(0, width - 2))}╯`));
 		return lines;
 	}
 
