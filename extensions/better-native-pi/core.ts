@@ -22,11 +22,11 @@ import {
 	nonEmptyLineCount,
 	shortPath,
 } from "./render.js";
-import { highlightShellCommand, highlightedShellLine } from "./shell.js";
+import { formatShellCommandForDisplay, highlightShellCommand, highlightedShellLine } from "./shell.js";
 import { colorizeDiff, diffPalette, WidthAwareLines } from "./diff.js";
 
 // Re-export so restylers import everything from one place (./core.js).
-export { Container, diffPalette, WidthAwareLines, colorizeDiff, highlightShellCommand, highlightedShellLine };
+export { Container, diffPalette, WidthAwareLines, colorizeDiff, formatShellCommandForDisplay, highlightShellCommand, highlightedShellLine };
 export type { WidthAwareLines as WidthAwareLinesType } from "./diff.js";
 
 // Match the transcript hierarchy directly at the transcript margin.
@@ -44,7 +44,10 @@ function oneLine(s: string | undefined): string {
 export function fitToolLine(line: string, width: number): string {
 	const max = Math.max(1, width);
 	if (visibleWidth(line) <= max) return line;
-	const separatorIndex = Math.max(line.lastIndexOf("·"), line.lastIndexOf("→"));
+	const timedStatusIndex = line.lastIndexOf(`${DIM}in${RESET} `);
+	const separatorIndex = timedStatusIndex >= 0
+		? timedStatusIndex
+		: Math.max(line.lastIndexOf("·"), line.lastIndexOf("→"));
 	if (separatorIndex < 0) return truncateToWidth(line, max, "…");
 
 	const tail = line.slice(separatorIndex);
@@ -113,7 +116,7 @@ function toolVerb(name: string, isPartial: boolean): string {
 
 /** Compact elapsed time for an in-progress tool. */
 export function formatElapsed(milliseconds: number): string {
-	if (milliseconds < 1000) return "<1s";
+	if (milliseconds < 1000) return `${Math.max(1, Math.round(milliseconds))}ms`;
 	const seconds = Math.floor(milliseconds / 1000);
 	if (seconds < 60) return `${seconds}s`;
 	const minutes = Math.floor(seconds / 60);
@@ -191,12 +194,11 @@ function summarize(
 	if (name === "bash") {
 		const m = text.match(/exit code: (\d+)/);
 		const exit = m ? Number(m[1]) : null;
-		// Glyph carries pass/fail (✓ green / ✗ red), elapsed is the lone number —
-		// no redundant "done" word. Failed runs keep `exit N` so the code is visible.
+		// Keep timing conversational (`in 2s`) and finish with the pass/fail glyph.
+		// Failed runs retain `exit N` after the glyph so the code stays visible.
 		const ok = !exit || exit === 0;
-		const glyph = ok ? `${GREEN}✓` : `${RED}✗`;
-		const tail = ok ? `` : ` ${RED}exit ${exit}`;
-		return `${glyph}${tail}${RESET} ${formatElapsed(elapsedMs)}`;
+		const status = ok ? `${GREEN}✓${RESET}` : `${RED}✗ exit ${exit}${RESET}`;
+		return `${DIM}in${RESET} ${formatElapsed(elapsedMs)} ${status}`;
 	}
 	if (name === "grep") {
 		if (/^No matches found/.test(text.trim())) return "0 matches in 0 files";

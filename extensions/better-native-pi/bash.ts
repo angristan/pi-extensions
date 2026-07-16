@@ -1,6 +1,6 @@
 /**
- * bash — restyles pi's `bash` tool into the same compact 2-line block as the
- * file tools, plus bounded head/tail output (5 rows, expandable via C-o).
+ * bash — restyles pi's `bash` tool with a reason-first headline, a bordered and
+ * syntax-highlighted command, plus bounded head/tail output (expandable via C-o).
  *
  * Same pattern as file-tools: re-register `bash` under its native name with
  * `renderShell: "self"`, inject a required `reasoning` param, delegate
@@ -9,22 +9,22 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createBashTool, createBashToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Container, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { buildToolBlock, fitToolLine, withReasoning } from "./core.js";
-import { wrapBranchLine } from "./diff.js";
+import { createBashTool, createBashToolDefinition, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { Container, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { renderCodeBox } from "../code-blocks/index.js";
+import { buildToolBlock, fitToolLine, formatShellCommandForDisplay, highlightedShellLine, withReasoning } from "./core.js";
 
 const OUTPUT_ROWS = 5;
-const INDENT = "    ";
+const COMMAND_ROWS = 8;
+const COMMAND_INDENT = "  ";
 const DIM = "\x1b[2m";
 const RESET = "\x1b[0m";
-// Left bar prefix for bash output: the `│` sits directly under the `└` branch
-// char above it (both at column 3), framing the output as one blockquote-style
-// group instead of a bare indented blob. Same 4-col visual budget as INDENT,
-// so wrap width is unchanged.
+// The command box and output bar share the same left edge, keeping input and
+// output visually connected while preserving the blockquote-style output.
 const BAR = "│";
+const OUTPUT_PREFIX = `${COMMAND_INDENT}${BAR} `;
 function barLine(text: string): string {
-	return `${DIM}  ${BAR} ${text}${RESET}`;
+	return `${DIM}${OUTPUT_PREFIX}${text}${RESET}`;
 }
 const RENDER_STATS_KEY = Symbol.for("pi.renderer-cache.stats");
 
@@ -66,8 +66,35 @@ function resultText(result: any): string {
 	return typeof result?.output === "string" ? result.output : "";
 }
 
+function withoutCommand(args: any): any {
+	if (!args || typeof args !== "object") return args;
+	const { command: _command, ...rest } = args;
+	return rest;
+}
+
+function renderedCommand(command: string, width: number, expanded: boolean, theme: any): string[] {
+	const max = Math.max(1, width);
+	const normalized = command.replace(/\t/g, "   ").replace(/\s+$/, "");
+	const boxWidth = Math.max(1, max - COMMAND_INDENT.length);
+	const formatted = formatShellCommandForDisplay(normalized, Math.max(1, boxWidth - 4));
+	const markdownTheme = getMarkdownTheme();
+	const commandTheme = {
+		...markdownTheme,
+		highlightCode: (code: string) => code.split("\n").map((line) => highlightedShellLine(line, theme)),
+	};
+	return renderCodeBox(formatted.join("\n"), "bash", boxWidth, commandTheme, {
+		maxRows: expanded ? undefined : COMMAND_ROWS,
+		renderOmission: (omitted, innerWidth) => theme.fg(
+			"dim",
+			truncateToWidth(`… +${omitted} lines (Ctrl+O)`, innerWidth, "…"),
+		),
+	})
+		.map((line) => `${COMMAND_INDENT}${line}`)
+		.map((line) => fitToolLine(line, max));
+}
+
 function wrappedOutput(text: string, width: number): string[] {
-	const bodyWidth = Math.max(1, width - INDENT.length);
+	const bodyWidth = Math.max(1, width - OUTPUT_PREFIX.length);
 	const rows = text.replace(/\t/g, "   ").replace(/\s+$/, "").split("\n")
 		.flatMap((line) => wrapTextWithAnsi(line, bodyWidth));
 	return rows.map((row) => barLine(row));
@@ -110,15 +137,18 @@ class CommandComponent {
 			return this.cachedLines;
 		}
 		rendererStats.cacheMisses += 1;
-		const block = buildToolBlock("bash", this.args, this.result, {
+		const block = buildToolBlock("bash", withoutCommand(this.args), this.result, {
 			isPartial: this.options.partial,
 			isError: this.options.error,
 			elapsedMs: this.options.elapsedMs,
 			theme: this.theme,
 			cwd: this.options.cwd,
 		});
+		const command = typeof this.args?.command === "string"
+			? renderedCommand(this.args.command, max, this.options.expanded, this.theme)
+			: [];
 		if (this.options.partial) {
-			this.cachedLines = block.map((line) => fitToolLine(line, max));
+			this.cachedLines = [...block.map((line) => fitToolLine(line, max)), ...command];
 			this.cachedWidth = max;
 			return this.cachedLines;
 		}
@@ -126,10 +156,8 @@ class CommandComponent {
 		const text = resultText(this.result);
 		let output = text.trim() ? wrappedOutput(text, max) : [barLine("(no output)")];
 		if (!this.options.expanded) output = boundedRows(output);
-		// Branch rows (└ <command> · <summary>) wrap to ≤3 lines so long commands
-		// stay readable; every other block line truncates to fit.
-		const fittedBlock = block.flatMap((line) => line.startsWith("  └ ") ? wrapBranchLine(line, max) : [fitToolLine(line, max)]);
-		this.cachedLines = [...fittedBlock, ...output];
+		const fittedBlock = block.map((line) => fitToolLine(line, max));
+		this.cachedLines = [...fittedBlock, ...command, ...output];
 		this.cachedWidth = max;
 		return this.cachedLines;
 	}

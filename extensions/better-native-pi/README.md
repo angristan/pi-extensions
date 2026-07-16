@@ -1,18 +1,23 @@
 # better-native-pi
 
-Restyles pi's native tools into compact, reason-first 2-line transcript blocks,
-and groups consecutive read/list/search calls into a single "exploring" block.
+Restyles pi's native tools into compact, reason-first transcript blocks and
+groups consecutive read/list/search calls into a single "exploring" block.
 
-```
+```text
 • Edited put reasoning on line 1, detail on line 2
   └ index.ts · (+28 -14)
-• Ran run the typecheck
-  └ bun test · done in 1s
+• Ran run the typecheck in 1s ✓
+  ╭ bash ───────────────────────────╮
+  │ bun test                        │
+  ╰─────────────────────────────────╯
+  │ 12 pass
 ```
 
 **Line 1** — status bullet (🟢✓ / 🔴✗ / 🟣running) + semantic verb + the model's
 *reasoning* for the call
-**Line 2** — `└` branch + target (path/command/pattern) + colored result summary
+**Line 2** — non-bash tools use a `└` branch with their target and result summary;
+bash uses the custom Markdown-style bordered command box followed by bounded `│`
+output
 
 ## What it patches
 
@@ -25,7 +30,11 @@ Re-registers pi's built-in tools under their native names (`read`, `write`,
 - `execute` delegates to the real built-in tool (reasoning stripped first)
 
 Successful `edit`/`write` calls append a syntax-highlighted, line-numbered
-diff inline; `Ctrl+O` (`app.tools.expand`) reveals raw output or full written
+diff inline. Bash commands reuse the bordered box from the `code-blocks`
+Markdown renderer with the dedicated shell tokenizer for syntax highlighting.
+Long commands wrap at top-level shell operators and quote-aware word boundaries;
+the box spans the full available transcript width.
+`Ctrl+O` (`app.tools.expand`) reveals full commands, raw output, or full written
 content without duplicating an already-shown diff.
 
 ## Layout
