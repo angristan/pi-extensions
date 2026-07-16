@@ -13,5 +13,5 @@ accepts the selected prompt (does not fork — unlike `/backtrack`). `Esc` /
 reverse-i-search: grep_  3/5  Enter accept · Esc cancel
 ```
 
-Composes with `editor-accent`: the wrapped editor forwards `borderColor` so the
+Composes with `accent-color`: the wrapped editor forwards `borderColor` so the
 accent stays fixed while searching.

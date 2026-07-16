@@ -6,7 +6,7 @@ background jobs, and quality-of-life features for the terminal UI.
 
 These are generic, dependency-free extensions that ship together because a few
 of them share rendering helpers (`better-native-pi` exposes primitives used by
-`background-jobs` and `mistral-web-search`; `editor-accent` exposes an accent
+`background-jobs` and `mistral-web-search`; `accent-color` exposes an accent
 color used by `plan-progress`).
 
 ## Install
@@ -38,7 +38,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | [`code-blocks`](extensions/code-blocks/) | Renders fenced code blocks as bordered, syntax-highlighted boxes instead of plain text |
 | [`context-inspector`](extensions/context-inspector/) | Inspect where your context window is being spent |
 | [`doctor`](extensions/doctor/) | Run diagnostics on your pi setup |
-| [`editor-accent`](extensions/editor-accent/) | Pins the editor (input bar) border to a fixed accent color, overriding pi's default |
+| [`accent-color`](extensions/accent-color/) | Pins the editor (input bar) border to a fixed accent color, overriding pi's default |
 | [`footer`](extensions/footer/) | A status line below the transcript showing session, model, context usage, and cost |
 | [`goal`](extensions/goal/) | Track an explicit objective for the session |
 | [`history-search`](extensions/history-search/) | Incremental search across your previous user prompts, inline in the editor |
@@ -60,7 +60,7 @@ Each extension has its own `README.md` with commands, config, and sample output.
 A few extensions read optional config from `~/.pi/agent/<name>.json`:
 
 - `auto-session-title.json` — `{"provider": "mistral", "model": "mistral-medium-3.5"}`
-- `editor-accent.json` — `{"color": "#FF8205"}` (accepts `#RRGGBB` / `#RGB`)
+- `accent-color.json` — `{"color": "#FF8205"}` (accepts `#RRGGBB` / `#RGB`)
 - `notifications.json` — `{"enabled": true}`
 
 All default to sensible values if the file is absent.

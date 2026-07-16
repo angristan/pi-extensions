@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 // Default accent: Mistral Vibe's canonical orange (`$mistral_orange` in Vibe's TUI).
 export const DEFAULT_ACCENT_HEX = "#FF8205";
-const CONFIG_PATH = join(homedir(), ".pi", "agent", "editor-accent.json");
+const CONFIG_PATH = join(homedir(), ".pi", "agent", "accent-color.json");
 
 const ANSI_FOREGROUND_RESET = "\x1b[39m";
 const ACCENT_BORDER_LOCK = Symbol.for("pi.accent-input-bar.lock");
@@ -33,7 +33,7 @@ function hexToRgb(hex: string): [number, number, number] | undefined {
 
 /**
  * Resolve the accent color used for the editor border (and the plan-progress
- * box). Override via `~/.pi/agent/editor-accent.json`:
+ * box). Override via `~/.pi/agent/accent-color.json`:
  *
  *   { "color": "#FF8205" }
  *

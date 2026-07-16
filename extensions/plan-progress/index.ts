@@ -25,7 +25,7 @@ const OVERLAY_WIDTH = 58;
 const MAX_EXPLANATION_ROWS = 3;
 const MAX_GOAL_ROWS = 3;
 
-import { accentBorder } from "../editor-accent/index.js";
+import { accentBorder } from "../accent-color/index.js";
 
 const parameters = {
 	type: "object",

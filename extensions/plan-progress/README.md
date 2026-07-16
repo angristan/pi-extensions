@@ -32,4 +32,4 @@ active, it's shown above the plan with its token budget.
   `pending` / `in_progress` / `completed` status). Executed sequentially so the
   agent sees each update before continuing.
 
-Box border uses the accent color from `editor-accent`.
+Box border uses the accent color from `accent-color`.
