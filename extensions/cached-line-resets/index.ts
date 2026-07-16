@@ -1,15 +1,21 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 
+/**
+ * Structural shape of the TUI methods we patch. Declared standalone rather
+ * than as `TUI & {…}` because `applyLineResets` is private on `TUI`, so the
+ * intersection collapses to `never`. We cast through `unknown` at the call site.
+ */
+type LineResetsHost = {
+	applyLineResets(lines: string[]): string[];
+	[PATCH]?: PatchState;
+};
+
 const HOST_KEY = "cached-line-resets-host";
 const PATCH = Symbol.for("pi.cached-line-resets.patch");
 const MAX_CACHE_ENTRIES = 8_192;
 const MAX_CACHEABLE_LINE_LENGTH = 16_384;
 
-type TuiWithLineResets = TUI & {
-	applyLineResets(lines: string[]): string[];
-	[PATCH]?: PatchState;
-};
 
 interface PatchState {
 	owner: symbol;
@@ -21,7 +27,7 @@ interface PatchState {
 	clears: number;
 }
 
-function installPatch(tui: TuiWithLineResets): () => void {
+function installPatch(tui: LineResetsHost): () => void {
 	const owner = Symbol("cached-line-resets-owner");
 	const existing = tui[PATCH];
 	if (existing) {
@@ -92,7 +98,7 @@ class CacheHost implements Component {
 	private readonly restore: () => void;
 
 	constructor(tui: TUI) {
-		this.restore = installPatch(tui as TuiWithLineResets);
+		this.restore = installPatch(tui as unknown as LineResetsHost);
 	}
 
 	render(): string[] { return []; }
