@@ -176,14 +176,27 @@ export function wrapBranchLine(line: string, width: number, branchPrefix = "  â”
 		}
 	}
 	if (current) chunks.push(current);
-	// Reserve room for the tail on the last line; cap total detail rows so the
-	// block stays compact. When overflowing, keep the head and put the rest on
-	// the final detail row (truncated by fitToolLine when joined with the tail).
-	const budget = MAX_BRANCH_LINES - (hasTail ? 1 : 0);
+	// Cap total detail rows so the block stays compact. budget = detail lines
+	// kept before the tail (tail sits on the last detail line). When the detail
+	// overflows, keep budget-1 head lines as-is and wrap the remainder onto the
+	// final detail line so the 3rd line is actually used instead of collapsing
+	// the remainder into one truncated line.
+	// Cap total detail rows so the block stays compact. We keep up to
+	// MAX_BRANCH_LINES detail lines, with the tail appended to the last one â€”
+	// so a maxed-out block is MAX_BRANCH_LINES rows total (tail shares the last
+	// detail line). When the detail overflows, keep budget-1 head lines as-is
+	// and fill the final detail line with whole remainder words that fit.
+	const budget = MAX_BRANCH_LINES;
 	if (chunks.length > budget) {
 		const head = chunks.slice(0, Math.max(1, budget - 1));
-		const rest = chunks.slice(Math.max(1, budget - 1)).join(" ");
-		chunks = [...head, rest];
+		const restWords = chunks.slice(Math.max(1, budget - 1));
+		let lastLine = "";
+		for (const word of restWords) {
+			const candidate = lastLine ? `${lastLine} ${word}` : word;
+			if (visibleWidth(candidate) <= contentWidth) lastLine = candidate;
+			else break;
+		}
+		chunks = [...head, lastLine];
 	}
 
 	const rows = chunks.map((chunk, index) => index === 0 ? `${branchPrefix}${chunk}` : `${" ".repeat(branchPrefix.length)}${chunk}`);
