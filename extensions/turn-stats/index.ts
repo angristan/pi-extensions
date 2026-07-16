@@ -23,7 +23,7 @@ class StatsRow implements Component {
 		// of the transcript. Size the rule to the stats text's own visible width
 		// (Text pads lines to full screen width, so measure the raw string).
 		const statsLines = new Text(this.stats, 1, 0).render(width);
-		const statsWidth = Math.min(width, Math.max(0, visibleWidth(this.stats)));
+		const statsWidth = Math.min(width, Math.max(0, visibleWidth(this.stats)) + 1);
 		const rule = this.theme.fg("borderMuted", "─".repeat(statsWidth));
 		return [rule, ...statsLines];
 	}
