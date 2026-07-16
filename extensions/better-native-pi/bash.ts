@@ -10,8 +10,9 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBashTool } from "@earendil-works/pi-coding-agent";
-import { Container, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { Container, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { buildToolBlock, fitToolLine, withReasoning } from "./core.js";
+import { wrapBranchLine } from "./diff.js";
 
 const OUTPUT_ROWS = 5;
 const INDENT = "    ";
@@ -116,8 +117,10 @@ class CommandComponent {
 		const text = resultText(this.result);
 		let output = text.trim() ? wrappedOutput(text, max) : [`${INDENT}${DIM}(no output)${RESET}`];
 		if (!this.options.expanded) output = boundedRows(output);
-		const fittedBlock = block.map((line) => fitToolLine(line, max));
-		this.cachedLines = [...fittedBlock, ...output].map((line) => visibleWidth(line) <= max ? line : truncateToWidth(line, max, "…"));
+		// Branch rows (└ <command> · <summary>) wrap to ≤3 lines so long commands
+		// stay readable; every other block line truncates to fit.
+		const fittedBlock = block.flatMap((line) => line.startsWith("  └ ") ? wrapBranchLine(line, max) : [fitToolLine(line, max)]);
+		this.cachedLines = [...fittedBlock, ...output];
 		this.cachedWidth = max;
 		return this.cachedLines;
 	}
