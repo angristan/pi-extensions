@@ -468,6 +468,20 @@ function websiteFromUrl(url: string | null | undefined): string | undefined {
 	return new URL(normalized).hostname.replace(/^www\./i, "") || undefined;
 }
 
+function uniqueSanitizedSnippets(snippets: string[], limit: number): string[] {
+	const seen = new Set<string>();
+	const unique: string[] = [];
+	for (const snippet of snippets) {
+		const sanitized = sanitizeSearchText(snippet, MAX_SNIPPET_CHARS);
+		const key = sanitized.toLocaleLowerCase();
+		if (!sanitized || seen.has(key)) continue;
+		seen.add(key);
+		unique.push(sanitized);
+		if (unique.length >= limit) break;
+	}
+	return unique;
+}
+
 function formatResultItem(result: RagResult, index: number): string[] {
 	const url = normalizeHttpUrl(result.url);
 	const lines = [
@@ -478,12 +492,10 @@ function formatResultItem(result: RagResult, index: number): string[] {
 		`   Search engine: ${sanitizeSearchText(result.source, MAX_SOURCE_CHARS)}`,
 	];
 	if (result.date) lines.push(`   Date: ${sanitizeSearchText(result.date, MAX_DATE_CHARS)}`);
-	if (result.description) lines.push(`   Description: ${sanitizeSearchText(result.description, 600)}`);
-	if (result.snippets.length > 0) {
+	const snippets = uniqueSanitizedSnippets(result.snippets, MAX_SNIPPETS_PER_RESULT);
+	if (snippets.length > 0) {
 		lines.push("   Snippets:");
-		for (const snippet of result.snippets.slice(0, MAX_SNIPPETS_PER_RESULT)) {
-			lines.push(`   - ${sanitizeSearchText(snippet, MAX_SNIPPET_CHARS)}`);
-		}
+		for (const snippet of snippets) lines.push(`   - ${snippet}`);
 	}
 	if (!result.canOpen) lines.push("   Can open: false");
 	return lines;
@@ -541,7 +553,7 @@ function createSearchDisplayDetails(result: WebSearchResult | NewsSearchResult):
 		rank: item.rank,
 		date: item.date ? sanitizeSearchText(item.date, MAX_DATE_CHARS) : undefined,
 		description: item.description ? sanitizeSearchText(item.description, 600) : undefined,
-		snippets: item.snippets.slice(0, 1).map((snippet) => sanitizeSearchText(snippet, MAX_SNIPPET_CHARS)),
+		snippets: uniqueSanitizedSnippets(item.snippets, 1),
 		canOpen: item.canOpen ? undefined : false,
 	}));
 	const searchEngines = new Set(results.map((item) => item.searchEngine).filter((value): value is string => Boolean(value)));
