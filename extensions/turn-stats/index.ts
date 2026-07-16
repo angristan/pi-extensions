@@ -9,21 +9,16 @@ import { Text, type Component } from "@earendil-works/pi-tui";
 const ENTRY_TYPE = "turn-stats";
 
 /**
- * A `─` rule above the stats text, followed by the stats line itself. The
- * rule gives a clear visual boundary above the turn's completion summary so
- * it's easy to spot where each turn's stats begin in the transcript.
+ * The stats line itself. Rendered through `Text` so margins/wrapping match the
+ * rest of the transcript, with a one-space left margin so it lines up with
+ * assistant message content rather than the prompt gutter.
  */
 class StatsRow implements Component {
 	constructor(
 		private readonly stats: string,
-		private readonly theme: any,
 	) {}
 	render(width: number): string[] {
-		// Render the stats line through Text so margins/wrapping match the rest
-		// of the transcript. Full-width rule above it for a clear boundary.
-		const statsLines = new Text(this.stats, 1, 0).render(width);
-		const rule = this.theme.fg("borderMuted", "─".repeat(Math.max(0, width)));
-		return [rule, ...statsLines];
+		return new Text(this.stats, 1, 0).render(width);
 	}
 }
 
@@ -249,7 +244,7 @@ export default function (pi: ExtensionAPI) {
 			groups.push(`${theme.fg("dim", prefix)}${amount}`);
 		}
 
-		return new StatsRow(groups.join(groupSep), theme);
+		return new StatsRow(groups.join(groupSep));
 	});
 
 	const resetResponseTiming = () => {
