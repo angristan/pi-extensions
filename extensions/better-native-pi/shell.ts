@@ -70,45 +70,38 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
 }
 
 /**
- * Shift a color toward a pastel tone: raise lightness and lower saturation.
- * Pastels are high-lightness / low-saturation, so they read as "softer" and
- * recede from full-bright saturated colors while keeping the hue identity.
- * `factor` controls how far toward pastel (0=unchanged, 1=fully pastel/white).
+ * Darken a color by lowering its lightness toward black, keeping hue and
+ * saturation so the color identity is preserved (red→darker red, green→darker
+ * green). `factor` controls how far toward black (0=unchanged, 1=black).
  */
-function pastelRgb(rgb: [number, number, number], factor: number): [number, number, number] {
+function darkenRgb(rgb: [number, number, number], factor: number): [number, number, number] {
 	const [h, s, l] = rgbToHsl(...rgb);
-	// Target a high-lightness, low-saturation point and move toward it by factor.
-	const targetL = 0.82; // light, pastel-ish
-	const targetS = 0.28; // muted saturation
-	const newL = l + (targetL - l) * factor;
-	const newS = s + (targetS - s) * factor;
-	return hslToRgb(h, newS, newL);
+	return hslToRgb(h, s, l * (1 - factor));
 }
 
-/** Dim an ANSI foreground by pastelling its color; passes through if unknown. */
+/** Dim an ANSI foreground by darkening its color; passes through if unknown. */
 function dimAnsiFg(ansi: string, factor: number, lighten: boolean): string {
 	const tc = ansi.match(TRUECOLOR_FG);
 	if (tc) {
-		const dim = pastelRgb([Number(tc[1]), Number(tc[2]), Number(tc[3])], factor);
+		const dim = darkenRgb([Number(tc[1]), Number(tc[2]), Number(tc[3])], factor);
 		return `\x1b[38;2;${dim[0]};${dim[1]};${dim[2]}m`;
 	}
 	const idx = ansi.match(INDEXED_FG);
 	if (idx) {
-		const dim = pastelRgb(xterm256ToRgb(Number(idx[1])), factor);
+		const dim = darkenRgb(xterm256ToRgb(Number(idx[1])), factor);
 		return `\x1b[38;2;${dim[0]};${dim[1]};${dim[2]}m`;
 	}
 	return ansi;
 }
 
 /**
- * Wrap a theme so `fg(color, text)` renders in a softer pastel tone of the
- * original color (higher lightness, lower saturation). The hue identity is
- * preserved (keyword still red, string still green) but the color recedes
- * from full-bright saturation into a calmer pastel — a middle tier between
- * vivid command colors and the dim tool output. `factor≈0.5` is a balanced
- * pastel; higher = softer/whiter, lower = closer to original.
+ * Wrap a theme so `fg(color, text)` renders in a darker shade of the original
+ * color (lightness reduced toward black, hue+saturation preserved). The color
+ * keeps its identity but recedes into the dark background — dimmer than
+ * full-bright, but distinct from the 50% ANSI DIM used for tool output.
+ * `factor≈0.4` darkens to ~60% of original lightness.
  */
-export function dimTheme(theme: any, factor = 0.5): any {
+export function dimTheme(theme: any, factor = 0.4): any {
 	if (!theme || typeof theme.fg !== "function" || typeof theme.getFgAnsi !== "function") return theme;
 	return {
 		...theme,
