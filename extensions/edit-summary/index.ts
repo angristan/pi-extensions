@@ -9,24 +9,11 @@ import {
 	type ExtensionContext,
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
-import {
-	truncateToWidth,
-	visibleWidth,
-	type Component,
-	type OverlayHandle,
-	type TUI,
-} from "@earendil-works/pi-tui";
-import {
-	PLAN_OVERLAY_LAYOUT_EVENT,
-	PLAN_OVERLAY_LAYOUT_REQUEST_EVENT,
-	parsePlanOverlayLayout,
-	type PlanOverlayLayout,
-} from "../plan-progress/layout.js";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { registerOverlayCard } from "../overlay-stack/index.js";
 
 const ENTRY_TYPE = "edit-summary-state-v1";
 const MAX_VISIBLE_FILES = 8;
-const DEFAULT_TOP_MARGIN = 1;
-const OVERLAY_GAP = 1;
 
 interface FileSummary {
 	path: string;
@@ -127,62 +114,51 @@ function summaryHeight(summary: DisplaySummary): number {
 	return 6 + visibleFiles + overflowRow;
 }
 
-class EditSummaryOverlay implements Component {
-	constructor(
-		private readonly theme: Theme,
-		private readonly getSummary: () => DisplaySummary,
-	) {}
+function renderEditSummary(summary: DisplaySummary, width: number, theme: Theme): string[] {
+	if (width < 18 || summary.files.length === 0) return [];
 
-	render(width: number): string[] {
-		if (width < 18) return [];
-		const summary = this.getSummary();
-		if (summary.files.length === 0) return [];
+	const innerWidth = width - 2;
+	const border = (text: string) => theme.fg("borderMuted", text);
+	const horizontal = "─".repeat(innerWidth);
+	const line = (content = "") => {
+		const clipped = truncateToWidth(content, innerWidth, "");
+		const padding = " ".repeat(Math.max(0, innerWidth - visibleWidth(clipped)));
+		return `${border("│")}${clipped}${padding}${border("│")}`;
+	};
 
-		const innerWidth = width - 2;
-		const border = (text: string) => this.theme.fg("borderMuted", text);
-		const horizontal = "─".repeat(innerWidth);
-		const line = (content = "") => {
-			const clipped = truncateToWidth(content, innerWidth, "");
-			const padding = " ".repeat(Math.max(0, innerWidth - visibleWidth(clipped)));
-			return `${border("│")}${clipped}${padding}${border("│")}`;
-		};
+	const title = `${theme.bold("File edits")} ${theme.fg("dim", `· ${summary.phase}`)}`;
+	const lines = [border(`┌${horizontal}┐`), line(` ${title}`), line()];
+	const visibleFiles = summary.files.slice(0, MAX_VISIBLE_FILES);
 
-		const title = `${this.theme.bold("File edits")} ${this.theme.fg("dim", `· ${summary.phase}`)}`;
-		const lines = [border(`┌${horizontal}┐`), line(` ${title}`), line()];
-		const visibleFiles = summary.files.slice(0, MAX_VISIBLE_FILES);
-
-		for (const file of visibleFiles) {
-			const status = file.status === "added"
-				? this.theme.fg("success", "A")
-				: this.theme.fg("accent", "M");
-			const counts = [
-				file.additions > 0 ? this.theme.fg("success", `+${file.additions}`) : "",
-				file.removals > 0 ? this.theme.fg("error", `-${file.removals}`) : "",
-			].filter(Boolean).join(" ");
-			const prefix = ` ${status} `;
-			const reserved = visibleWidth(prefix) + visibleWidth(counts) + (counts ? 1 : 0);
-			const pathWidth = Math.max(1, innerWidth - reserved);
-			const path = truncateToWidth(file.path, pathWidth, "…");
-			const gap = " ".repeat(Math.max(1, innerWidth - visibleWidth(prefix) - visibleWidth(path) - visibleWidth(counts)));
-			lines.push(line(`${prefix}${path}${counts ? `${gap}${counts}` : ""}`));
-		}
-
-		if (summary.files.length > visibleFiles.length) {
-			lines.push(line(this.theme.fg("dim", `   … ${summary.files.length - visibleFiles.length} more`)));
-		}
-
-		const additions = summary.files.reduce((total, file) => total + file.additions, 0);
-		const removals = summary.files.reduce((total, file) => total + file.removals, 0);
-		const totalBits = [
-			`${summary.files.length} ${summary.files.length === 1 ? "file" : "files"}`,
-			this.theme.fg("success", `+${additions}`),
-			this.theme.fg("error", `-${removals}`),
-		];
-		lines.push(line(), line(` ${this.theme.fg("dim", totalBits.join("  "))}`), border(`└${horizontal}┘`));
-		return lines;
+	for (const file of visibleFiles) {
+		const status = file.status === "added"
+			? theme.fg("success", "A")
+			: theme.fg("accent", "M");
+		const counts = [
+			file.additions > 0 ? theme.fg("success", `+${file.additions}`) : "",
+			file.removals > 0 ? theme.fg("error", `-${file.removals}`) : "",
+		].filter(Boolean).join(" ");
+		const prefix = ` ${status} `;
+		const reserved = visibleWidth(prefix) + visibleWidth(counts) + (counts ? 1 : 0);
+		const pathWidth = Math.max(1, innerWidth - reserved);
+		const path = truncateToWidth(file.path, pathWidth, "…");
+		const gap = " ".repeat(Math.max(1, innerWidth - visibleWidth(prefix) - visibleWidth(path) - visibleWidth(counts)));
+		lines.push(line(`${prefix}${path}${counts ? `${gap}${counts}` : ""}`));
 	}
 
-	invalidate(): void {}
+	if (summary.files.length > visibleFiles.length) {
+		lines.push(line(theme.fg("dim", `   … ${summary.files.length - visibleFiles.length} more`)));
+	}
+
+	const additions = summary.files.reduce((total, file) => total + file.additions, 0);
+	const removals = summary.files.reduce((total, file) => total + file.removals, 0);
+	const totalBits = [
+		`${summary.files.length} ${summary.files.length === 1 ? "file" : "files"}`,
+		theme.fg("success", `+${additions}`),
+		theme.fg("error", `-${removals}`),
+	];
+	lines.push(line(), line(` ${theme.fg("dim", totalBits.join("  "))}`), border(`└${horizontal}┘`));
+	return lines;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -192,83 +168,19 @@ export default function (pi: ExtensionAPI) {
 	let snapshots = new Map<string, FileSnapshot>();
 	let currentFiles = new Map<string, FileSummary>();
 
-	let overlayTui: TUI | undefined;
-	let overlayHandle: OverlayHandle | undefined;
-	let closeOverlay: (() => void) | undefined;
-	let overlayGeneration = 0;
-	let renderQueued = false;
-	let planLayout: PlanOverlayLayout = { visible: false, height: 0 };
-
-	const requestOverlayRender = () => {
-		if (renderQueued) return;
-		renderQueued = true;
-		queueMicrotask(() => {
-			renderQueued = false;
-			overlayTui?.requestRender();
-		});
-	};
-	const syncOverlay = () => {
-		const shouldShow = enabled && displaySummary.files.length > 0;
-		overlayHandle?.setHidden(!shouldShow);
-		requestOverlayRender();
-	};
-	const stopPlanLayoutUpdates = pi.events.on(PLAN_OVERLAY_LAYOUT_EVENT, (value) => {
-		const next = parsePlanOverlayLayout(value);
-		if (!next) return;
-		if (next.visible === planLayout.visible && next.height === planLayout.height) return;
-		planLayout = next;
-		requestOverlayRender();
+	const overlayCard = registerOverlayCard({
+		id: "edit-summary",
+		order: 20,
+		width: 46,
+		minHeight: 7,
+		minTerminalWidth: 72,
+		visible: () => enabled && displaySummary.files.length > 0,
+		render: (width, maxHeight, theme) => {
+			if (summaryHeight(displaySummary) > maxHeight) return [];
+			return renderEditSummary(displaySummary, width, theme);
+		},
 	});
-
-	const unmountOverlay = () => {
-		overlayGeneration++;
-		closeOverlay?.();
-		closeOverlay = undefined;
-		overlayHandle = undefined;
-		overlayTui = undefined;
-	};
-
-	const mountOverlay = (ctx: ExtensionContext) => {
-		if (ctx.mode !== "tui") return;
-		unmountOverlay();
-		const generation = overlayGeneration;
-		void ctx.ui.custom<void>(
-			(tui, theme, _keybindings, done) => {
-				overlayTui = tui;
-				closeOverlay = done;
-				return new EditSummaryOverlay(theme, () => displaySummary);
-			},
-			{
-				overlay: true,
-				overlayOptions: () => {
-					const top = planLayout.visible && planLayout.height > 0
-						? DEFAULT_TOP_MARGIN + planLayout.height + OVERLAY_GAP
-						: DEFAULT_TOP_MARGIN;
-					return {
-						anchor: "top-right",
-						width: 46,
-						maxHeight: "80%",
-						margin: { top, right: 2 },
-						nonCapturing: true,
-						visible: (terminalWidth: number, terminalHeight: number) => (
-							terminalWidth >= 72 && terminalHeight >= top + summaryHeight(displaySummary)
-						),
-					};
-				},
-				onHandle: (handle: OverlayHandle) => {
-					overlayHandle = handle;
-					syncOverlay();
-				},
-			},
-		).catch(() => {
-			// Session replacement can dispose the UI while this passive overlay is open.
-		}).finally(() => {
-			if (generation !== overlayGeneration) return;
-			closeOverlay = undefined;
-			overlayHandle = undefined;
-			overlayTui = undefined;
-		});
-	};
+	const syncOverlay = () => overlayCard.invalidate();
 
 	const beginRun = () => {
 		runActive = true;
@@ -343,10 +255,8 @@ export default function (pi: ExtensionAPI) {
 		runActive = false;
 		snapshots = new Map();
 		currentFiles = new Map();
-		planLayout = { visible: false, height: 0 };
 		displaySummary = restoreLastSummary(ctx);
-		mountOverlay(ctx);
-		pi.events.emit(PLAN_OVERLAY_LAYOUT_REQUEST_EVENT, undefined);
+		syncOverlay();
 	});
 
 	pi.on("before_agent_start", () => {
@@ -385,7 +295,6 @@ export default function (pi: ExtensionAPI) {
 		runActive = false;
 		snapshots.clear();
 		currentFiles.clear();
-		stopPlanLayoutUpdates();
-		unmountOverlay();
+		overlayCard.unregister();
 	});
 }
