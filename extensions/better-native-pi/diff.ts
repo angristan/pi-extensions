@@ -158,6 +158,12 @@ export function wrapBranchLine(line: string, width: number, branchPrefix = "  â”
 	const detail = hasTail ? line.slice(branchPrefix.length, tailIndex) : line.slice(branchPrefix.length);
 	const tail = hasTail ? line.slice(tailIndex) : "";
 
+	// Capture any SGR attributes open at the very start of the detail (e.g. a
+	// leading DIM from a dimmed command highlight) so we can re-apply them to
+	// every continuation line. Without this, a wrapping `\x1b[2mâ€¦\x1b[0m` span
+	// only dims the first wrap line and the rest render at full brightness.
+	const leadingSgr = (detail.match(/^(\x1b\[[0-9;]*m)+/)?.[0] ?? "");
+
 	const contentWidth = Math.max(1, max - branchPrefix.length);
 	// Word-wrap the detail on spaces (ANSI-aware via visibleWidth) rather than
 	// wrapTextWithAnsi, which splits mid-token on long path segments and cuts
@@ -203,7 +209,13 @@ export function wrapBranchLine(line: string, width: number, branchPrefix = "  â”
 	}
 
 	const branchIndent = " ".repeat(branchPrefix.length);
-	const rows = chunks.map((chunk, index) => index === 0 ? `${branchPrefix}${chunk}` : `${branchIndent}${chunk}`);
+	// Re-apply the leading SGR (e.g. DIM) to continuation lines so a dimmed
+	// command stays dim across every wrap line, not just the first.
+	const rows = chunks.map((chunk, index) =>
+		index === 0
+			? `${branchPrefix}${chunk}`
+			: `${branchIndent}${leadingSgr}${chunk}`,
+	);
 	if (hasTail) {
 		const lastIndex = rows.length - 1;
 		const last = rows[lastIndex];

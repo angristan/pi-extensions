@@ -261,8 +261,13 @@ export function buildToolBlock(
 	const headlineTone = headline
 		? (typeof theme?.fg === "function" ? theme.fg("warning", headline) : `${headline}`)
 		: "";
+	// Slightly mute the command detail with the ANSI DIM attribute so the
+	// colorful syntax highlighting recedes relative to the reasoning headline.
+	// wrapBranchLine re-applies the leading SGR to continuation lines, so DIM
+	// survives wrapping across all rows (not just the first).
+	const dimmedDetail = hasDetail ? `${DIM}${detail}${RESET}` : "";
 	const metadata = hasDetail
-		? `${detail} · ${summary}`
+		? `${dimmedDetail} · ${summary}`
 		: summary;
 	const lines: string[] = [
 		`${LEAD}${mark} ${verb}${headlineTone ? ` ${headlineTone}` : ""}`,
