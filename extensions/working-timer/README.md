@@ -3,10 +3,11 @@
 Adds a live elapsed timer to pi's built-in working row:
 
 ```
-⠹ Working... 2:17
+⠹ Working (2m 17s • escape to interrupt)
 ```
 
-The timer covers the complete user-visible run. It keeps counting across
+The interrupt hint follows pi's configured keybinding. The timer covers the
+complete user-visible run. It keeps counting across
 provider retries, automatic compaction and retry, and queued continuations,
 then resets when pi fully settles.
 
