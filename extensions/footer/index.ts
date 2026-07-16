@@ -27,13 +27,13 @@ const FOOTER_COLORS = {
  * use 'text' to match turn-stats; labels are muted. Other segments use distinct
  * theme tokens so the footer has color life, not just two greys. */
 const FOOTER_THEME_TOKEN: Record<StatusSegment["accent"], string> = {
-	thread: "accent",        // session identity — purple
+	thread: "mdCode",        // session identity — orange, distinct from cost
 	path: "mdLink",          // cwd — blue
 	branch: "success",      // git branch + cache-good — green status
 	model: "syntaxType",    // model name — yellow
 	usage: "text",          // ↓/↑ token values — cream (semantic parallel)
 	timing: "thinkingMedium", // ctx — aqua, distinct from model yellow
-	cost: "mdCode",         // cost — orange, the standout metric
+	cost: "accent",         // cost — purple, matches turn-stats
 	warning: "warning",     // cache-bad — yellow, matches turn-stats
 };
 
