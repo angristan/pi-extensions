@@ -13,6 +13,7 @@ import { hyperlinkPath } from "../hyperlinks/index.js";
 import {
 	BOLD,
 	CYAN,
+	DIM,
 	GREEN,
 	MAGENTA,
 	RED,
@@ -281,9 +282,11 @@ export function buildToolBlock(
 	// Reasoning in the theme's accent tone: distinct from every syntax token
 	// (red/green/blue/yellow) and from default text, so it never blends with the
 	// command. On gruvbox this is the signature purple.
-	const headlineTone = headline
+	// During a partial before reasoning has streamed in, show a dim `…`
+	// placeholder so the headline row reads as pending rather than empty.
+	const headlineText = headline
 		? (typeof theme?.fg === "function" ? theme.fg("accent", headline) : `${headline}`)
-		: "";
+		: (isPartial ? (typeof theme?.fg === "function" ? theme.fg("dim", "…") : `${DIM}…${RESET}`) : "");
 	// Command colors are lightly dimmed via dimTheme (gentle HSL lightness
 	// shift) so they recede slightly from full-bright, but stay clearly brighter
 	// than the DIM'd output below — a middle tier between command and output.
@@ -291,7 +294,7 @@ export function buildToolBlock(
 		? `${detail} · ${summary}`
 		: summary;
 	const lines: string[] = [
-		`${LEAD}${mark} ${verb}${headlineTone ? ` ${headlineTone}` : ""}`,
+		`${LEAD}${mark} ${verb}${headlineText ? ` ${headlineText}` : ""}`,
 		`${BRANCH}${metadata}`,
 	];
 	const diff = result?.details?.diff as string | undefined;
