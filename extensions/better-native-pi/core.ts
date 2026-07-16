@@ -252,15 +252,23 @@ export function buildToolBlock(
 	const verb = toolVerb(name, isPartial);
 	const detail = argDetail(name, rest, theme);
 	const hasDetail = Boolean(detail);
-	// Subtle dim on the reasoning headline so the verb reads as the emphasis and
-	// the reason recedes slightly into the background, matching the cells.
+	// The reasoning is the most informative part of the line — make it the
+	// visual emphasis: accent-colored and bold. The verb stays plain bold so it
+	// reads as a label prefix rather than competing for attention.
 	const headline = oneLine(reasoning);
-	const headlineTone = headline ? `${DIM}${headline}${RESET}` : "";
+	const headlineTone = headline
+		? (typeof theme?.fg === "function"
+			? theme.fg("accent", theme.bold(headline))
+			: `${BOLD}${headline}${RESET}`)
+		: "";
+	// Dim the command detail so the syntax-highlighted command recedes and the
+	// reasoning headline stays the focal point.
+	const dimmedDetail = hasDetail ? `${DIM}${detail}${RESET}` : "";
 	const metadata = hasDetail
-		? `${detail} · ${summary}`
+		? `${dimmedDetail} · ${summary}`
 		: summary;
 	const lines: string[] = [
-		`${LEAD}${mark} ${BOLD}${verb}${RESET}${headlineTone ? ` ${headlineTone}` : ""}`,
+		`${LEAD}${mark} ${verb}${headlineTone ? ` ${headlineTone}` : ""}`,
 		`${BRANCH}${metadata}`,
 	];
 	const diff = result?.details?.diff as string | undefined;
