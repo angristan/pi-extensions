@@ -444,19 +444,19 @@ export default function (pi: ExtensionAPI) {
 
 					const hasCache = totals.cacheRead > 0 || totals.cacheWrite > 0;
 					const inputValue = formatTokensCompact(totals.input);
-					const fullCacheDetails: string[] = [];
-					if (totals.cacheRead > 0) fullCacheDetails.push(`${formatTokensCompact(totals.cacheRead)} cached`);
-					if (totals.cacheWrite > 0) fullCacheDetails.push(`${formatTokensCompact(totals.cacheWrite)} written`);
-					if (hasCache && totals.sessionCacheHit !== undefined) fullCacheDetails.push(`${totals.sessionCacheHit.toFixed(0)}% avg`);
+					// Cache detail as its own segment so it can take the success/green tone
+					// like turn-stats' cache hit rate, instead of folding into the input text.
+					const cacheHitColor = (totals.sessionCacheHit ?? 0) >= 50 ? "branch" : "timing";
+					const fullCacheSegments: StatusSegment[] = [];
+					if (totals.cacheRead > 0) fullCacheSegments.push({ accent: cacheHitColor, label: "cached", text: formatTokensCompact(totals.cacheRead) });
+					if (totals.cacheWrite > 0) fullCacheSegments.push({ accent: cacheHitColor, label: "written", text: formatTokensCompact(totals.cacheWrite) });
+					if (hasCache && totals.sessionCacheHit !== undefined) fullCacheSegments.push({ accent: cacheHitColor, label: "hit", text: `${totals.sessionCacheHit.toFixed(0)}%` });
+					const inputSegment: StatusSegment = { accent: "usage", label: "↓", text: inputValue };
 					const inputCacheVariants: StatusSegment[][] = totals.input > 0 || hasCache
 						? [
-							[{ accent: "usage", label: "↓", text: fullCacheDetails.length > 0 ? `${inputValue} (${fullCacheDetails.join(" ")})` : inputValue }],
-							[{ accent: "usage", label: "↓", text: hasCache && totals.sessionCacheHit !== undefined
-								? `${inputValue} (${formatTokensCompact(totals.cacheRead)} cached ${totals.sessionCacheHit.toFixed(0)}% avg)`
-								: inputValue }],
-							[{ accent: "usage", label: "↓", text: hasCache && totals.sessionCacheHit !== undefined
-								? `${inputValue} (${totals.sessionCacheHit.toFixed(0)}% avg)`
-								: inputValue }],
+							[inputSegment, ...fullCacheSegments],
+							[inputSegment, ...fullCacheSegments.slice(0, 1), ...fullCacheSegments.slice(-1)],
+							[inputSegment, ...fullCacheSegments.slice(-1)],
 						]
 						: [];
 
@@ -467,7 +467,7 @@ export default function (pi: ExtensionAPI) {
 						{ segments: [{ accent: "model", text: modelWithReasoning(current, thinkingLevel) }], priority: 7 },
 						{
 							segments: contextWindow > 0
-								? [{ accent: "usage", label: "ctx", text: `${contextRemainingPercent(usage?.tokens, contextWindow)}%/${formatTokensCompact(contextWindow)}` }]
+								? [{ accent: "timing", label: "ctx", text: `${contextRemainingPercent(usage?.tokens, contextWindow)}%/${formatTokensCompact(contextWindow)}` }]
 								: [],
 							priority: 1,
 						},
