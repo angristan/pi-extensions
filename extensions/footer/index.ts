@@ -440,11 +440,11 @@ export default function (pi: ExtensionAPI) {
 					if (hasCache && totals.sessionCacheHit !== undefined) fullCacheDetails.push(`${totals.sessionCacheHit.toFixed(0)}% avg`);
 					const inputCacheVariants: StatusSegment[][] = totals.input > 0 || hasCache
 						? [
-							[{ accent: "branch", text: fullCacheDetails.length > 0 ? `${inputLabel} (${fullCacheDetails.join(" ")})` : inputLabel }],
-							[{ accent: "branch", text: hasCache && totals.sessionCacheHit !== undefined
+							[{ accent: "usage", text: fullCacheDetails.length > 0 ? `${inputLabel} (${fullCacheDetails.join(" ")})` : inputLabel }],
+							[{ accent: "usage", text: hasCache && totals.sessionCacheHit !== undefined
 								? `${inputLabel} (${formatTokensCompact(totals.cacheRead)} cached ${totals.sessionCacheHit.toFixed(0)}% avg)`
 								: inputLabel }],
-							[{ accent: "branch", text: hasCache && totals.sessionCacheHit !== undefined
+							[{ accent: "usage", text: hasCache && totals.sessionCacheHit !== undefined
 								? `${inputLabel} (${totals.sessionCacheHit.toFixed(0)}% avg)`
 								: inputLabel }],
 						]
@@ -467,11 +467,11 @@ export default function (pi: ExtensionAPI) {
 							priority: 3,
 						},
 						{
-							segments: totals.output > 0 ? [{ accent: "thread", text: `↑ ${formatTokensCompact(totals.output)}` }] : [],
+							segments: totals.output > 0 ? [{ accent: "usage", text: `↑ ${formatTokensCompact(totals.output)}` }] : [],
 							priority: 4,
 						},
 						{
-							segments: totals.cost > 0 ? [{ accent: "model", text: formatCostCents(totals.cost) }] : [],
+							segments: totals.cost > 0 ? [{ accent: "thread", text: formatCostCents(totals.cost) }] : [],
 							priority: 2,
 						},
 					];
