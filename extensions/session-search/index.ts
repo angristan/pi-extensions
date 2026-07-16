@@ -304,10 +304,15 @@ export default function (pi: ExtensionAPI) {
 					"Cancel",
 				]);
 				if (!action || action === "Cancel") return;
+				// ctx.switchSession() tears down the current session runtime and
+				// invalidates this ctx (and ctx.ui). Once a switch happens, the
+				// finally block must not touch the stale ctx, so flag it.
+				let switched = false;
 				if (action === "Resume this session") {
 					await ctx.switchSession(selected.session.path, {
 						withSession: async (replacementCtx: any) => replacementCtx.ui.notify(`Resumed match for “${parsed.query}”.`, "info"),
 					});
+					switched = true;
 					return;
 				}
 				if (action === "Fork through the matching entry") {
@@ -325,6 +330,7 @@ export default function (pi: ExtensionAPI) {
 					await ctx.switchSession(forkPath, {
 						withSession: async (replacementCtx: any) => replacementCtx.ui.notify(`Forked search match from ${selected.session.id.slice(0, 8)}.`, "info"),
 					});
+					switched = true;
 					return;
 				}
 				if (action === "Copy matching excerpt") {
@@ -337,7 +343,9 @@ export default function (pi: ExtensionAPI) {
 				}
 				ctx.ui.setEditorText(selected.snippet);
 			} finally {
-				ctx.ui.setStatus("session-search", undefined);
+				// Only clear the status on the live ctx. After a switch, the old
+				// ctx is stale and the new session owns its own UI state.
+				if (!switched) ctx.ui.setStatus("session-search", undefined);
 			}
 		},
 	});
