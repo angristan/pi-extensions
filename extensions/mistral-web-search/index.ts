@@ -259,16 +259,22 @@ function renderSearchResult(
 			const website = resultWebsite(item);
 			const searchEngine = resultSearchEngine(item);
 			const via = searchEngine && searchEngine.toLowerCase() !== website?.toLowerCase() ? `via ${searchEngine}` : undefined;
-			const meta = [website, via, item.date].filter(Boolean).join(" · ");
-			lines.push(`${INDENT}${theme.fg("syntaxNumber", `${index + 1}.`)} ${rendered}${meta ? ` ${theme.fg("dim", `— ${meta}`)}` : ""}`);
+			const meta = [
+				website ? theme.fg("accent", website) : undefined,
+				via ? theme.fg("muted", via) : undefined,
+				item.date ? theme.fg("syntaxNumber", item.date) : undefined,
+			].filter(Boolean).join(theme.fg("dim", " · "));
+			lines.push(`${INDENT}${theme.fg("syntaxNumber", `${index + 1}.`)} ${rendered}${meta ? ` ${theme.fg("dim", "—")} ${meta}` : ""}`);
 			const evidence = item.snippets?.[0] ?? item.description;
 			if (evidence) {
-				lines.push(`${INDENT}   ${theme.fg("dim", truncateToWidth(evidence.replace(/\s+/g, " ").trim(), 140, "…"))}`);
+				lines.push(`${INDENT}   ${theme.fg("toolOutput", truncateToWidth(evidence.replace(/\s+/g, " ").trim(), 140, "…"))}`);
 			}
 		}
 		const shown = shownResults.length;
 		const remaining = Math.max(0, details.resultCount - shown);
-		if (remaining > 0) lines.push(`${INDENT}${theme.fg("muted", `${shown} shown · ${remaining} more`)}`);
+		if (remaining > 0) {
+			lines.push(`${INDENT}${theme.fg("syntaxNumber", String(shown))}${theme.fg("muted", " shown · ")}${theme.fg("syntaxNumber", String(remaining))}${theme.fg("muted", " more")}`);
+		}
 		return lines;
 	});
 	return component;
