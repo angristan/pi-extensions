@@ -6,7 +6,7 @@ import {
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 
-const ENTRY_TYPE = "turn-timing";
+const ENTRY_TYPE = "turn-stats";
 
 // Minimum token-window before context-% becomes meaningful. Matches the footer's
 // baseline so the two views don't drift apart.
