@@ -27,12 +27,13 @@ const FOOTER_COLORS = {
  * use 'text' to match turn-stats; labels are muted. Other segments use distinct
  * theme tokens so the footer has color life, not just two greys. */
 const FOOTER_THEME_TOKEN: Record<StatusSegment["accent"], string> = {
-	thread: "accent",        // session identity
-	path: "mdLink",          // cwd — link blue, distinct from model
-	branch: "success",      // git branch — green status
-	model: "mdHeading",     // model name — heading tone, distinct
-	usage: "text",          // tokens/ctx values — default text, like turn-stats
-	timing: "accent",       // ttft/tps
+	thread: "accent",        // session identity — purple
+	path: "mdLink",          // cwd — blue
+	branch: "success",      // git branch + cache-good — green status
+	model: "syntaxType",    // model name — yellow
+	usage: "text",          // ↓/↑ token values — cream (semantic parallel)
+	timing: "warning",      // ctx + cache-bad — yellow
+	cost: "mdCode",         // cost — orange, the standout metric
 };
 
 interface BranchChanges {
@@ -41,7 +42,7 @@ interface BranchChanges {
 }
 
 interface StatusSegment {
-	accent: "thread" | "path" | "branch" | "model" | "usage" | "timing";
+	accent: "thread" | "path" | "branch" | "model" | "usage" | "timing" | "cost";
 	text: string;
 	/** Optional leading label (e.g. "↓", "↑", "ctx") rendered in the muted tone,
 	 * mirroring turn-stats' muted-label + colored-value pattern. */
@@ -446,6 +447,8 @@ export default function (pi: ExtensionAPI) {
 					const inputValue = formatTokensCompact(totals.input);
 					// Cache detail as its own segment so it can take the success/green tone
 					// like turn-stats' cache hit rate, instead of folding into the input text.
+					// Cache detail colored by hit rate like turn-stats: success green when
+					// ≥50%, warning yellow otherwise. Distinct from ctx (mdListBullet).
 					const cacheHitColor = (totals.sessionCacheHit ?? 0) >= 50 ? "branch" : "timing";
 					const fullCacheSegments: StatusSegment[] = [];
 					if (totals.cacheRead > 0) fullCacheSegments.push({ accent: cacheHitColor, label: "cached", text: formatTokensCompact(totals.cacheRead) });
@@ -481,7 +484,7 @@ export default function (pi: ExtensionAPI) {
 							priority: 4,
 						},
 						{
-							segments: totals.cost > 0 ? [{ accent: "thread", text: formatCostCents(totals.cost) }] : [],
+							segments: totals.cost > 0 ? [{ accent: "cost", text: formatCostCents(totals.cost) }] : [],
 							priority: 2,
 						},
 					];
