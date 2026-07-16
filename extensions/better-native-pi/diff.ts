@@ -135,6 +135,50 @@ function wrapDiffLine(line: string, width: number, prefixWidth: number): string[
 	return chunks.map((chunk, index) => index === 0 ? `${prefix}${chunk}` : `${" ".repeat(prefixWidth)}${chunk}`);
 }
 
+/**
+ * Cap branch-row (└ ...) wrapping at this many lines. Long commands become
+ * readable without making tool blocks arbitrarily tall.
+ */
+const MAX_BRANCH_LINES = 3;
+
+/**
+ * Wrap a `└ <detail> · <summary>` tool-block branch row to at most
+ * MAX_BRANCH_LINES lines, keeping the `· <summary>` tail on the last line and
+ * using a hanging indent matching the `└ ` prefix on continuations. Returns the
+ * line untouched if it already fits. Non-branch lines are returned as-is.
+ */
+export function wrapBranchLine(line: string, width: number, branchPrefix = "  └ "): string[] {
+	const max = Math.max(1, width);
+	if (visibleWidth(line) <= max) return [line];
+	// Only wrap rows we recognize: a leading `└ ` branch prefix with a ` · ` tail.
+	if (!line.startsWith(branchPrefix)) return [fitToolLine(line, max)];
+	const tailSeparator = " · ";
+	const tailIndex = line.lastIndexOf(tailSeparator);
+	const hasTail = tailIndex >= branchPrefix.length;
+	const detail = hasTail ? line.slice(branchPrefix.length, tailIndex) : line.slice(branchPrefix.length);
+	const tail = hasTail ? line.slice(tailIndex) : "";
+
+	const contentWidth = Math.max(1, max - branchPrefix.length);
+	let chunks = wrapTextWithAnsi(detail, contentWidth);
+	// Reserve room for the tail on the last line; if it doesn't fit, the last
+	// detail chunk gets truncated by fitToolLine below.
+	const budget = MAX_BRANCH_LINES - (hasTail ? 1 : 0);
+	if (chunks.length > budget) {
+		const head = chunks.slice(0, Math.max(1, budget - 1));
+		const rest = chunks.slice(Math.max(1, budget - 1)).join(" ");
+		chunks = [...head, sliceByColumn(rest, 0, contentWidth)];
+	}
+
+	const rows = chunks.map((chunk, index) => index === 0 ? `${branchPrefix}${chunk}` : `${" ".repeat(branchPrefix.length)}${chunk}`);
+	if (hasTail) {
+		const lastIndex = rows.length - 1;
+		const last = rows[lastIndex];
+		const fitted = fitToolLine(`${last}${tail}`, max);
+		rows[lastIndex] = fitted;
+	}
+	return rows;
+}
+
 function applyAnsiRegion(text: string, width: number, background: string, foreground = ""): string {
 	const padding = " ".repeat(Math.max(0, width - visibleWidth(text)));
 	const start = `${background}${foreground}`;
@@ -266,7 +310,7 @@ export class WidthAwareLines {
 				? [line]
 				: info
 					? wrapDiffLine(line, max, info.prefixWidth)
-					: [fitToolLine(line, max)];
+					: wrapBranchLine(line, max);
 			return info && this.diffPalette
 				? fitted.map((row) => applyDiffBackground(row, max, info, this.diffPalette!))
 				: fitted;
