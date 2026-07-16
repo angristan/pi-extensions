@@ -4,14 +4,14 @@ import {
 	type AssistantMessageEvent,
 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text, type Component } from "@earendil-works/pi-tui";
+import { Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
 
 const ENTRY_TYPE = "turn-stats";
 
 /**
- * Full-width dim `─` rule, followed by the stats text. The rule gives a clear
- * visual boundary above the turn's completion summary so it's easy to spot
- * where each turn's stats begin in the transcript.
+ * A `─` rule above the stats text, followed by the stats line itself. The
+ * rule gives a clear visual boundary above the turn's completion summary so
+ * it's easy to spot where each turn's stats begin in the transcript.
  */
 class StatsRow implements Component {
 	constructor(
@@ -19,10 +19,12 @@ class StatsRow implements Component {
 		private readonly theme: any,
 	) {}
 	render(width: number): string[] {
-		const rule = this.theme.fg("borderMuted", "─".repeat(Math.max(0, width)));
-		// Render the stats line through Text so margins/wrapping match the rest
-		// of the transcript; combine with the rule above it.
+		// Render the stats line first through Text so margins/wrapping match the
+		// rest of the transcript; size the rule to the visible content width so it
+		// ends right where the stats text does, not all the way across the screen.
 		const statsLines = new Text(this.stats, 1, 0).render(width);
+		const statsWidth = Math.min(width, Math.max(0, ...statsLines.map(visibleWidth)));
+		const rule = this.theme.fg("borderMuted", "─".repeat(statsWidth));
 		return [rule, ...statsLines];
 	}
 }
