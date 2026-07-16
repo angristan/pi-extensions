@@ -32,7 +32,7 @@ const FOOTER_THEME_TOKEN: Record<StatusSegment["accent"], string> = {
 	branch: "success",      // git branch + cache-good — green status
 	model: "syntaxType",    // model name — yellow
 	usage: "text",          // ↓/↑ token values — cream (semantic parallel)
-	timing: "thinkingMedium", // ctx — aqua, distinct from model yellow
+	timing: "mdListBullet",  // ctx — grey, distinct from turn-stats throughput aqua
 	cost: "accent",         // cost — purple, matches turn-stats
 	warning: "warning",     // cache-bad — yellow, matches turn-stats
 };
