@@ -25,13 +25,13 @@ const SHELL_KEYWORDS = new Set([
 const SHELL_COMMAND_PREFIXES = new Set(["builtin", "command", "env", "exec", "nohup", "sudo", "time"]);
 const SHELL_OPERATORS = [";;&", "<<-", "&&", "||", "|&", ">>", "<<", "&>", "<>", ">&", "<&", ";;", ";&", "(", ")", ";", "|", "&", ">", "<"];
 const SHELL_FALLBACK_COLORS: Record<ShellSyntaxColor, string> = {
-	syntaxComment: "\x1b[90m",
-	syntaxKeyword: MAGENTA,
-	syntaxFunction: CYAN,
-	syntaxVariable: "\x1b[33m",
-	syntaxString: GREEN,
-	syntaxNumber: GREEN,
-	syntaxOperator: MAGENTA,
+	syntaxComment: "\x1b[90m",          // bright black (grey) — subdued
+	syntaxKeyword: MAGENTA,        // \x1b[35m — if/for/done
+	syntaxFunction: CYAN,           // \x1b[36m — command names
+	syntaxVariable: "\x1b[33m",     // yellow — $VAR
+	syntaxString: GREEN,            // \x1b[32m — "quoted"
+	syntaxNumber: "\x1b[93m",       // bright yellow — distinct from green strings
+	syntaxOperator: "\x1b[90m",    // bright black (grey) — | && > distinct from magenta keywords
 };
 
 function shellColor(theme: any, color: ShellSyntaxColor, text: string): string {
