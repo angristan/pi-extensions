@@ -37,6 +37,10 @@ describe("buildHeartbeatArgs", () => {
 		expect(args).toContain("--ai-line-changes");
 		expect(args).toContain("4");
 		expect(args).toContain("--write");
+		expect(args).toContain("--sync-ai-disabled");
+		expect(
+			args.slice(args.indexOf("--timeout"), args.indexOf("--timeout") + 2),
+		).toEqual(["--timeout", "10"]);
 		expect(
 			args.find((argument) => argument.includes("pi-wakatime/")),
 		).toStartWith("pi/");
