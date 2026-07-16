@@ -17,4 +17,5 @@ you pick:     ▶ new branch
 ```
 
 Supports multiple questions in one call, "other" free-text answers, and
-secret inputs (hidden from the transcript).
+secret inputs. Secret responses use a masked TUI field; only a
+`[secret provided]` marker is sent to the model or persisted in the transcript.
