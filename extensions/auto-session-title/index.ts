@@ -155,7 +155,6 @@ export default function (pi: ExtensionAPI) {
 	let requestGeneration = 0;
 	let activeRequest: AbortController | undefined;
 	let lastTitledLeafId: string | undefined;
-	let lastQueuedDiscussion: string | undefined;
 	let managedTitle: string | undefined;
 	let programmaticTitle: string | undefined;
 	let manualTitleLocked = false;
@@ -295,12 +294,6 @@ export default function (pi: ExtensionAPI) {
 			if (options.notify) ctx.ui.notify("No user discussion found to title.", "warning");
 			return false;
 		}
-		if (!options.force && discussion === lastQueuedDiscussion) {
-			lastSkipReason = "already fresh for current user discussion";
-			if (options.notify) ctx.ui.notify("Title is already fresh for the current user discussion.", "info");
-			return false;
-		}
-
 		lastAttemptAt = new Date().toISOString();
 		lastGeneratedTitle = undefined;
 		lastAppliedTitle = undefined;
@@ -308,7 +301,6 @@ export default function (pi: ExtensionAPI) {
 		lastError = undefined;
 		if (options.force) manualTitleLocked = false;
 		lastTitledLeafId = leafId;
-		lastQueuedDiscussion = discussion;
 		const previousTitle = pi.getSessionName() || managedTitle;
 		const generation = ++requestGeneration;
 		activeRequest?.abort();
@@ -364,7 +356,6 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (event, ctx) => {
 		cancelRequest();
 		lastTitledLeafId = undefined;
-		lastQueuedDiscussion = undefined;
 		managedTitle = pi.getSessionName();
 		programmaticTitle = undefined;
 		manualTitleLocked = false;
@@ -418,7 +409,6 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_shutdown", () => {
 		lastTitledLeafId = undefined;
-		lastQueuedDiscussion = undefined;
 		managedTitle = undefined;
 		programmaticTitle = undefined;
 		manualTitleLocked = false;
