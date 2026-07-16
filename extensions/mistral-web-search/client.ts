@@ -12,6 +12,11 @@ const MAX_OUTPUT_BYTES = 50 * 1024;
 const MAX_OUTPUT_LINES = 2_000;
 const MAX_SNIPPETS_PER_RESULT = 3;
 const MAX_SNIPPET_CHARS = 900;
+const MAX_QUERY_CHARS = 2_000;
+const MAX_TITLE_CHARS = 600;
+const MAX_URL_CHARS = 2_048;
+const MAX_SOURCE_CHARS = 200;
+const MAX_DATE_CHARS = 100;
 
 export interface RagResult {
 	id: string;
@@ -58,6 +63,21 @@ export interface OpenUrlResult {
 	truncated: boolean;
 	originalBytes: number;
 	originalLines: number;
+}
+
+export interface SearchDisplayItem {
+	title?: string;
+	url?: string;
+	source?: string;
+	rank?: number;
+	date?: string;
+	snippets: string[];
+}
+
+export interface SearchDisplayDetails {
+	elapsedMs?: number;
+	resultCount: number;
+	results: SearchDisplayItem[];
 }
 
 interface ProviderConfig {
@@ -352,12 +372,12 @@ function shorten(value: string, maxChars: number): string {
 
 function formatResultItem(result: RagResult, index: number): string[] {
 	const lines = [
-		`${index + 1}. ${result.title ?? result.url ?? result.id}`,
-		`   URL: ${result.url ?? "n/a"}`,
+		`${index + 1}. ${shorten(result.title ?? result.url ?? result.id, MAX_TITLE_CHARS)}`,
+		`   URL: ${result.url ? shorten(result.url, MAX_URL_CHARS) : "n/a"}`,
 		`   Rank: ${result.rank}`,
-		`   Source: ${result.source}`,
+		`   Source: ${shorten(result.source, MAX_SOURCE_CHARS)}`,
 	];
-	if (result.date) lines.push(`   Date: ${result.date}`);
+	if (result.date) lines.push(`   Date: ${shorten(result.date, MAX_DATE_CHARS)}`);
 	if (result.description) lines.push(`   Description: ${shorten(result.description, 600)}`);
 	if (result.snippets.length > 0) {
 		lines.push("   Snippets:");
@@ -371,22 +391,85 @@ function formatResultItem(result: RagResult, index: number): string[] {
 
 export function formatSearchResults(result: WebSearchResult | NewsSearchResult): string {
 	const lines = [
-		`query: ${result.query}`,
+		`query: ${shorten(result.query, MAX_QUERY_CHARS)}`,
 		`provider: ${result.provider}`,
 		`tool: ${result.tool}`,
 		`limit: ${result.limit}`,
 		`elapsed_ms: ${Math.round(result.elapsedMs)}`,
 		`result_count: ${result.results.length}`,
 	];
-	if (result.startDate) lines.push(`start_date: ${result.startDate}`);
-	if (result.endDate) lines.push(`end_date: ${result.endDate}`);
-	if (result.tool === "news_search" && result.lang) lines.push(`lang: ${result.lang}`);
+	if (result.startDate) lines.push(`start_date: ${shorten(result.startDate, MAX_DATE_CHARS)}`);
+	if (result.endDate) lines.push(`end_date: ${shorten(result.endDate, MAX_DATE_CHARS)}`);
+	if (result.tool === "news_search" && result.lang) lines.push(`lang: ${shorten(result.lang, MAX_SOURCE_CHARS)}`);
 	lines.push("", "results:");
 	if (result.results.length === 0) lines.push("No results returned.");
 	for (let index = 0; index < result.results.length; index++) {
 		lines.push(...formatResultItem(result.results[index]!, index));
 	}
 	return truncateText(lines.join("\n")).content;
+}
+
+/** Build a search tool result without retaining the larger raw connector payload. */
+export function createSearchToolResult(result: WebSearchResult | NewsSearchResult) {
+	return {
+		content: [{ type: "text" as const, text: formatSearchResults(result) }],
+	};
+}
+
+/** Reconstruct transient renderer data only from the bounded text stored in the session. */
+export function parseSearchResultText(text: string): SearchDisplayDetails {
+	const details: SearchDisplayDetails = { resultCount: 0, results: [] };
+	let current: SearchDisplayItem | undefined;
+	let inResults = false;
+	for (const line of text.split("\n")) {
+		if (line === "results:") {
+			inResults = true;
+			continue;
+		}
+		let match = /^elapsed_ms:\s*(-?\d+(?:\.\d+)?)$/.exec(line);
+		if (match) {
+			const elapsedMs = Number(match[1]);
+			if (Number.isFinite(elapsedMs)) details.elapsedMs = elapsedMs;
+			continue;
+		}
+		match = /^result_count:\s*(\d+)$/.exec(line);
+		if (match) {
+			details.resultCount = Number(match[1]);
+			continue;
+		}
+		if (!inResults) continue;
+		match = /^\d+\.\s(.*)$/.exec(line);
+		if (match) {
+			current = { title: match[1], snippets: [] };
+			details.results.push(current);
+			continue;
+		}
+		if (!current) continue;
+		match = /^ {3}URL:\s(.*)$/.exec(line);
+		if (match) {
+			if (match[1] !== "n/a") current.url = match[1];
+			continue;
+		}
+		match = /^ {3}Rank:\s(.*)$/.exec(line);
+		if (match) {
+			const rank = Number(match[1]);
+			if (Number.isFinite(rank)) current.rank = rank;
+			continue;
+		}
+		match = /^ {3}Source:\s(.*)$/.exec(line);
+		if (match) {
+			current.source = match[1];
+			continue;
+		}
+		match = /^ {3}Date:\s(.*)$/.exec(line);
+		if (match) {
+			current.date = match[1];
+			continue;
+		}
+		match = /^ {3}-\s(.*)$/.exec(line);
+		if (match) current.snippets.push(match[1]);
+	}
+	return details;
 }
 
 export function formatOpenUrlResult(result: OpenUrlResult): string {
