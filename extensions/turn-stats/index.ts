@@ -209,16 +209,16 @@ export default function (pi: ExtensionAPI) {
 		// ── Tokens: ↓in (cached) ↑out, matching the footer's arrow convention ─────
 		const usage = data.usage;
 		if (usage && (usage.input > 0 || usage.output > 0 || usage.cacheRead > 0 || usage.cacheWrite > 0)) {
-			const tokenBits: string[] = [];
-			tokenBits.push(`${theme.fg("muted", "↓")} ${theme.fg("text", formatTokensCompact(usage.input))}`);
-			// Cache detail colored by hit rate like the footer: success green when
-			// ≥50%, warning yellow otherwise — so cache health is visible at a glance.
 			const cacheColor = (data.cacheHitPercent ?? 0) >= 50 ? "success" : "warning";
-			if (usage.cacheRead > 0) tokenBits.push(`${theme.fg("muted", "cached")} ${theme.fg(cacheColor, formatTokensCompact(usage.cacheRead))}`);
-			if (usage.cacheWrite > 0) tokenBits.push(`${theme.fg("muted", "written")} ${theme.fg(cacheColor, formatTokensCompact(usage.cacheWrite))}`);
-			if (data.cacheHitPercent !== undefined) tokenBits.push(`${theme.fg("muted", "hit")} ${theme.fg(cacheColor, `${data.cacheHitPercent.toFixed(0)}%`)}`);
-			tokenBits.push(`${theme.fg("muted", "↑")} ${theme.fg("text", formatTokensCompact(usage.output))}`);
-			groups.push(tokenBits.join(theme.fg("dim", "  ")));
+			// Input + cache detail as one group.
+			const inputBits: string[] = [];
+			inputBits.push(`${theme.fg("muted", "↓")} ${theme.fg("text", formatTokensCompact(usage.input))}`);
+			if (usage.cacheRead > 0) inputBits.push(`${theme.fg("muted", "cached")} ${theme.fg(cacheColor, formatTokensCompact(usage.cacheRead))}`);
+			if (usage.cacheWrite > 0) inputBits.push(`${theme.fg("muted", "written")} ${theme.fg(cacheColor, formatTokensCompact(usage.cacheWrite))}`);
+			if (data.cacheHitPercent !== undefined) inputBits.push(`${theme.fg("muted", "hit")} ${theme.fg(cacheColor, `${data.cacheHitPercent.toFixed(0)}%`)}`);
+			if (inputBits.length > 0) groups.push(inputBits.join(theme.fg("dim", "  ")));
+			// Output as its own group so the │ separator separates it from cache.
+			if (usage.output > 0) groups.push(`${theme.fg("muted", "↑")} ${theme.fg("text", formatTokensCompact(usage.output))}`);
 		}
 
 		// ── Cost: run's marginal cost in accent (the interesting per-turn metric) ──
