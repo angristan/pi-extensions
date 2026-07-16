@@ -71,7 +71,10 @@ export default function turnSeparator(pi: ExtensionAPI) {
 	pi.on("tool_execution_start", () => {
 		didToolWork = true;
 	});
-	pi.on("agent_settled", () => {
+	// turn_end fires exactly once per turn (covering all retries/tool loops),
+	// unlike agent_settled which fires per provider response and stacks rules
+	// mid-turn.
+	pi.on("turn_end", () => {
 		// Only separate turns that performed work; conversational turns skip the
 		// divider so the transcript doesn't accumulate empty rules.
 		if (!didToolWork) return;
