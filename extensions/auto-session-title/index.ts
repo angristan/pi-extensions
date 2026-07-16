@@ -79,7 +79,8 @@ turn_summary:
 - If the assistant outcome is absent, summarize the user request as provisional intent.
 
 focus_summary:
-- Maintain the active session focus using previous_focus, recent_turn_summaries, and the current turn.
+- Maintain the active session focus using previous_focus, recent_turn_summaries, bootstrap_prior_turns, and the current turn.
+- bootstrap_prior_turns is present only when an older session has no rolling summary state; use those turns to distinguish sustained work from a final brief aside.
 - Use 600 characters maximum.
 - Treat a completed implementation or configuration outcome in the current turn as strong evidence of the active focus.
 - Weight sustained recent work over the initial umbrella topic and correct stale previous focus when the current outcome is more specific.

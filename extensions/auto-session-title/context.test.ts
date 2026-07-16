@@ -4,6 +4,8 @@ import {
 	buildTitlePrompt,
 	createTitleState,
 	latestTitleState,
+	MAX_BOOTSTRAP_MESSAGE_CHARS,
+	MAX_BOOTSTRAP_PRIOR_TURNS,
 	MAX_CURRENT_ASSISTANT_CHARS,
 	MAX_CURRENT_USER_CHARS,
 	MAX_FOCUS_SUMMARY_CHARS,
@@ -51,18 +53,33 @@ describe("auto-session-title context", () => {
 		expect(context.currentUserRequest).toBe("Start improving session titles");
 		expect(context.currentAssistantOutcome).toBeUndefined();
 		expect(context.recentTurnSummaries).toEqual([]);
+		expect(context.bootstrapPriorTurns).toEqual([]);
 	});
 
-	test("bootstraps legacy sessions from only the latest completed turn", () => {
+	test("bootstraps legacy sessions from the latest three completed turns", () => {
 		const entries = [
 			{ type: "message", message: { role: "user", content: "Use AX for website content." } },
 			{ type: "message", message: { role: "assistant", content: "Configured AX." } },
+			{ type: "message", message: { role: "user", content: "Improve Mistral web-search output." } },
+			{ type: "message", message: { role: "assistant", content: "Improved Mistral web-search rendering." } },
+			{ type: "message", message: { role: "user", content: "Tune automatic session title prompts." } },
+			{ type: "message", message: { role: "assistant", content: "Updated automatic title focus rules." } },
 			{ type: "message", message: { role: "user", content: "Add rolling summaries to automatic session titles." } },
 			{ type: "message", message: { role: "assistant", content: "Implemented rolling title summaries and branch persistence." } },
 		];
 		const context = buildTitleContext(entries);
 		expect(context.previousFocus).toBeUndefined();
 		expect(context.recentTurnSummaries).toEqual([]);
+		expect(context.bootstrapPriorTurns).toEqual([
+			{
+				userRequest: "Improve Mistral web-search output.",
+				assistantOutcome: "Improved Mistral web-search rendering.",
+			},
+			{
+				userRequest: "Tune automatic session title prompts.",
+				assistantOutcome: "Updated automatic title focus rules.",
+			},
+		]);
 		expect(context.currentUserRequest).toBe("Add rolling summaries to automatic session titles.");
 		expect(context.currentAssistantOutcome).toBe("Implemented rolling title summaries and branch persistence.");
 	});
@@ -92,6 +109,18 @@ describe("auto-session-title context", () => {
 		expect(context.recentTurnSummaries[0]!.length).toBeLessThanOrEqual(MAX_TURN_SUMMARY_CHARS);
 		expect(context.recentTurnSummaries.length).toBeLessThanOrEqual(MAX_RECENT_TURN_SUMMARIES);
 		expect(buildTitlePrompt("project", "Previous Title", context).length).toBeLessThanOrEqual(MAX_TITLE_CONTEXT_CHARS);
+
+		const legacyEntries = Array.from({ length: MAX_BOOTSTRAP_PRIOR_TURNS + 1 }, () => [
+			{ type: "message", message: { role: "user", content: huge } },
+			{ type: "message", message: { role: "assistant", content: huge } },
+		]).flat();
+		const legacyContext = buildTitleContext(legacyEntries);
+		expect(legacyContext.bootstrapPriorTurns).toHaveLength(MAX_BOOTSTRAP_PRIOR_TURNS);
+		for (const turn of legacyContext.bootstrapPriorTurns) {
+			expect(turn.userRequest.length).toBeLessThanOrEqual(MAX_BOOTSTRAP_MESSAGE_CHARS);
+			expect(turn.assistantOutcome.length).toBeLessThanOrEqual(MAX_BOOTSTRAP_MESSAGE_CHARS);
+		}
+		expect(buildTitlePrompt("project", "Previous Title", legacyContext).length).toBeLessThanOrEqual(MAX_TITLE_CONTEXT_CHARS);
 	});
 
 	test("parses JSON, fenced JSON, and legacy plain titles", () => {

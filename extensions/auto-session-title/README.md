@@ -22,12 +22,15 @@ raw diffs. Its 8,000-character context budget contains:
 - final assistant outcome: up to 2,000 characters
 - rolling focus summary: up to 600 characters
 - latest 8 turn summaries: up to 300 characters each
+- legacy bootstrap only: 2 prior turn pairs, up to 700 characters per message
 
 The same model call returns the turn summary, focus summary, and title. Completed
 summary state is stored as hidden session metadata, stays out of agent context,
 and is restored from the active branch after reloads, resumes, forks, and tree
 navigation. Existing sessions without compatible summary state bootstrap from
-only their latest completed turn so old umbrella topics do not dominate.
+their latest 3 completed turns: the latest turn uses the normal current-turn
+budget, while the prior 2 are bounded migration context. This provides enough
+history to identify a brief aside without letting old umbrella topics dominate.
 
 ## Config
 
