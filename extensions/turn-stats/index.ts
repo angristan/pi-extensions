@@ -19,7 +19,7 @@ class StatsRow implements Component {
 		private readonly theme: any,
 	) {}
 	render(width: number): string[] {
-		const rule = this.theme.fg("dim", "─".repeat(Math.max(0, width)));
+		const rule = this.theme.fg("borderMuted", "─".repeat(Math.max(0, width)));
 		// Render the stats line through Text so margins/wrapping match the rest
 		// of the transcript; combine with the rule above it.
 		const statsLines = new Text(this.stats, 1, 0).render(width);
