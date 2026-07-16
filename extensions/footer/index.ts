@@ -112,11 +112,10 @@ export function truncateTitlePart(value: string, maxGraphemes: number): string {
 
 export function contextRemainingPercent(tokens: number | undefined, contextWindow: number): number {
 	if (contextWindow <= CONTEXT_BASELINE_TOKENS) return 0;
-	if (tokens === undefined) return 100;
+	if (tokens === undefined) return 0;
 	const effectiveWindow = contextWindow - CONTEXT_BASELINE_TOKENS;
 	const used = Math.max(0, tokens - CONTEXT_BASELINE_TOKENS);
-	const remaining = Math.max(0, effectiveWindow - used);
-	return Math.round(Math.min(100, Math.max(0, (remaining / effectiveWindow) * 100)));
+	return Math.round(Math.min(100, Math.max(0, (used / effectiveWindow) * 100)));
 }
 
 type MissingCostResolver = (message: AssistantMessage) => number | undefined;
