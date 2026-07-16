@@ -131,6 +131,23 @@ function resultUrl(result: SearchDisplayItem): string | undefined {
 	return typeof result.url === "string" && /^https?:\/\//.test(result.url) ? result.url : undefined;
 }
 
+function resultWebsite(result: SearchDisplayItem): string | undefined {
+	if (result.website) return result.website;
+	const url = resultUrl(result);
+	if (!url) return undefined;
+	try {
+		return new URL(url).hostname.replace(/^www\./i, "") || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function resultSearchEngine(result: SearchDisplayItem): string | undefined {
+	const value = result.searchEngine ?? result.source;
+	if (!value) return undefined;
+	return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+}
+
 // A tiny width-aware component mirroring better-native-pi's WidthAwareLines so the
 // Rows reflow to the terminal width exactly like the built-in
 // tools. The source is re-evaluated each render so partial->settled updates
@@ -239,7 +256,10 @@ function renderSearchResult(
 			const label = sourceLabel(item);
 			const url = resultUrl(item);
 			const rendered = url ? hyperlink(theme.fg("mdLink", label), url) : theme.fg("toolOutput", label);
-			const meta = [item.source, item.date].filter(Boolean).join(" · ");
+			const website = resultWebsite(item);
+			const searchEngine = resultSearchEngine(item);
+			const via = searchEngine && searchEngine.toLowerCase() !== website?.toLowerCase() ? `via ${searchEngine}` : undefined;
+			const meta = [website, via, item.date].filter(Boolean).join(" · ");
 			lines.push(`${INDENT}${theme.fg("syntaxNumber", `${index + 1}.`)} ${rendered}${meta ? ` ${theme.fg("dim", `— ${meta}`)}` : ""}`);
 			const evidence = item.snippets?.[0] ?? item.description;
 			if (evidence) {

@@ -69,6 +69,9 @@ export interface OpenUrlResult {
 export interface SearchDisplayItem {
 	title?: string;
 	url?: string;
+	website?: string;
+	searchEngine?: string;
+	/** Legacy field retained for older persisted tool results. */
 	source?: string;
 	rank?: number;
 	date?: string;
@@ -377,19 +380,62 @@ function shorten(value: string, maxChars: number): string {
 	return normalized.length <= maxChars ? normalized : `${normalized.slice(0, maxChars).trimEnd()}…`;
 }
 
+function decodeHtmlEntities(value: string): string {
+	const named: Record<string, string> = {
+		amp: "&",
+		apos: "'",
+		gt: ">",
+		hellip: "…",
+		ldquo: "“",
+		lsquo: "‘",
+		lt: "<",
+		mdash: "—",
+		nbsp: " ",
+		ndash: "–",
+		quot: "\"",
+		rdquo: "”",
+		rsquo: "’",
+	};
+	return value.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (match, entity: string) => {
+		const lowered = entity.toLowerCase();
+		if (lowered in named) return named[lowered]!;
+		const codePoint = lowered.startsWith("#x")
+			? Number.parseInt(lowered.slice(2), 16)
+			: lowered.startsWith("#")
+				? Number.parseInt(lowered.slice(1), 10)
+				: Number.NaN;
+		if (!Number.isInteger(codePoint) || codePoint < 32 || codePoint === 127 || (codePoint >= 128 && codePoint <= 159) || codePoint > 0x10ffff) return "";
+		return String.fromCodePoint(codePoint);
+	});
+}
+
+function cleanSearchText(value: string, maxChars: number): string {
+	return shorten(decodeHtmlEntities(value).replace(/<[^>]*>/g, " "), maxChars);
+}
+
+function websiteFromUrl(url: string | null | undefined): string | undefined {
+	if (!url) return undefined;
+	try {
+		return new URL(url).hostname.replace(/^www\./i, "") || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 function formatResultItem(result: RagResult, index: number): string[] {
 	const lines = [
-		`${index + 1}. ${shorten(result.title ?? result.url ?? result.id, MAX_TITLE_CHARS)}`,
+		`${index + 1}. ${cleanSearchText(result.title ?? result.url ?? result.id, MAX_TITLE_CHARS)}`,
 		`   URL: ${result.url ? shorten(result.url, MAX_URL_CHARS) : "n/a"}`,
 		`   Rank: ${result.rank}`,
-		`   Source: ${shorten(result.source, MAX_SOURCE_CHARS)}`,
+		`   Website: ${websiteFromUrl(result.url) ?? "n/a"}`,
+		`   Search engine: ${cleanSearchText(result.source, MAX_SOURCE_CHARS)}`,
 	];
-	if (result.date) lines.push(`   Date: ${shorten(result.date, MAX_DATE_CHARS)}`);
-	if (result.description) lines.push(`   Description: ${shorten(result.description, 600)}`);
+	if (result.date) lines.push(`   Date: ${cleanSearchText(result.date, MAX_DATE_CHARS)}`);
+	if (result.description) lines.push(`   Description: ${cleanSearchText(result.description, 600)}`);
 	if (result.snippets.length > 0) {
 		lines.push("   Snippets:");
 		for (const snippet of result.snippets.slice(0, MAX_SNIPPETS_PER_RESULT)) {
-			lines.push(`   - ${shorten(snippet, MAX_SNIPPET_CHARS)}`);
+			lines.push(`   - ${cleanSearchText(snippet, MAX_SNIPPET_CHARS)}`);
 		}
 	}
 	if (!result.canOpen) lines.push("   Can open: false");
@@ -448,13 +494,14 @@ function createSearchDisplayDetails(result: WebSearchResult | NewsSearchResult):
 		elapsedMs: Math.round(result.elapsedMs),
 		resultCount: result.results.length,
 		results: result.results.slice(0, MAX_DISPLAY_RESULTS).map((item) => ({
-			title: shorten(item.title ?? item.url ?? item.id, MAX_TITLE_CHARS),
+			title: cleanSearchText(item.title ?? item.url ?? item.id, MAX_TITLE_CHARS),
 			url: item.url ? shorten(item.url, MAX_URL_CHARS) : undefined,
-			source: shorten(item.source, MAX_SOURCE_CHARS),
+			website: websiteFromUrl(item.url),
+			searchEngine: cleanSearchText(item.source, MAX_SOURCE_CHARS),
 			rank: item.rank,
-			date: item.date ? shorten(item.date, MAX_DATE_CHARS) : undefined,
-			description: item.description ? shorten(item.description, 600) : undefined,
-			snippets: item.snippets.slice(0, 1).map((snippet) => shorten(snippet, MAX_SNIPPET_CHARS)),
+			date: item.date ? cleanSearchText(item.date, MAX_DATE_CHARS) : undefined,
+			description: item.description ? cleanSearchText(item.description, 600) : undefined,
+			snippets: item.snippets.slice(0, 1).map((snippet) => cleanSearchText(snippet, MAX_SNIPPET_CHARS)),
 			canOpen: item.canOpen ? undefined : false,
 		})),
 	};
@@ -519,7 +566,10 @@ export function parseSearchResultText(text: string): SearchDisplayDetails {
 		if (!current) continue;
 		match = /^ {3}URL:\s(.*)$/.exec(line);
 		if (match) {
-			if (match[1] !== "n/a") current.url = match[1];
+			if (match[1] !== "n/a") {
+				current.url = match[1];
+				current.website = websiteFromUrl(match[1]);
+			}
 			continue;
 		}
 		match = /^ {3}Rank:\s(.*)$/.exec(line);
@@ -528,9 +578,20 @@ export function parseSearchResultText(text: string): SearchDisplayDetails {
 			if (Number.isFinite(rank)) current.rank = rank;
 			continue;
 		}
+		match = /^ {3}Website:\s(.*)$/.exec(line);
+		if (match) {
+			if (match[1] !== "n/a") current.website = match[1];
+			continue;
+		}
+		match = /^ {3}Search engine:\s(.*)$/.exec(line);
+		if (match) {
+			current.searchEngine = match[1];
+			continue;
+		}
 		match = /^ {3}Source:\s(.*)$/.exec(line);
 		if (match) {
 			current.source = match[1];
+			current.searchEngine = match[1];
 			continue;
 		}
 		match = /^ {3}Date:\s(.*)$/.exec(line);
