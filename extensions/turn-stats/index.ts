@@ -4,7 +4,7 @@ import {
 	type AssistantMessageEvent,
 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { Text, type Component } from "@earendil-works/pi-tui";
 
 const ENTRY_TYPE = "turn-stats";
 
@@ -20,11 +20,9 @@ class StatsRow implements Component {
 	) {}
 	render(width: number): string[] {
 		// Render the stats line through Text so margins/wrapping match the rest
-		// of the transcript. Size the rule to the stats text's own visible width
-		// (Text pads lines to full screen width, so measure the raw string).
+		// of the transcript. Full-width rule above it for a clear boundary.
 		const statsLines = new Text(this.stats, 1, 0).render(width);
-		const statsWidth = Math.min(width, Math.max(0, visibleWidth(this.stats)) + 1);
-		const rule = this.theme.fg("borderMuted", "─".repeat(statsWidth));
+		const rule = this.theme.fg("borderMuted", "─".repeat(Math.max(0, width)));
 		return [rule, ...statsLines];
 	}
 }
