@@ -155,6 +155,7 @@ export default function (pi: ExtensionAPI) {
 	let requestGeneration = 0;
 	let activeRequest: AbortController | undefined;
 	let lastTitledLeafId: string | undefined;
+	let lastQueuedDiscussion: string | undefined;
 	let managedTitle: string | undefined;
 	let programmaticTitle: string | undefined;
 	let manualTitleLocked = false;
@@ -270,7 +271,10 @@ export default function (pi: ExtensionAPI) {
 		return undefined;
 	};
 
-	const queueTitleUpdate = (ctx: any, options: { force?: boolean; notify?: boolean } = {}) => {
+	const queueTitleUpdate = (
+		ctx: any,
+		options: { force?: boolean; notify?: boolean; discussion?: string } = {},
+	) => {
 		lastQueueReason = options.force ? "forced" : "automatic";
 		if (manualTitleLocked && !options.force) {
 			lastSkipReason = "manual title lock";
@@ -285,10 +289,15 @@ export default function (pi: ExtensionAPI) {
 			return false;
 		}
 		const entries = ctx.sessionManager.getBranch?.() ?? ctx.sessionManager.getEntries();
-		const discussion = discussionText(entries);
+		const discussion = options.discussion ?? discussionText(entries);
 		if (!discussion) {
 			lastSkipReason = "no user discussion";
 			if (options.notify) ctx.ui.notify("No user discussion found to title.", "warning");
+			return false;
+		}
+		if (!options.force && discussion === lastQueuedDiscussion) {
+			lastSkipReason = "already fresh for current user discussion";
+			if (options.notify) ctx.ui.notify("Title is already fresh for the current user discussion.", "info");
 			return false;
 		}
 
@@ -299,6 +308,7 @@ export default function (pi: ExtensionAPI) {
 		lastError = undefined;
 		if (options.force) manualTitleLocked = false;
 		lastTitledLeafId = leafId;
+		lastQueuedDiscussion = discussion;
 		const previousTitle = pi.getSessionName() || managedTitle;
 		const generation = ++requestGeneration;
 		activeRequest?.abort();
@@ -354,6 +364,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (event, ctx) => {
 		cancelRequest();
 		lastTitledLeafId = undefined;
+		lastQueuedDiscussion = undefined;
 		managedTitle = pi.getSessionName();
 		programmaticTitle = undefined;
 		manualTitleLocked = false;
@@ -363,6 +374,20 @@ export default function (pi: ExtensionAPI) {
 		// same conversation. Retitle once after reload so stale titles like the first
 		// greeting do not stick around until another full assistant turn settles.
 		if (event.reason === "reload") queueMicrotask(() => queueTitleUpdate(ctx));
+	});
+
+	pi.on("before_agent_start", (event, ctx) => {
+		const entries = ctx.sessionManager.getBranch?.() ?? ctx.sessionManager.getEntries();
+		if (discussionText(entries)) return;
+
+		// The prompt has been accepted and expanded, but Pi has not persisted it yet.
+		// Start the best-effort title request without awaiting it so title generation
+		// runs alongside even a long first agent turn.
+		const discussion = discussionText([{
+			type: "message",
+			message: { role: "user", content: event.prompt },
+		}]);
+		if (discussion) queueTitleUpdate(ctx, { discussion });
 	});
 
 	pi.on("agent_settled", (_event, ctx) => {
@@ -393,6 +418,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_shutdown", () => {
 		lastTitledLeafId = undefined;
+		lastQueuedDiscussion = undefined;
 		managedTitle = undefined;
 		programmaticTitle = undefined;
 		manualTitleLocked = false;
