@@ -9,7 +9,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createBashTool } from "@earendil-works/pi-coding-agent";
+import { createBashTool, createBashToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Container, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { buildToolBlock, fitToolLine, withReasoning } from "./core.js";
 import { wrapBranchLine } from "./diff.js";
@@ -136,13 +136,15 @@ class CommandComponent {
 }
 
 export default function bash(pi: ExtensionAPI) {
-	const bashTool = createBashTool(process.cwd());
+	const bashTool = createBashToolDefinition(process.cwd());
 	pi.registerTool({
 		name: "bash",
 		label: "bash",
 		description: bashTool.description,
+		promptSnippet: bashTool.promptSnippet,
 		parameters: withReasoning(bashTool.parameters),
 		promptGuidelines: [
+			...(bashTool.promptGuidelines ?? []),
 			'Always pass a "reasoning" phrase to bash: state the GOAL/intent, not the command.',
 		],
 		renderShell: "self",

@@ -20,11 +20,17 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	createEditTool,
+	createEditToolDefinition,
 	createFindTool,
+	createFindToolDefinition,
 	createGrepTool,
+	createGrepToolDefinition,
 	createLsTool,
+	createLsToolDefinition,
 	createReadTool,
+	createReadToolDefinition,
 	createWriteTool,
+	createWriteToolDefinition,
 	generateDiffString,
 } from "@earendil-works/pi-coding-agent";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -71,17 +77,24 @@ export default function fileTools(pi: ExtensionAPI) {
 		find: createFindTool,
 		ls: createLsTool,
 	};
-	const builtinTools = Object.fromEntries(
-		Object.entries(toolFactories).map(([name, createTool]) => [name, createTool(process.cwd())]),
-	) as Record<string, any>;
+	const builtinTools: Record<string, any> = {
+		read: createReadToolDefinition(process.cwd()),
+		write: createWriteToolDefinition(process.cwd()),
+		edit: createEditToolDefinition(process.cwd()),
+		grep: createGrepToolDefinition(process.cwd()),
+		find: createFindToolDefinition(process.cwd()),
+		ls: createLsToolDefinition(process.cwd()),
+	};
 
 	for (const [name, tool] of Object.entries(builtinTools)) {
 		pi.registerTool({
 			name,
 			label: name,
 			description: tool.description,
+			promptSnippet: tool.promptSnippet,
 			parameters: withReasoning(tool.parameters),
 			promptGuidelines: [
+				...(tool.promptGuidelines ?? []),
 				`Always pass a "reasoning" phrase to ${name}: state the GOAL/intent, not the file or command (those are shown already).`,
 			],
 			renderShell: "self",
