@@ -464,7 +464,7 @@ export default function (pi: ExtensionAPI) {
 		executionMode: "sequential",
 		async execute(_id: string, params: any, signal?: AbortSignal) {
 			const job = findJob(params.job_id);
-			if (!job) return { content: [{ type: "text", text: `Background job not found or prefix is ambiguous: ${params.job_id}` }], details: undefined, isError: true };
+			if (!job) throw new Error(`Background job not found or prefix is ambiguous: ${params.job_id}`);
 			if (params.wait) await waitForJob(job, signal);
 			const data = snapshot(job, TOOL_OUTPUT_BYTES);
 			return { content: [{ type: "text", text: formatSnapshotText(data) }], details: data };
@@ -489,14 +489,14 @@ export default function (pi: ExtensionAPI) {
 		executionMode: "sequential",
 		async execute(_id: string, params: any, _signal: AbortSignal | undefined, _update: any, ctx: any) {
 			const job = findJob(params.job_id);
-			if (!job) return { content: [{ type: "text", text: `Background job not found or prefix is ambiguous: ${params.job_id}` }], details: undefined, isError: true };
+			if (!job) throw new Error(`Background job not found or prefix is ambiguous: ${params.job_id}`);
 			if (job.status !== "running") return { content: [{ type: "text", text: `${job.id} is already ${job.status}.` }], details: snapshot(job, TOOL_OUTPUT_BYTES) };
-			if (!(await confirmKill(job, ctx))) return { content: [{ type: "text", text: `Did not stop ${job.id}; user confirmation was not granted.` }], details: undefined, isError: true };
+			if (!(await confirmKill(job, ctx))) throw new Error(`Did not stop ${job.id}; user confirmation was not granted.`);
 			requestKill(job, "user");
 			return { content: [{ type: "text", text: `Sent SIGTERM to background job ${job.id}.` }], details: snapshot(job, TOOL_OUTPUT_BYTES) };
 		},
 		renderCall: (args: any, theme: any) => new Text(`${theme.fg("warning", "■")} Requesting stop for ${args.job_id ?? "job"}`, 0, 0),
-		renderResult: (result: any, _options: any, theme: any) => new Text(result.isError ? theme.fg("warning", result?.content?.[0]?.text ?? "") : result?.content?.[0]?.text ?? "", 0, 0),
+		renderResult: (result: any, _options: any, theme: any, context: any) => new Text(context?.isError ? theme.fg("warning", result?.content?.[0]?.text ?? "") : result?.content?.[0]?.text ?? "", 0, 0),
 		renderShell: "self",
 	});
 
