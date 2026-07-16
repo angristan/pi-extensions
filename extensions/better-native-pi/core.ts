@@ -184,7 +184,7 @@ export function withReasoning(parameters: any): any {
 	const reasoning = {
 		type: "string",
 		description:
-			"Short phrase (≤12 words) stating the GOAL behind this call — the why-in-context, not the what. Do NOT restate the file, path, or command (those are already shown next to it); instead give the intent or what you expect to find/confirm. Present-tense, no period. E.g. \"confirm executionStarted is a timestamp\", \"fix the map leak from review\", \"retry match after previous miss\".",
+			"Short phrase (≤12 words) stating the GOAL behind this call — the why-in-context, not the what. Do NOT restate the file, path, or command (those are already shown next to it); instead give the intent or what you expect to find/confirm. Present-tense, no period. E.g. \"confirm executionStarted is a timestamp\", \"fix the map leak from review\", \"retry match after previous miss\". IMPORTANT: emit this field FIRST, before any other argument, so the reasoning is visible while the remaining args stream in.",
 	};
 	const properties = { reasoning, ...(parameters?.properties ?? {}) };
 	const required = Array.from(new Set(["reasoning", ...(parameters?.required ?? [])]));
