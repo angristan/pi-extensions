@@ -92,7 +92,7 @@ class CommandComponent {
 	constructor(
 		private readonly args: any,
 		private readonly result: any,
-		private readonly options: { partial: boolean; expanded: boolean; error: boolean; elapsedMs: number },
+		private readonly options: { partial: boolean; expanded: boolean; error: boolean; elapsedMs: number; cwd?: string },
 		private readonly theme: any,
 	) {}
 
@@ -115,6 +115,7 @@ class CommandComponent {
 			isError: this.options.error,
 			elapsedMs: this.options.elapsedMs,
 			theme: this.theme,
+			cwd: this.options.cwd,
 		});
 		if (this.options.partial) {
 			this.cachedLines = block.map((line) => fitToolLine(line, max));
@@ -145,9 +146,9 @@ export default function bash(pi: ExtensionAPI) {
 			'Always pass a "reasoning" phrase to bash: state the GOAL/intent, not the command.',
 		],
 		renderShell: "self",
-		execute: async (id: string, params: any, signal: AbortSignal, onUpdate: any) => {
+		execute: async (id: string, params: any, signal: AbortSignal, onUpdate: any, ctx: any) => {
 			const { rest } = stripReasoning(params);
-			return bashTool.execute(id, rest, signal, onUpdate);
+			return createBashTool(ctx.cwd).execute(id, rest, signal, onUpdate);
 		},
 		renderCall: (args: any, theme: any, context: any) => {
 			if (!context?.isPartial) return new Container();
@@ -157,6 +158,7 @@ export default function bash(pi: ExtensionAPI) {
 				expanded: false,
 				error: false,
 				elapsedMs: Date.now() - context.state.startedAt,
+				cwd: context.cwd,
 			}, theme);
 		},
 		renderResult: (result: any, options: any, theme: any, context: any) => {
@@ -168,6 +170,7 @@ export default function bash(pi: ExtensionAPI) {
 				expanded: options?.expanded ?? false,
 				error: context?.isError ?? result?.isError ?? false,
 				elapsedMs: context.state.endedAt - context.state.startedAt,
+				cwd: context.cwd,
 			}, theme);
 		},
 	});

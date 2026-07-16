@@ -67,7 +67,7 @@ function fg(theme: any, color: string, text: string): string {
 	return typeof theme?.fg === "function" ? theme.fg(color, text) : text;
 }
 
-function mutationPathParts(path: string, theme?: any): { file: string; location?: string } {
+function mutationPathParts(path: string, theme?: any, cwd = process.cwd()): { file: string; location?: string } {
 	const file = hyperlinkPath(`${CYAN}${basename(path)}${RESET}`, path, cwd);
 	const directory = dirname(path);
 	if (!directory || directory === ".") return { file };
@@ -80,7 +80,7 @@ function mutationPathParts(path: string, theme?: any): { file: string; location?
 }
 
 /** Human-readable, one-line call detail; paths use `~` like display paths. */
-function argDetail(name: string, args: Record<string, unknown>, theme?: any): string {
+function argDetail(name: string, args: Record<string, unknown>, theme?: any, cwd = process.cwd()): string {
 	if (name === "bash" && typeof args.command === "string") return highlightShellCommand(args.command, theme);
 	if ((name === "grep" || name === "find") && typeof args.pattern === "string") {
 		const path = typeof args.path === "string"
@@ -290,9 +290,9 @@ export function buildToolBlock(
 	name: string,
 	args: Record<string, unknown>,
 	result: any,
-	opts: { isError?: boolean; isPartial?: boolean; expanded?: boolean; elapsedMs?: number; theme?: any } = {},
+	opts: { isError?: boolean; isPartial?: boolean; expanded?: boolean; elapsedMs?: number; theme?: any; cwd?: string } = {},
 ): string[] {
-	const { isError = false, isPartial = false, expanded = false, elapsedMs = 0, theme } = opts;
+	const { isError = false, isPartial = false, expanded = false, elapsedMs = 0, theme, cwd = process.cwd() } = opts;
 	const { reasoning, rest } = stripReasoning(args ?? {});
 
 	const mark = isPartial
@@ -307,7 +307,7 @@ export function buildToolBlock(
 		: summarize(name, result, isError, rest, elapsedMs);
 
 	const verb = toolVerb(name, isPartial);
-	const detail = argDetail(name, rest, theme);
+	const detail = argDetail(name, rest, theme, cwd);
 	const hasDetail = Boolean(detail);
 	// Reasoning is the informative part — bold it so it's the emphasis, but keep
 	// it default-colored (accent was too loud). The verb stays plain text.
@@ -331,7 +331,7 @@ export function buildToolBlock(
 	const mutationUsesHeadlinePath = (name === "edit" || name === "write") && typeof rest.path === "string";
 	let lines: string[];
 	if (mutationUsesHeadlinePath) {
-		const path = mutationPathParts(rest.path as string, theme);
+		const path = mutationPathParts(rest.path as string, theme, cwd);
 		const intent = headlineText ? ` ${fg(theme, "dim", "to")} ${headlineText}` : "";
 		const summarySuffix = summary ? ` ${fg(theme, "dim", "·")} ${summary}` : "";
 		lines = [`${LEAD}${mark} ${verb} ${path.file}${intent}${summarySuffix}`];
@@ -364,5 +364,3 @@ export function buildToolBlock(
 	}
 	return lines;
 }
-
-const cwd = process.cwd();

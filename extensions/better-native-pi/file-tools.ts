@@ -44,8 +44,6 @@ import {
 	withReasoning,
 } from "./core.js";
 
-const cwd = process.cwd();
-
 export default function fileTools(pi: ExtensionAPI) {
 	// Exploration grouping and the compact tool renderers are deliberately
 	// coupled: the group renderer owns read/list/search rows.
@@ -65,14 +63,17 @@ export default function fileTools(pi: ExtensionAPI) {
 		startedAtByCallId.clear();
 	});
 
-	const builtinTools: Record<string, any> = {
-		read: createReadTool(cwd),
-		write: createWriteTool(cwd),
-		edit: createEditTool(cwd),
-		grep: createGrepTool(cwd),
-		find: createFindTool(cwd),
-		ls: createLsTool(cwd),
+	const toolFactories: Record<string, (cwd: string) => any> = {
+		read: createReadTool,
+		write: createWriteTool,
+		edit: createEditTool,
+		grep: createGrepTool,
+		find: createFindTool,
+		ls: createLsTool,
 	};
+	const builtinTools = Object.fromEntries(
+		Object.entries(toolFactories).map(([name, createTool]) => [name, createTool(process.cwd())]),
+	) as Record<string, any>;
 
 	for (const [name, tool] of Object.entries(builtinTools)) {
 		pi.registerTool({
@@ -88,12 +89,15 @@ export default function fileTools(pi: ExtensionAPI) {
 			// Strip our injected `reasoning`, delegate to the real built-in. Writes
 			// use per-call operations so the before-content is read inside Pi's file
 			// mutation queue and can produce the same diff format as edit.
-			execute: async (id: string, p: any, sig: any, up: any) => {
+			execute: async (id: string, p: any, sig: any, up: any, ctx: any) => {
 				const { rest } = stripReasoning(p);
-				if (name !== "write") return tool.execute(id, rest, sig, up);
+				if (name !== "write") {
+					const runtimeTool = toolFactories[name]!(ctx.cwd);
+					return runtimeTool.execute(id, rest, sig, up);
+				}
 
 				let diff = "";
-				const writeTool = createWriteTool(cwd, {
+				const writeTool = createWriteTool(ctx.cwd, {
 					operations: {
 						mkdir: async (directory: string) => { await mkdir(directory, { recursive: true }); },
 						writeFile: async (path: string, content: string) => {
@@ -131,6 +135,7 @@ export default function fileTools(pi: ExtensionAPI) {
 					isPartial: true,
 					elapsedMs: Date.now() - startedAt,
 					theme,
+					cwd: context.cwd,
 				}), undefined, true);
 			},
 
@@ -152,6 +157,7 @@ export default function fileTools(pi: ExtensionAPI) {
 					expanded: options?.expanded ?? false,
 					elapsedMs,
 					theme,
+					cwd: context?.cwd,
 				}), diffPalette(theme));
 			},
 		});
