@@ -294,13 +294,20 @@ export function buildToolBlock(
 	// Command colors are lightly dimmed via dimTheme (gentle HSL lightness
 	// shift) so they recede slightly from full-bright, but stay clearly brighter
 	// than the DIM'd output below — a middle tier between command and output.
-	const metadata = hasDetail
-		? `${detail} · ${summary}`
-		: summary;
+	// bash moves its result summary (✓ 12s / elapsed / ✗ exit N) onto the
+	// headline row after the reasoning, so the branch line becomes just the
+	// command — headline carries both intent and outcome in one glance. Other
+	// tools keep their summary on the branch line where it belongs (real result
+	// detail like "+12 -3" or "3 matches in 2 files").
+	const bashMovesSummary = name === "bash";
+	const headlineSuffix = bashMovesSummary && summary ? ` ${summary}` : "";
+	const metadata = bashMovesSummary
+		? (hasDetail ? detail : "")
+		: (hasDetail ? `${detail} · ${summary}` : summary);
 	const lines: string[] = [
-		`${LEAD}${mark} ${verb}${headlineText ? ` ${headlineText}` : ""}`,
-		`${BRANCH}${metadata}`,
+		`${LEAD}${mark} ${verb}${headlineText ? ` ${headlineText}` : ""}${headlineSuffix}`,
 	];
+	if (metadata) lines.push(`${BRANCH}${metadata}`);
 	const diff = result?.details?.diff as string | undefined;
 	const showsInlineDiff = !isPartial
 		&& !isError
