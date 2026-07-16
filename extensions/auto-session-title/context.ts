@@ -5,6 +5,8 @@ export const MAX_CURRENT_ASSISTANT_CHARS = 2_000;
 export const MAX_FOCUS_SUMMARY_CHARS = 600;
 export const MAX_TURN_SUMMARY_CHARS = 300;
 export const MAX_RECENT_TURN_SUMMARIES = 8;
+export const MAX_BOOTSTRAP_PRIOR_TURNS = 2;
+export const MAX_BOOTSTRAP_MESSAGE_CHARS = 700;
 
 export interface TitleState {
 	version: 2;
@@ -15,9 +17,15 @@ export interface TitleState {
 	createdAt: string;
 }
 
+export interface BootstrapTurn {
+	userRequest: string;
+	assistantOutcome: string;
+}
+
 export interface TitleContext {
 	previousFocus?: string;
 	recentTurnSummaries: string[];
+	bootstrapPriorTurns: BootstrapTurn[];
 	currentUserRequest?: string;
 	currentAssistantOutcome?: string;
 }
@@ -85,6 +93,36 @@ export function latestTitleState(entries: readonly any[]): TitleState | undefine
 	return titleStates(entries).at(-1);
 }
 
+function completedTurns(entries: readonly any[]): BootstrapTurn[] {
+	const turns: BootstrapTurn[] = [];
+	let userRequests: string[] = [];
+	let assistantOutcomes: string[] = [];
+	const flush = () => {
+		if (userRequests.length > 0 && assistantOutcomes.length > 0) {
+			turns.push({
+				userRequest: userRequests.join("\n"),
+				assistantOutcome: assistantOutcomes.at(-1)!,
+			});
+		}
+		userRequests = [];
+		assistantOutcomes = [];
+	};
+
+	for (const entry of entries) {
+		if (entry?.type !== "message") continue;
+		const text = messageText(entry.message);
+		if (!text) continue;
+		if (entry.message?.role === "user") {
+			if (userRequests.length > 0 && assistantOutcomes.length > 0) flush();
+			userRequests.push(text);
+		} else if (entry.message?.role === "assistant" && userRequests.length > 0) {
+			assistantOutcomes.push(text);
+		}
+	}
+	flush();
+	return turns;
+}
+
 export function buildTitleContext(entries: readonly any[], provisionalUser?: string): TitleContext {
 	const states = titleStates(entries);
 	let latestStateIndex = -1;
@@ -105,6 +143,12 @@ export function buildTitleContext(entries: readonly any[], provisionalUser?: str
 		.map((entry) => messageText(entry.message))
 		.filter((text): text is string => Boolean(text));
 	const latestState = states.at(-1);
+	const bootstrapTurns = latestState || provisionalUser ? [] : completedTurns(messages).slice(-(MAX_BOOTSTRAP_PRIOR_TURNS + 1));
+	const latestBootstrapTurn = bootstrapTurns.at(-1);
+	const bootstrapPriorTurns = bootstrapTurns.slice(0, -1).map((turn) => ({
+		userRequest: clip(turn.userRequest, MAX_BOOTSTRAP_MESSAGE_CHARS)!,
+		assistantOutcome: clip(turn.assistantOutcome, MAX_BOOTSTRAP_MESSAGE_CHARS)!,
+	}));
 
 	return {
 		previousFocus: clip(latestState?.focusSummary, MAX_FOCUS_SUMMARY_CHARS),
@@ -112,13 +156,14 @@ export function buildTitleContext(entries: readonly any[], provisionalUser?: str
 			.slice(-MAX_RECENT_TURN_SUMMARIES)
 			.map((state) => clip(state.turnSummary, MAX_TURN_SUMMARY_CHARS)!)
 			.filter(Boolean),
+		bootstrapPriorTurns,
 		currentUserRequest: clip(
-			provisionalUser ?? (latestState ? userTexts.join("\n") : userTexts.at(-1)),
+			provisionalUser ?? (latestState ? userTexts.join("\n") : latestBootstrapTurn?.userRequest ?? userTexts.at(-1)),
 			MAX_CURRENT_USER_CHARS,
 		),
 		currentAssistantOutcome: provisionalUser
 			? undefined
-			: clip(assistantTexts.at(-1), MAX_CURRENT_ASSISTANT_CHARS),
+			: clip(latestState ? assistantTexts.at(-1) : latestBootstrapTurn?.assistantOutcome ?? assistantTexts.at(-1), MAX_CURRENT_ASSISTANT_CHARS),
 	};
 }
 
@@ -128,6 +173,7 @@ export function titleContextHasContent(context: TitleContext): boolean {
 		|| context.currentAssistantOutcome
 		|| context.previousFocus
 		|| context.recentTurnSummaries.length > 0
+		|| context.bootstrapPriorTurns.length > 0
 	);
 }
 
@@ -137,6 +183,7 @@ export function buildTitlePrompt(project: string, previousTitle: string | undefi
 		previous_session_title: clip(previousTitle, 72) ?? null,
 		previous_focus: context.previousFocus ?? null,
 		recent_turn_summaries: context.recentTurnSummaries,
+		bootstrap_prior_turns: context.bootstrapPriorTurns,
 		current_user_request: context.currentUserRequest ?? null,
 		current_assistant_outcome: context.currentAssistantOutcome ?? null,
 	});
