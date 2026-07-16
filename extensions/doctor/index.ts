@@ -13,7 +13,7 @@ import {
 	wrapTextWithAnsi,
 	type TUI,
 } from "@earendil-works/pi-tui";
-import { accentBorder } from "../editor-accent/index.js";
+import { accentBorder } from "../accent-color/index.js";
 
 const CODE_BLOCK_PATCH = Symbol.for("pi.code-blocks.patch");
 const LINE_RESET_PATCH = Symbol.for("pi.cached-line-resets.patch");

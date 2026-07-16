@@ -18,7 +18,7 @@ class HistoryEditor extends CustomEditor {
 	private original = "";
 	private matches: string[] = [];
 	private matchIndex = 0;
-	// The editor we wrap (e.g. editor-accent's border-locking wrapper).
+	// The editor we wrap (e.g. accent-color's border-locking wrapper).
 	// When not reverse-searching, delegate input/render to it so its border
 	// styling and any other customizations remain in effect.
 	private readonly delegate: CustomEditor | undefined;
@@ -33,7 +33,7 @@ class HistoryEditor extends CustomEditor {
 			})()
 			: undefined;
 
-		// Forward borderColor to the wrapped editor. editor-accent locks
+		// Forward borderColor to the wrapped editor. accent-color locks
 		// borderColor via a no-op setter so pi's border updates are ignored;
 		// without this proxy, pi would see our plain CustomEditor border and
 		// overwrite it with the default on every editor swap.
@@ -115,7 +115,7 @@ class HistoryEditor extends CustomEditor {
 
 export default function (pi: ExtensionAPI) {
 	let prompts: string[] = [];
-	// Capture the editor factory installed before us (e.g. editor-accent's
+	// Capture the editor factory installed before us (e.g. accent-color's
 	// border-locking wrapper) and delegate to it for normal input. This keeps
 	// reverse-i-search composable regardless of which extension loads last.
 	let previousFactory: any;
