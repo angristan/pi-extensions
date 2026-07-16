@@ -21,11 +21,11 @@ import {
 	nonEmptyLineCount,
 	shortPath,
 } from "./render.js";
-import { highlightShellCommand, highlightedShellLine } from "./shell.js";
+import { dimTheme, highlightShellCommand, highlightedShellLine } from "./shell.js";
 import { colorizeDiff, diffPalette, WidthAwareLines } from "./diff.js";
 
 // Re-export so restylers import everything from one place (./core.js).
-export { Container, diffPalette, WidthAwareLines, colorizeDiff, highlightShellCommand, highlightedShellLine };
+export { Container, dimTheme, diffPalette, WidthAwareLines, colorizeDiff, highlightShellCommand, highlightedShellLine };
 export type { WidthAwareLines as WidthAwareLinesType } from "./diff.js";
 
 // Match the transcript hierarchy directly at the transcript margin.
@@ -55,7 +55,7 @@ export function fitToolLine(line: string, width: number): string {
 
 /** Human-readable, one-line call detail; paths use `~` like display paths. */
 function argDetail(name: string, args: Record<string, unknown>, theme?: any): string {
-	if (name === "bash" && typeof args.command === "string") return highlightShellCommand(args.command, theme);
+	if (name === "bash" && typeof args.command === "string") return highlightShellCommand(args.command, dimTheme(theme));
 	if ((name === "grep" || name === "find") && typeof args.pattern === "string") {
 		const path = typeof args.path === "string"
 			? hyperlinkPath(shortPath(args.path), args.path, cwd)
@@ -252,20 +252,14 @@ export function buildToolBlock(
 	const verb = toolVerb(name, isPartial);
 	const detail = argDetail(name, rest, theme);
 	const hasDetail = Boolean(detail);
-	// The reasoning is the most informative part of the line — make it the
-	// visual emphasis: accent-colored and bold. The verb stays plain bold so it
-	// reads as a label prefix rather than competing for attention.
+	// Reasoning is the informative part — bold it so it's the emphasis, but keep
+	// it default-colored (accent was too loud). The verb stays plain text.
 	const headline = oneLine(reasoning);
 	const headlineTone = headline
-		? (typeof theme?.fg === "function"
-			? theme.fg("accent", theme.bold(headline))
-			: `${BOLD}${headline}${RESET}`)
+		? (typeof theme?.bold === "function" ? theme.bold(headline) : `${BOLD}${headline}${RESET}`)
 		: "";
-	// Dim the command detail so the syntax-highlighted command recedes and the
-	// reasoning headline stays the focal point.
-	const dimmedDetail = hasDetail ? `${DIM}${detail}${RESET}` : "";
 	const metadata = hasDetail
-		? `${dimmedDetail} · ${summary}`
+		? `${detail} · ${summary}`
 		: summary;
 	const lines: string[] = [
 		`${LEAD}${mark} ${verb}${headlineTone ? ` ${headlineTone}` : ""}`,
