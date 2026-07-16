@@ -93,6 +93,28 @@ export function formatElapsed(milliseconds: number): string {
 	return `${hours}h ${(minutes % 60).toString().padStart(2, "0")}m`;
 }
 
+/**
+ * Partial (in-progress) summary: elapsed plus streaming progress so the row
+ * shows movement instead of a bare `12s`. Write streams its line count from
+ * the partial `content`; edit streams its patch count from the partial
+ * `edits` array. Falls back to elapsed-only when args haven't arrived yet.
+ */
+function partialSummary(name: string, args: Record<string, unknown>, elapsedMs: number): string {
+	const elapsed = formatElapsed(elapsedMs);
+	if (name === "write" && typeof args.content === "string") {
+		const lines = args.content.length === 0
+			? 0
+			: (args.content.match(/\n/g)?.length ?? 0) + (args.content.endsWith("\n") ? 0 : 1);
+		return `${MAGENTA}${lines}${RESET} ${lines === 1 ? "line" : "lines"} · ${elapsed}`;
+	}
+	if (name === "edit" && Array.isArray(args.edits)) {
+		const count = args.edits.length;
+		return `${MAGENTA}${count}${RESET} ${count === 1 ? "patch" : "patches"} · ${elapsed}`;
+	}
+	if (name === "bash") return elapsed;
+	return elapsed;
+}
+
 /** Pull the first text block out of a tool result / partial (shape varies). */
 function textFromResult(r: any): string {
 	const content = r?.content ?? r?.partialResult?.content;
@@ -244,8 +266,10 @@ export function buildToolBlock(
 		: isError
 			? `${RED}•${RESET}`
 			: `${GREEN}•${RESET}`;
+	// During partial, show progress info alongside elapsed so the row isn't a bare
+	// `12s`: write streams its line count, edit streams its patch count.
 	const summary = isPartial
-		? formatElapsed(elapsedMs)
+		? partialSummary(name, rest, elapsedMs)
 		: summarize(name, result, isError, rest, elapsedMs);
 
 	const verb = toolVerb(name, isPartial);
