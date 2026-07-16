@@ -188,10 +188,11 @@ export default function (pi: ExtensionAPI) {
 		const groupSep = theme.fg("dim", " · ");
 		const groups: string[] = [];
 
-		// ── Duration: time <elapsed>  <clock> ─────────────────────────────────────
-		// Word label + clock implies "finished at" without spelling it out.
+		// ── Duration: <clock> · duration <elapsed> ──────────────────────────────
+		// Wall-clock (when the turn finished) in plain text, then elapsed under a
+		// "duration" label, joined by a dim · so the whole row reads as a flat wall.
 		groups.push(
-			`${theme.fg("dim", "time")} ${formatDuration(data.elapsedMs)} ${theme.fg("dim", formatClock(data.endedAt))}`,
+			`${formatClock(data.endedAt)} ${theme.fg("dim", "·")} ${theme.fg("dim", "duration")} ${formatDuration(data.elapsedMs)}`,
 		);
 
 		// ── Throughput: ttft + tps for the last finalized provider response ────────
