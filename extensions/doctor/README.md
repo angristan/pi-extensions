@@ -14,20 +14,17 @@ item with a glyph:
 ```
 /doctor
 
-Extensions
-✓ 9 discovered extension entries
-! 2 passive or unverified entries
-✓ No duplicate extension commands or shortcuts
-
-Runtime patches and caches
-✓ Markdown code-block renderer   1 owner(s); original retained
-✓ TUI line-reset cache   4,221 entries; 3,221 hits / 38 misses; original retained
-· better-native-pi      1,204 renders · 87.3% hit · 312 volatile
-· better-native-pi:bash   482 renders · 91.0% hit ·   0 volatile
-
-Models and provider configuration
-✓ settings.json parsed
-✓ Model registry loaded · 9/9 models have configured auth
+╭ Pi Doctor · all green ───────────────────────────────╮
+│ Extensions                                           │
+│ ✓ 9 discovered extension entries                      │
+│ ✓ No duplicate extension commands or shortcuts       │
+│                                                       │
+│ Runtime patches and caches                            │
+│ ✓ Markdown code-block renderer   1 owner(s); original │
+│ ✓ TUI line-reset cache   4,221 entries; 3,221 hits    │
+│ · better-native-pi      1,204 renders · 87.3% hit     │
+╰──────────────────────────────────────────────────────╯
+↑↓/PgUp/PgDn scroll · Home/End · q close · 42 rows
 ```
 
 Checks include: settings.json/models.json validity, model auth availability,
