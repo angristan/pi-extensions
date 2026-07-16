@@ -18,6 +18,7 @@ reply into it only when useful.
   header; the middleware checks it before the route handler runs.
 ```
 
+- Requires interactive TUI mode
 - Uses the active model (not a separate/cheaper one)
 - Context head/tail serialized to fit the model's window
 - Runs at `reasoning: "low"`, capped at 4096 output tokens

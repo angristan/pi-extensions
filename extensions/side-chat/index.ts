@@ -207,6 +207,10 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("side", {
 		description: "Ask one ephemeral read-only question without changing main conversation context",
 		handler: async (args, ctx) => {
+			if (ctx.mode !== "tui") {
+				ctx.ui.notify("Side conversations require interactive TUI mode.", "warning");
+				return;
+			}
 			if (activeRequest) {
 				ctx.ui.notify("A side conversation is already running.", "warning");
 				return;
@@ -248,13 +252,11 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			if (ctx.mode === "tui") {
-				await ctx.ui.custom((tui: TUI, theme: any, _kb: any, done: (value: unknown) => void) =>
-					new SideAnswerView(question, result!.answer, result!.contextTruncated, tui, theme, done), {
-						overlay: true,
-						overlayOptions: { width: "92%", maxHeight: "90%", anchor: "center", margin: 1 },
-					});
-			}
+			await ctx.ui.custom((tui: TUI, theme: any, _kb: any, done: (value: unknown) => void) =>
+				new SideAnswerView(question, result!.answer, result!.contextTruncated, tui, theme, done), {
+					overlay: true,
+					overlayOptions: { width: "92%", maxHeight: "90%", anchor: "center", margin: 1 },
+				});
 
 			const action = await ctx.ui.select("Keep this side answer?", [
 				"Dismiss",
