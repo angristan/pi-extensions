@@ -44,19 +44,6 @@ export function supportsOsc9Terminal(env: NodeJS.ProcessEnv = process.env, isTty
 	return ["ghostty", "iterm", "kitty", "warp", "wezterm"].some((terminal) => identity.includes(terminal));
 }
 
-function sanitizeOsc9Message(message: string): string {
-	return message
-		.replace(/[\u0000-\u001f\u007f]/g, " ")
-		.replace(/\s+/g, " ")
-		.trim();
-}
-
-export function buildOsc9Sequence(message: string, tmux = Boolean(process.env.TMUX)): string {
-	const osc = `\u001b]9;${sanitizeOsc9Message(message)}\u0007`;
-	if (!tmux) return osc;
-	return `\u001bPtmux;${osc.replace(/\u001b/g, "\u001b\u001b")}\u001b\\`;
-}
-
 export function parseFocusReports(data: string, initiallyFocused: boolean): { data: string; focused: boolean; changed: boolean } {
 	let focused = initiallyFocused;
 	let changed = false;
@@ -80,22 +67,12 @@ function notify(title: string, body: string) {
 	state.lastSignature = signature;
 	state.lastSentAt = now;
 
-	if (supportsOsc9Terminal()) {
-		try {
-			// Ghostty already displays the terminal title, so send
-			// only the actionable response or request preview through OSC 9.
-			process.stdout.write(buildOsc9Sequence(preview(body, 220)));
-			return;
-		} catch {
-			// Fall through to the terminal bell.
-		}
-	}
-
-	// Fallback: terminal bell. Portable across macOS/Linux and lets the
-	// terminal (or tmux) decide how to surface it — a native macOS alert, a
-	// 🔔 tab marker, an audible bell, or nothing, per the user's terminal
-	// settings. Wrap in tmux passthrough when inside tmux so it reaches the
-	// outer terminal rather than being consumed by tmux itself.
+	// Terminal bell only. Each terminal decides how to surface it:
+	// terminal decides how to surface it: Ghostty shows the 🔔 unread-tab
+	// marker + dock bounce, iTerm/WezTerm/Kitty play a sound or show a marker,
+	// and plain terminals may do nothing. Wrap in tmux passthrough when inside
+	// tmux so the BEL reaches the outer terminal instead of being consumed by
+	// tmux itself.
 	const tmux = Boolean(process.env.TMUX);
 	const bell = "\x07";
 	const seq = tmux ? `\u001bPtmux;${bell.replace(/\u001b/g, "\u001b\u001b")}\u001b\\` : bell;
@@ -114,8 +91,8 @@ export default function (pi: ExtensionAPI) {
 	let unsubscribeTerminalInput: (() => void) | undefined;
 
 	const notifyIfUnfocused = (title: string, body: string) => {
-		// Ghostty creates the 🔔 unread-tab marker from OSC 9 when
-		// the tab/window is not focused. Do not synthesize a bell in the title.
+		// The bell surfaces as the 🔔 unread-tab marker in Ghostty
+		// (and similar in iTerm/WezTerm/Kitty). Only ring when unfocused.
 		if (!shouldEmitForFocus(focusAware, terminalFocused)) return;
 		notify(title, body);
 	};
