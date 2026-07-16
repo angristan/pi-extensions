@@ -9,8 +9,10 @@ import { BOLD, GREEN, MAGENTA, RED, RESET } from "../better-native-pi/render.js"
 import {
 	createSearchToolResult,
 	formatOpenUrlResult,
+	normalizeHttpUrl,
 	openMistralUrl,
 	parseSearchResultText,
+	sanitizeSearchText,
 	searchMistralNews,
 	searchMistralWeb,
 	type SearchDisplayDetails,
@@ -107,45 +109,51 @@ function syncToolAvailability(pi: ExtensionAPI, model: { provider?: string } | u
 }
 
 function compactQuery(query: unknown): string {
-	return typeof query === "string" && query.trim() ? truncateToWidth(query.trim(), 96, "…") : "";
+	return typeof query === "string" && query.trim() ? truncateToWidth(sanitizeSearchText(query, 2_000), 96, "…") : "";
+}
+
+function compactFilter(value: unknown): string | undefined {
+	return typeof value === "string" && value.trim() ? sanitizeSearchText(value, 200) : undefined;
 }
 
 function searchDetail(args: (WebSearchArgs | NewsSearchArgs) | undefined, details?: SearchDisplayDetails): string {
 	const query = compactQuery(args?.query ?? details?.query);
-	const dates = [args?.startDate ?? details?.startDate, args?.endDate ?? details?.endDate].filter(Boolean).join(" → ");
-	const lang = args && "lang" in args ? args.lang : details?.lang;
+	const dates = [compactFilter(args?.startDate ?? details?.startDate), compactFilter(args?.endDate ?? details?.endDate)].filter(Boolean).join(" → ");
+	const lang = compactFilter(args && "lang" in args ? args.lang : details?.lang);
 	return [query ? `“${query}”` : undefined, dates || undefined, lang ? `lang ${lang}` : undefined].filter(Boolean).join(" · ");
 }
 
-function compactError(text: string): string {
-	const normalized = text.replace(/\s+/g, " ").trim();
-	return truncateToWidth(normalized || "Unknown search error", 160, "…");
+function compactError(text: string, fallback: string): string {
+	const normalized = sanitizeSearchText(text, 2_000);
+	return truncateToWidth(normalized || fallback, 160, "…");
 }
 
 function sourceLabel(result: SearchDisplayItem): string {
 	const label = result.title || result.url || "untitled";
-	return truncateToWidth(label.replace(/\s+/g, " ").trim(), 110, "…");
+	return truncateToWidth(sanitizeSearchText(label, 600), 110, "…");
 }
 
 function resultUrl(result: SearchDisplayItem): string | undefined {
-	return typeof result.url === "string" && /^https?:\/\//.test(result.url) ? result.url : undefined;
+	return normalizeHttpUrl(result.url);
 }
 
 function resultWebsite(result: SearchDisplayItem): string | undefined {
-	if (result.website) return result.website;
+	if (result.website) return sanitizeSearchText(result.website, 200);
 	const url = resultUrl(result);
-	if (!url) return undefined;
-	try {
-		return new URL(url).hostname.replace(/^www\./i, "") || undefined;
-	} catch {
-		return undefined;
-	}
+	return url ? new URL(url).hostname.replace(/^www\./i, "") || undefined : undefined;
 }
 
 function resultSearchEngine(result: SearchDisplayItem): string | undefined {
 	const value = result.searchEngine ?? result.source;
 	if (!value) return undefined;
-	return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+	const safe = sanitizeSearchText(value, 200);
+	return safe ? `${safe.charAt(0).toUpperCase()}${safe.slice(1)}` : undefined;
+}
+
+function sharedSearchEngine(details: SearchDisplayDetails): string | undefined {
+	if (details.searchEngine) return resultSearchEngine({ searchEngine: details.searchEngine, snippets: [] });
+	const engines = new Set(details.results.map(resultSearchEngine).filter((value): value is string => Boolean(value)));
+	return engines.size === 1 ? [...engines][0] : undefined;
 }
 
 // A tiny width-aware component mirroring better-native-pi's WidthAwareLines so the
@@ -194,10 +202,14 @@ function headlineRow(partial: boolean, isError: boolean, verb: string, detail: s
 
 // Colored summary that follows the `└ ` branch, matching tidy tools' shape:
 // `<count> <noun> · <elapsed>` (and a truncation note when content was clipped).
-function searchSummary(resultCount: number, elapsedMs?: number): string {
+function searchSummary(resultCount: number, elapsedMs: number | undefined, searchEngine: string | undefined, theme: Theme): string {
 	const count = resultCount === 0 ? "No results" : `${resultCount} ${resultCount === 1 ? "result" : "results"}`;
 	const elapsed = typeof elapsedMs === "number" ? formatElapsed(elapsedMs) : "done";
-	return `${GREEN}${count}${RESET} · ${elapsed}`;
+	return [
+		`${GREEN}${count}${RESET}`,
+		searchEngine ? theme.fg("muted", `via ${searchEngine}`) : undefined,
+		elapsed,
+	].filter(Boolean).join(theme.fg("dim", " · "));
 }
 
 function openSummary(details: OpenDetails | undefined): string {
@@ -240,7 +252,7 @@ function renderSearchResult(
 		const detail = searchDetail(args);
 		component.update(() => [
 			headlineRow(false, true, "Search failed", detail),
-			`${BRANCH}${theme.fg("error", compactError(storedText))}`,
+			`${BRANCH}${theme.fg("error", compactError(storedText, "Unknown search error"))}`,
 		]);
 		return component;
 	}
@@ -248,17 +260,18 @@ function renderSearchResult(
 	const details = result?.details ?? parseSearchResultText(storedText);
 	const results = details.results;
 	const detail = searchDetail(args, details);
+	const searchEngine = sharedSearchEngine(details);
 	const max = expanded ? 10 : 5;
 	component.update(() => {
-		const lines = [headlineRow(false, false, "Searched", detail), `${BRANCH}${searchSummary(details.resultCount, details.elapsedMs)}`];
+		const lines = [headlineRow(false, false, "Searched", detail), `${BRANCH}${searchSummary(details.resultCount, details.elapsedMs, searchEngine, theme)}`];
 		const shownResults = results.slice(0, max);
 		for (const [index, item] of shownResults.entries()) {
 			const label = sourceLabel(item);
 			const url = resultUrl(item);
 			const rendered = url ? hyperlink(theme.fg("mdLink", label), url) : theme.fg("toolOutput", label);
 			const website = resultWebsite(item);
-			const searchEngine = resultSearchEngine(item);
-			const via = searchEngine && searchEngine.toLowerCase() !== website?.toLowerCase() ? `via ${searchEngine}` : undefined;
+			const itemSearchEngine = resultSearchEngine(item);
+			const via = !searchEngine && itemSearchEngine && itemSearchEngine.toLowerCase() !== website?.toLowerCase() ? `via ${itemSearchEngine}` : undefined;
 			const meta = [
 				website ? theme.fg("accent", website) : undefined,
 				via ? theme.fg("muted", via) : undefined,
@@ -280,16 +293,22 @@ function renderSearchResult(
 	return component;
 }
 
+function renderOpenTarget(value: string, theme: Theme): string {
+	const safe = truncateToWidth(sanitizeSearchText(value, 2_048), 110, "…");
+	const url = normalizeHttpUrl(value);
+	return url ? hyperlink(theme.fg("mdLink", safe), url) : theme.fg("toolOutput", safe);
+}
+
 function renderOpenCall(args: OpenUrlArgs, _theme: Theme, context: ToolRenderContext) {
 	if (!context.isPartial) return new Container();
 	const component = reuseOrCreate(context);
-	const detail = truncateToWidth(args.url, 110, "…");
+	const detail = truncateToWidth(sanitizeSearchText(args.url, 2_048), 110, "…");
 	component.update(() => [headlineRow(true, false, "Opening", detail)]);
 	return component;
 }
 
 function renderOpenResult(
-	result: { details?: OpenDetails } | undefined,
+	result: { content?: Array<{ type?: string; text?: string }>; details?: OpenDetails } | undefined,
 	{ expanded, isPartial }: ToolRenderResultOptions,
 	theme: Theme,
 	context: ToolRenderContext,
@@ -297,18 +316,30 @@ function renderOpenResult(
 	if (isPartial) return new Container();
 	const component = reuseOrCreate(context);
 	const details = result?.details;
-	const url = details?.url ?? "";
+	const args = context.args as OpenUrlArgs | undefined;
+	const target = details?.url ?? args?.url ?? "";
+	const storedText = result?.content
+		?.filter((part) => part.type === "text" && typeof part.text === "string")
+		.map((part) => part.text)
+		.join("\n") ?? "";
+
+	if (context.isError) {
+		component.update(() => [
+			headlineRow(false, true, "Open failed", target ? renderOpenTarget(target, theme) : ""),
+			`${BRANCH}${theme.fg("error", compactError(storedText, "Unknown open error"))}`,
+		]);
+		return component;
+	}
 
 	component.update(() => {
-		const isError = context.isError ?? false;
 		const lines = [
-			headlineRow(false, isError, "Opened", url ? hyperlink(theme.fg("mdLink", truncateToWidth(url, 110, "…")), url) : ""),
+			headlineRow(false, false, "Opened", target ? renderOpenTarget(target, theme) : ""),
 			`${BRANCH}${openSummary(details)}`,
 		];
 		if (expanded && details?.content) {
 			lines.push("");
 			for (const line of details.content.split("\n").slice(0, 12)) {
-				lines.push(`${INDENT}${theme.fg("dim", truncateToWidth(line, 160, "…"))}`);
+				lines.push(`${INDENT}${theme.fg("dim", truncateToWidth(sanitizeSearchText(line, 2_000), 160, "…"))}`);
 			}
 		}
 		return lines;
