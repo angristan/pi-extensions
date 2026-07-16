@@ -1,8 +1,10 @@
 import { randomBytes } from "node:crypto";
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { statSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
+	Container,
 	Key,
 	Text,
 	matchesKey,
@@ -11,19 +13,26 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 import { highlightShellCommand } from "../better-native-pi/core.js";
+import { BoundedOutput, CursorOutput, type CursorRead } from "./output.js";
+import { isPtySupported, spawnTerminal } from "./terminal-process.js";
+
+export { BoundedOutput, CursorOutput } from "./output.js";
 
 const ENTRY_TYPE = "background-job";
 const NOTIFICATION_EVENT = "notification";
+const STATUS_KEY = "background-jobs";
 const MAX_CONCURRENT_JOBS = 16;
 const MAX_RETAINED_JOBS = 50;
-const OUTPUT_HEAD_BYTES = 16 * 1024;
-const OUTPUT_TAIL_BYTES = 240 * 1024;
 const TOOL_OUTPUT_BYTES = 24 * 1024;
+const PARTIAL_OUTPUT_BYTES = 4 * 1024;
 const PERSISTED_OUTPUT_BYTES = 8 * 1024;
 const KILL_GRACE_MS = 5_000;
 const MAX_TIMEOUT_SECONDS = 24 * 60 * 60;
+const DEFAULT_YIELD_MS = 10_000;
+const DEFAULT_POLL_MS = 5_000;
+const MAX_POLL_MS = 5 * 60 * 1_000;
 
-type JobStatus = "running" | "completed" | "failed" | "killed" | "timed_out";
+export type JobStatus = "running" | "stopping" | "completed" | "failed" | "killed" | "timed_out";
 
 export interface JobSnapshot {
 	id: string;
@@ -31,6 +40,7 @@ export interface JobSnapshot {
 	command: string;
 	cwd: string;
 	status: JobStatus;
+	tty?: boolean;
 	startedAt: number;
 	endedAt?: number;
 	exitCode?: number;
@@ -39,45 +49,13 @@ export interface JobSnapshot {
 	stderr: string;
 	stdoutOmittedBytes: number;
 	stderrOmittedBytes: number;
+	outputCursor?: number;
 }
 
-export class BoundedOutput {
-	private head = Buffer.alloc(0);
-	private tail = Buffer.alloc(0);
-	private totalBytes = 0;
-
-	append(chunk: Buffer | string): void {
-		let bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-		this.totalBytes += bytes.length;
-		if (this.head.length < OUTPUT_HEAD_BYTES) {
-			const take = Math.min(OUTPUT_HEAD_BYTES - this.head.length, bytes.length);
-			this.head = Buffer.concat([this.head, bytes.subarray(0, take)]);
-			bytes = bytes.subarray(take);
-		}
-		if (bytes.length > 0) {
-			this.tail = Buffer.concat([this.tail, bytes]);
-			if (this.tail.length > OUTPUT_TAIL_BYTES) this.tail = this.tail.subarray(this.tail.length - OUTPUT_TAIL_BYTES);
-		}
-	}
-
-	get omittedBytes(): number {
-		return Math.max(0, this.totalBytes - this.head.length - this.tail.length);
-	}
-
-	text(limitBytes?: number): string {
-		if (limitBytes !== undefined) {
-			if (this.totalBytes === 0) return "";
-			// Before the retention window is exceeded, head and tail are contiguous.
-			// Combine them so a limit that can hold the complete output does not
-			// unnecessarily discard the head as soon as tail contains one byte.
-			const retained = this.omittedBytes === 0 ? Buffer.concat([this.head, this.tail]) : this.tail;
-			const bounded = retained.length > limitBytes ? retained.subarray(retained.length - limitBytes) : retained;
-			const omitted = Math.max(0, this.totalBytes - bounded.length);
-			return `${omitted > 0 ? `[... ${omitted.toLocaleString()} earlier bytes omitted ...]\n` : ""}${bounded.toString("utf8")}`;
-		}
-		const marker = this.omittedBytes > 0 ? `\n[... ${this.omittedBytes.toLocaleString()} bytes omitted ...]\n` : "";
-		return `${this.head.toString("utf8")}${marker}${this.tail.toString("utf8")}`;
-	}
+interface JobToolDetails extends JobSnapshot {
+	output?: string;
+	cursor?: number;
+	outputOmittedBytes?: number;
 }
 
 interface ManagedJob {
@@ -86,13 +64,18 @@ interface ManagedJob {
 	command: string;
 	cwd: string;
 	status: JobStatus;
+	tty: boolean;
 	startedAt: number;
 	endedAt?: number;
 	exitCode?: number;
 	signal?: string;
 	stdout: BoundedOutput;
 	stderr: BoundedOutput;
+	output: CursorOutput;
+	agentCursor: number;
 	process?: ChildProcess;
+	ptyPid?: number;
+	pendingClose?: { code: number | null; signal: NodeJS.Signals | null };
 	timeout?: ReturnType<typeof setTimeout>;
 	killTimer?: ReturnType<typeof setTimeout>;
 	completion: Promise<void>;
@@ -101,6 +84,15 @@ interface ManagedJob {
 	killReason?: "user" | "timeout" | "shutdown";
 	suppressPersistence: boolean;
 	sessionGeneration: number;
+	activityListeners: Set<() => void>;
+}
+
+interface BackgroundJobsOptions {
+	killGraceMs?: number;
+}
+
+function isActive(job: Pick<ManagedJob, "status">): boolean {
+	return job.status === "running" || job.status === "stopping";
 }
 
 function compactDuration(milliseconds: number): string {
@@ -121,17 +113,25 @@ function compactCommand(command: string, limit = 100): string {
 	return oneLine.length > limit ? `${oneLine.slice(0, limit - 1)}…` : oneLine;
 }
 
-function jobId(description: string, command: string): string {
+function plainPreview(text: string, limit = 80): string {
+	return compactCommand(text.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, ""), limit);
+}
+
+function jobId(description: string, command: string, jobs: Map<string, ManagedJob>): string {
 	const seed = (description || command.split(/\s+/, 1)[0] || "job")
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, "-")
 		.replace(/^-|-$/g, "")
 		.slice(0, 14) || "job";
-	return `${seed}-${randomBytes(2).toString("hex")}`;
+	for (;;) {
+		const id = `${seed}-${randomBytes(4).toString("hex")}`;
+		if (!jobs.has(id)) return id;
+	}
 }
 
 function statusSymbol(status: JobStatus): string {
 	if (status === "running") return "●";
+	if (status === "stopping") return "◌";
 	if (status === "completed") return "✓";
 	if (status === "timed_out") return "◷";
 	if (status === "killed") return "■";
@@ -140,8 +140,8 @@ function statusSymbol(status: JobStatus): string {
 
 function statusColor(status: JobStatus): string {
 	if (status === "running") return "accent";
+	if (status === "stopping" || status === "timed_out") return "warning";
 	if (status === "completed") return "success";
-	if (status === "timed_out") return "warning";
 	if (status === "killed") return "muted";
 	return "error";
 }
@@ -153,6 +153,7 @@ function snapshot(job: ManagedJob, outputLimit?: number): JobSnapshot {
 		command: job.command,
 		cwd: job.cwd,
 		status: job.status,
+		tty: job.tty,
 		startedAt: job.startedAt,
 		endedAt: job.endedAt,
 		exitCode: job.exitCode,
@@ -161,6 +162,7 @@ function snapshot(job: ManagedJob, outputLimit?: number): JobSnapshot {
 		stderr: job.stderr.text(outputLimit),
 		stdoutOmittedBytes: job.stdout.omittedBytes,
 		stderrOmittedBytes: job.stderr.omittedBytes,
+		outputCursor: job.output.cursor,
 	};
 }
 
@@ -169,17 +171,24 @@ function restoredJob(data: JobSnapshot, generation: number): ManagedJob {
 	const completion = new Promise<void>((resolvePromise) => { resolveCompletion = resolvePromise; });
 	const stdout = new BoundedOutput();
 	const stderr = new BoundedOutput();
-	stdout.append(data.stdout);
-	stderr.append(data.stderr);
+	const output = new CursorOutput();
+	stdout.append(data.stdout ?? "");
+	stderr.append(data.stderr ?? "");
+	output.append(data.stdout ?? "");
+	output.append(data.stderr ?? "");
 	const job: ManagedJob = {
 		...data,
+		tty: Boolean(data.tty),
 		stdout,
 		stderr,
+		output,
+		agentCursor: output.cursor,
 		completion,
 		resolveCompletion,
 		finalized: true,
 		suppressPersistence: true,
 		sessionGeneration: generation,
+		activityListeners: new Set(),
 	};
 	resolveCompletion();
 	return job;
@@ -187,15 +196,23 @@ function restoredJob(data: JobSnapshot, generation: number): ManagedJob {
 
 function formatSnapshotText(data: JobSnapshot): string {
 	const lines = [
-		`${statusSymbol(data.status)} ${data.id} · ${data.status} · ${compactDuration(duration(data))}`,
+		`${statusSymbol(data.status)} ${data.id} · ${data.status} · ${compactDuration(duration(data))}${data.tty ? " · tty" : ""}`,
 		`cwd: ${data.cwd}`,
 		`command: ${data.command}`,
 	];
 	if (data.exitCode !== undefined) lines.push(`exit code: ${data.exitCode}`);
 	if (data.signal) lines.push(`signal: ${data.signal}`);
-	if (data.stdout) lines.push("", "stdout:", data.stdout.trimEnd());
+	if (data.stdout) lines.push("", data.tty ? "terminal output:" : "stdout:", data.stdout.trimEnd());
 	if (data.stderr) lines.push("", "stderr:", data.stderr.trimEnd());
 	if (!data.stdout && !data.stderr) lines.push("", "(no output)");
+	return lines.join("\n");
+}
+
+function formatDeltaText(job: ManagedJob, read: CursorRead): string {
+	const lines = [`${statusSymbol(job.status)} ${job.id} · ${job.status} · ${compactDuration(duration(job))}`];
+	if (job.exitCode !== undefined) lines[0] += ` · exit ${job.exitCode}`;
+	if (read.text) lines.push(read.text.trimEnd());
+	else lines.push(isActive(job) ? "(no new output; terminal is still running)" : "(no new output)");
 	return lines.join("\n");
 }
 
@@ -211,11 +228,11 @@ class JobOutputViewer {
 		private readonly theme: any,
 		private readonly done: (result?: unknown) => void,
 	) {
-		if (getSnapshot().status === "running") {
+		if (getSnapshot().status === "running" || getSnapshot().status === "stopping") {
 			this.refreshTimer = setInterval(() => {
 				this.cachedWidth = 0;
 				this.tui.requestRender();
-				if (this.getSnapshot().status !== "running") this.stopRefreshing();
+				if (!(["running", "stopping"] as JobStatus[]).includes(this.getSnapshot().status)) this.stopRefreshing();
 			}, 500);
 			this.refreshTimer.unref?.();
 		}
@@ -229,9 +246,8 @@ class JobOutputViewer {
 
 	private lines(width: number): string[] {
 		if (this.cachedWidth === width) return this.cachedLines;
-		const data = this.getSnapshot();
 		const lines: string[] = [];
-		for (const source of formatSnapshotText(data).split("\n")) {
+		for (const source of formatSnapshotText(this.getSnapshot()).split("\n")) {
 			if (!source) { lines.push(""); continue; }
 			lines.push(...wrapTextWithAnsi(source, Math.max(1, width)));
 		}
@@ -244,7 +260,7 @@ class JobOutputViewer {
 		const max = Math.max(1, width);
 		const height = Math.max(10, (process.stdout.rows || 24) - 5);
 		const bodyHeight = height - 1;
-		if (this.getSnapshot().status === "running") this.cachedWidth = 0;
+		if ((["running", "stopping"] as JobStatus[]).includes(this.getSnapshot().status)) this.cachedWidth = 0;
 		const lines = this.lines(max);
 		const maxScroll = Math.max(0, lines.length - bodyHeight);
 		this.scroll = Math.min(this.scroll, maxScroll);
@@ -271,14 +287,59 @@ class JobOutputViewer {
 
 function jobEntry(data: JobSnapshot, expanded: boolean, theme: any): Text {
 	const color = statusColor(data.status);
-	const header = `${theme.fg(color, statusSymbol(data.status))} ${theme.bold(data.description)} · ${data.id} · ${data.status} in ${compactDuration(duration(data))}`;
+	const header = `${theme.fg(color, statusSymbol(data.status))} ${theme.bold(data.description)} · ${data.id} · ${data.status} in ${compactDuration(duration(data))}${data.tty ? " · tty" : ""}`;
 	const command = `  ${highlightShellCommand(compactCommand(data.command, 140), theme)}`;
 	if (!expanded) return new Text(`${header}\n${command}`, 0, 0);
 	return new Text(`${header}\n${command}\n${theme.fg("dim", formatSnapshotText(data))}`, 0, 0);
 }
 
-interface BackgroundJobsOptions {
-	killGraceMs?: number;
+class LiveJobComponent {
+	private timer?: ReturnType<typeof setInterval>;
+
+	constructor(
+		private readonly id: string,
+		private fallback: JobSnapshot,
+		private expanded: boolean,
+		private readonly theme: any,
+		private readonly getJob: (id: string) => ManagedJob | undefined,
+		private readonly requestRender: () => void,
+	) {
+		this.syncTimer();
+	}
+
+	update(fallback: JobSnapshot, expanded: boolean): void {
+		this.fallback = fallback;
+		this.expanded = expanded;
+		this.syncTimer();
+	}
+
+	private current(): JobSnapshot {
+		const job = this.getJob(this.id);
+		return job ? snapshot(job, TOOL_OUTPUT_BYTES) : this.fallback;
+	}
+
+	private syncTimer(): void {
+		const current = this.current();
+		if ((current.status === "running" || current.status === "stopping") && !this.timer) {
+			this.timer = setInterval(() => this.requestRender(), 500);
+			this.timer.unref?.();
+		} else if (current.status !== "running" && current.status !== "stopping") {
+			this.dispose();
+		}
+	}
+
+	render(width: number): string[] {
+		const current = this.current();
+		if (current.status !== "running" && current.status !== "stopping") this.dispose();
+		return jobEntry(current, this.expanded, this.theme).render(width);
+	}
+
+	invalidate(): void {}
+
+	dispose(): void {
+		if (this.timer) clearInterval(this.timer);
+		this.timer = undefined;
+	}
 }
 
 export default function registerBackgroundJobs(pi: ExtensionAPI, options: BackgroundJobsOptions = {}) {
@@ -287,10 +348,23 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	let activeCtx: any;
 	let sessionGeneration = 0;
 
-	const runningJobs = () => [...jobs.values()].filter((job) => job.status === "running");
+	const activeJobs = () => [...jobs.values()].filter(isActive);
+	const updateStatus = () => {
+		if (!activeCtx) return;
+		const count = activeJobs().length;
+		activeCtx.ui.setStatus(STATUS_KEY, count > 0 ? `${count} background job${count === 1 ? "" : "s"} running · /jobs to view` : undefined);
+	};
+	const emitActivity = (job: ManagedJob) => {
+		for (const listener of [...job.activityListeners]) listener();
+	};
+	const appendOutput = (job: ManagedJob, stream: "stdout" | "stderr", chunk: Buffer) => {
+		job[stream].append(chunk);
+		job.output.append(chunk);
+		emitActivity(job);
+	};
 	const trimRetained = () => {
 		const completed = [...jobs.values()]
-			.filter((job) => job.status !== "running")
+			.filter((job) => !isActive(job))
 			.sort((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0));
 		while (completed.length > MAX_RETAINED_JOBS) {
 			const oldest = completed.shift();
@@ -302,27 +376,42 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		const matches = [...jobs.values()].filter((job) => job.id.startsWith(idOrPrefix));
 		return matches.length === 1 ? matches[0] : undefined;
 	};
-	const signalProcessGroup = (job: ManagedJob, signal: NodeJS.Signals): boolean => {
-		const child = job.process;
-		if (!child?.pid) return false;
+	const signalPid = (pid: number | undefined, signal: NodeJS.Signals): boolean => {
+		if (!pid) return false;
 		try {
-			if (process.platform !== "win32") process.kill(-child.pid, signal);
-			else child.kill(signal);
+			if (process.platform !== "win32") process.kill(-pid, signal);
+			else process.kill(pid, signal);
 			return true;
 		} catch {
-			try { return child.kill(signal); } catch { return false; }
+			try { process.kill(pid, signal); return true; } catch { return false; }
 		}
 	};
+	const signalProcessTree = (job: ManagedJob, signal: NodeJS.Signals): boolean => {
+		const ptySignaled = job.ptyPid && job.ptyPid !== job.process?.pid ? signalPid(job.ptyPid, signal) : false;
+		const wrapperSignaled = signalPid(job.process?.pid, signal);
+		return Boolean(ptySignaled || wrapperSignaled);
+	};
+	const pidExists = (pid: number | undefined): boolean => {
+		if (!pid) return false;
+		try { process.kill(pid, 0); return true; } catch { return false; }
+	};
+	let finalize!: (job: ManagedJob, code: number | null, signal: NodeJS.Signals | null, spawnError?: Error) => void;
 	const requestKill = (job: ManagedJob, reason: ManagedJob["killReason"]) => {
-		if (job.status !== "running" || job.killReason) return false;
-		// The first stop request owns the terminal status. A timeout followed by a
-		// user or shutdown request must remain timed_out and must not add timers.
+		if (!isActive(job) || job.killReason) return false;
 		job.killReason = reason;
-		signalProcessGroup(job, "SIGTERM");
-		job.killTimer = setTimeout(() => signalProcessGroup(job, "SIGKILL"), killGraceMs);
+		job.status = "stopping";
+		signalProcessTree(job, "SIGTERM");
+		job.killTimer = setTimeout(() => {
+			signalProcessTree(job, "SIGKILL");
+			setTimeout(() => {
+				if (job.pendingClose) finalize(job, job.pendingClose.code, job.pendingClose.signal);
+			}, 25);
+		}, killGraceMs);
+		updateStatus();
+		emitActivity(job);
 		return true;
 	};
-	const finalize = (job: ManagedJob, code: number | null, signal: NodeJS.Signals | null, spawnError?: Error) => {
+	finalize = (job: ManagedJob, code: number | null, signal: NodeJS.Signals | null, spawnError?: Error) => {
 		if (job.finalized) return;
 		job.finalized = true;
 		job.endedAt = Date.now();
@@ -331,17 +420,18 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		if (job.timeout) clearTimeout(job.timeout);
 		if (job.killTimer) clearTimeout(job.killTimer);
 		if (spawnError) {
-			job.stderr.append(`${job.stderr.text() ? "\n" : ""}${spawnError.message}\n`);
+			appendOutput(job, "stderr", Buffer.from(`${job.stderr.text() ? "\n" : ""}${spawnError.message}\n`));
 			job.status = "failed";
 		} else if (job.killReason === "timeout") job.status = "timed_out";
 		else if (job.killReason) job.status = "killed";
 		else job.status = code === 0 ? "completed" : "failed";
+		emitActivity(job);
 		job.resolveCompletion();
 		trimRetained();
+		updateStatus();
 
 		if (!job.suppressPersistence && job.sessionGeneration === sessionGeneration) {
-			const persisted = snapshot(job, PERSISTED_OUTPUT_BYTES);
-			pi.appendEntry(ENTRY_TYPE, persisted);
+			pi.appendEntry(ENTRY_TYPE, snapshot(job, PERSISTED_OUTPUT_BYTES));
 			const project = job.cwd.split("/").filter(Boolean).pop() || "pi";
 			pi.events.emit(NOTIFICATION_EVENT, {
 				title: `${project}: background job ${job.status}`,
@@ -350,61 +440,164 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			activeCtx?.ui.notify?.(`${job.id} ${job.status}${job.exitCode !== undefined ? ` (exit ${job.exitCode})` : ""}.`, job.status === "completed" ? "info" : "warning");
 		}
 	};
-	const startJob = (params: { command: string; description?: string; cwd?: string; timeoutSeconds?: number }, ctx: any): ManagedJob => {
-		if (runningJobs().length >= MAX_CONCURRENT_JOBS) throw new Error(`At most ${MAX_CONCURRENT_JOBS} background jobs may run at once`);
+	const startJob = (params: { command: string; description?: string; cwd?: string; timeoutSeconds?: number; tty?: boolean }, ctx: any): ManagedJob => {
+		if (activeJobs().length >= MAX_CONCURRENT_JOBS) throw new Error(`At most ${MAX_CONCURRENT_JOBS} background jobs may run at once`);
 		const command = params.command.trim();
 		if (!command) throw new Error("Background command must not be empty");
 		const timeoutSeconds = params.timeoutSeconds;
 		if (timeoutSeconds !== undefined && (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > MAX_TIMEOUT_SECONDS)) {
 			throw new Error(`timeoutSeconds must be an integer between 1 and ${MAX_TIMEOUT_SECONDS}`);
 		}
+		if (params.tty && !isPtySupported()) throw new Error("PTY mode is unavailable on this platform");
 		const cwd = resolve(ctx.cwd, params.cwd?.trim() || ".");
+		try {
+			if (!statSync(cwd).isDirectory()) throw new Error("not a directory");
+		} catch {
+			throw new Error(`Working directory does not exist or is not a directory: ${cwd}`);
+		}
 		const description = compactCommand(params.description?.trim() || command, 80);
 		let resolveCompletion!: () => void;
 		const completion = new Promise<void>((resolvePromise) => { resolveCompletion = resolvePromise; });
 		const job: ManagedJob = {
-			id: jobId(description, command),
+			id: jobId(description, command, jobs),
 			description,
 			command,
 			cwd,
 			status: "running",
+			tty: Boolean(params.tty),
 			startedAt: Date.now(),
 			stdout: new BoundedOutput(),
 			stderr: new BoundedOutput(),
+			output: new CursorOutput(),
+			agentCursor: 0,
 			completion,
 			resolveCompletion,
 			finalized: false,
 			suppressPersistence: false,
 			sessionGeneration,
+			activityListeners: new Set(),
 		};
 		jobs.set(job.id, job);
-		const child = spawn("/bin/bash", ["-lc", command], {
-			cwd,
-			env: process.env,
-			detached: process.platform !== "win32",
-			stdio: ["ignore", "pipe", "pipe"],
+		try {
+			job.process = spawnTerminal({
+				command,
+				cwd,
+				tty: job.tty,
+				onStdout: (chunk) => appendOutput(job, "stdout", chunk),
+				onStderr: (chunk) => appendOutput(job, "stderr", chunk),
+				onPtyPid: (pid) => { job.ptyPid = pid; },
+			});
+		} catch (error) {
+			jobs.delete(job.id);
+			throw error;
+		}
+		job.process.stdin?.on("error", () => {});
+		job.process.once("error", (error) => finalize(job, null, null, error));
+		job.process.once("close", (code, signal) => {
+			if (job.ptyPid && pidExists(job.ptyPid)) {
+				job.pendingClose = { code, signal };
+				if (!job.killReason) {
+					job.killReason = "shutdown";
+					job.status = "stopping";
+					signalPid(job.ptyPid, "SIGKILL");
+					setTimeout(() => finalize(job, code, signal), 25);
+				}
+				return;
+			}
+			finalize(job, code, signal);
 		});
-		job.process = child;
-		child.stdout.on("data", (chunk: Buffer) => job.stdout.append(chunk));
-		child.stderr.on("data", (chunk: Buffer) => job.stderr.append(chunk));
-		child.once("error", (error) => finalize(job, null, null, error));
-		child.once("close", (code, signal) => finalize(job, code, signal));
 		if (timeoutSeconds !== undefined) {
 			job.timeout = setTimeout(() => requestKill(job, "timeout"), timeoutSeconds * 1000);
 			job.timeout.unref?.();
 		}
+		updateStatus();
 		return job;
 	};
-	const waitForJob = async (job: ManagedJob, signal?: AbortSignal) => {
-		if (job.status !== "running") return;
+	const waitForCompletion = async (job: ManagedJob, signal?: AbortSignal) => {
+		if (!isActive(job)) return;
 		if (!signal) return job.completion;
-		await Promise.race([
-			job.completion,
-			new Promise<void>((resolvePromise) => {
-				if (signal.aborted) resolvePromise();
-				else signal.addEventListener("abort", () => resolvePromise(), { once: true });
-			}),
-		]);
+		await new Promise<void>((resolvePromise) => {
+			let settled = false;
+			const finish = () => {
+				if (settled) return;
+				settled = true;
+				signal.removeEventListener("abort", finish);
+				resolvePromise();
+			};
+			job.completion.then(finish);
+			if (signal.aborted) finish();
+			else signal.addEventListener("abort", finish, { once: true });
+		});
+	};
+	const waitForActivity = async (job: ManagedJob, cursor: number, waitMs: number, signal?: AbortSignal) => {
+		if (!isActive(job) || waitMs <= 0 || signal?.aborted) return;
+		await new Promise<void>((resolvePromise) => {
+			let settled = false;
+			let deadline: ReturnType<typeof setTimeout> | undefined;
+			let quietTimer: ReturnType<typeof setTimeout> | undefined;
+			const finish = () => {
+				if (settled) return;
+				settled = true;
+				if (deadline) clearTimeout(deadline);
+				if (quietTimer) clearTimeout(quietTimer);
+				job.activityListeners.delete(onActivity);
+				signal?.removeEventListener("abort", finish);
+				resolvePromise();
+			};
+			const onActivity = () => {
+				if (!isActive(job)) { finish(); return; }
+				if (job.output.cursor <= cursor) return;
+				if (quietTimer) clearTimeout(quietTimer);
+				// PTYs commonly echo input immediately and emit the program response in
+				// the next chunk. A short quiet window returns both as one interaction.
+				quietTimer = setTimeout(finish, 25);
+			};
+			job.activityListeners.add(onActivity);
+			deadline = setTimeout(finish, waitMs);
+			if (signal) signal.addEventListener("abort", finish, { once: true });
+			onActivity();
+		});
+	};
+	const waitForYield = async (job: ManagedJob, yieldMs: number, signal?: AbortSignal) => {
+		if (!isActive(job)) return;
+		await new Promise<void>((resolvePromise) => {
+			let settled = false;
+			const timer = setTimeout(finish, yieldMs);
+			function finish() {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				signal?.removeEventListener("abort", finish);
+				resolvePromise();
+			}
+			job.completion.then(finish);
+			if (signal?.aborted) finish();
+			else signal?.addEventListener("abort", finish, { once: true });
+		});
+	};
+	const readDelta = (job: ManagedJob, cursor: number, advanceAgentCursor: boolean): { read: CursorRead; details: JobToolDetails } => {
+		const read = job.output.read(cursor, TOOL_OUTPUT_BYTES);
+		if (advanceAgentCursor) job.agentCursor = read.cursor;
+		return {
+			read,
+			details: {
+				...snapshot(job, PERSISTED_OUTPUT_BYTES),
+				output: read.text,
+				cursor: read.cursor,
+				outputOmittedBytes: read.omittedBytes,
+			},
+		};
+	};
+	const writeInput = async (job: ManagedJob, chars: string, closeStdin: boolean) => {
+		if (!isActive(job)) return;
+		const stdin = job.process?.stdin;
+		if (!stdin || stdin.destroyed) throw new Error(`Terminal ${job.id} does not accept input`);
+		if (chars) {
+			await new Promise<void>((resolvePromise, reject) => {
+				stdin.write(chars, (error) => error ? reject(error) : resolvePromise());
+			});
+		}
+		if (closeStdin) stdin.end();
 	};
 	const showOutput = async (job: ManagedJob, ctx: any) => {
 		if (ctx.mode !== "tui") {
@@ -418,132 +611,239 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			});
 	};
 	const confirmKill = async (job: ManagedJob, ctx: any): Promise<boolean> => {
-		if (job.status !== "running") return false;
+		if (!isActive(job) || job.killReason) return false;
 		if (!ctx.hasUI && ctx.mode !== "tui") return false;
-		return ctx.ui.confirm("Stop background job?", `${job.id}\n${job.command}\n\nThis sends SIGTERM to the process group, then SIGKILL after ${killGraceMs / 1000}s if needed.`);
+		return ctx.ui.confirm("Stop background job?", `${job.id}\n${job.command}\n\nThis sends SIGTERM to the process tree, then SIGKILL after ${killGraceMs / 1000}s if needed.`);
+	};
+	const liveResult = (result: any, options: any, theme: any, context: any) => {
+		const data = result.details as JobSnapshot | undefined;
+		if (!data?.id) return new Text(result?.content?.[0]?.text ?? "", 0, 0);
+		let component = context.state.liveJob as LiveJobComponent | undefined;
+		if (!component) {
+			component = new LiveJobComponent(data.id, data, Boolean(options.expanded), theme, (id) => jobs.get(id), context.invalidate);
+			context.state.liveJob = component;
+		} else component.update(data, Boolean(options.expanded));
+		return component;
 	};
 
-	pi.registerEntryRenderer<JobSnapshot>(ENTRY_TYPE, (entry: any, options: any, theme: any) =>
-		jobEntry(entry.data as JobSnapshot, Boolean(options.expanded), theme));
+	// Completion entries persist final state but intentionally render nothing:
+	// the original tool card reads the live/restored job and updates in place.
+	pi.registerEntryRenderer<JobSnapshot>(ENTRY_TYPE, () => new Container());
+
+	pi.registerTool({
+		name: "terminal_exec",
+		label: "Terminal Exec",
+		description: "Run a shell command, returning normally if it finishes within the yield window or a managed terminal ID if it keeps running. Supports optional PTY interaction through terminal_write.",
+		promptSnippet: "Run shell commands that may be quick, long-running, or interactive",
+		promptGuidelines: ["Use terminal_exec when command duration is uncertain, when a process may stay running, or when terminal interaction may be needed. Quick commands return normally; long commands yield a terminal ID."],
+		parameters: {
+			type: "object",
+			properties: {
+				command: { type: "string", description: "Shell command to run" },
+				description: { type: "string", description: "Short human-readable terminal name" },
+				cwd: { type: "string", description: "Working directory, relative to the current project unless absolute" },
+				tty: { type: "boolean", description: "Allocate a PTY for prompts, REPLs, and control characters", default: false },
+				"yield-time_ms": { type: "integer", minimum: 250, maximum: 30_000, description: `Wait before yielding a terminal ID (default ${DEFAULT_YIELD_MS} ms)` },
+				timeoutSeconds: { type: "integer", minimum: 1, maximum: MAX_TIMEOUT_SECONDS, description: `Optional hard timeout from 1 to ${MAX_TIMEOUT_SECONDS} seconds` },
+				reasoning: { type: "string", description: "Goal or intent behind running this command" },
+			},
+			required: ["command", "reasoning"],
+		} as any,
+		executionMode: "sequential",
+		async execute(_id: string, params: any, signal: AbortSignal | undefined, onUpdate: any, ctx: any) {
+			const yieldMs = params["yield-time_ms"] ?? DEFAULT_YIELD_MS;
+			if (!Number.isInteger(yieldMs) || yieldMs < 250 || yieldMs > 30_000) throw new Error("yield-time_ms must be an integer between 250 and 30000");
+			const job = startJob(params, ctx);
+			const initialCursor = 0;
+			let lastUpdate = 0;
+			const update = () => {
+				const now = Date.now();
+				if (!onUpdate || now - lastUpdate < 100) return;
+				lastUpdate = now;
+				const partial = job.output.read(initialCursor, PARTIAL_OUTPUT_BYTES);
+				onUpdate({ content: [{ type: "text", text: formatDeltaText(job, partial) }], details: snapshot(job, PERSISTED_OUTPUT_BYTES) });
+			};
+			job.activityListeners.add(update);
+			try { await waitForYield(job, yieldMs, signal); } finally { job.activityListeners.delete(update); }
+			const { read, details } = readDelta(job, initialCursor, true);
+			const prefix = isActive(job) ? `Terminal ${job.id} is still running. Use terminal_write or job_output with job_id=${job.id}.\n` : "";
+			return { content: [{ type: "text", text: `${prefix}${formatDeltaText(job, read)}` }], details };
+		},
+		renderCall: (args: any, theme: any) => new Text(`${theme.fg("accent", "●")} ${theme.bold("Running terminal")} ${args.reasoning || highlightShellCommand(compactCommand(args.command || ""), theme)}`, 0, 0),
+		renderResult: liveResult,
+		renderShell: "self",
+	});
 
 	pi.registerTool({
 		name: "background_bash",
 		label: "Background Bash",
-		description: "Start an explicit shell command in a managed background process. Returns immediately with a job ID. Use job_output to inspect it and job_kill to stop it.",
+		description: "Compatibility alias that starts an explicit shell command immediately in a managed background terminal. Prefer terminal_exec for new calls.",
 		parameters: {
 			type: "object",
 			properties: {
 				command: { type: "string", description: "Shell command to run" },
 				description: { type: "string", description: "Short human-readable job name" },
 				cwd: { type: "string", description: "Working directory, relative to the current project unless absolute" },
+				tty: { type: "boolean", description: "Allocate a PTY for interactive input", default: false },
 				timeoutSeconds: { type: "integer", minimum: 1, maximum: MAX_TIMEOUT_SECONDS, description: `Optional timeout from 1 to ${MAX_TIMEOUT_SECONDS} seconds` },
 				reasoning: { type: "string", description: "Goal or intent behind starting this background job" },
 			},
 			required: ["command", "reasoning"],
 		} as any,
-		promptGuidelines: ["Use background_bash only for commands that benefit from running asynchronously. Never background ordinary quick commands automatically."],
+		promptGuidelines: ["Use background_bash only when immediate backgrounding is explicitly desired; otherwise prefer terminal_exec."],
 		executionMode: "sequential",
 		async execute(_id: string, params: any, _signal: AbortSignal, _update: any, ctx: any) {
 			const job = startJob(params, ctx);
 			return {
-				content: [{ type: "text", text: `Background job ${job.id} started in ${job.cwd}. Use job_output with job_id=${job.id} to inspect it.` }],
-				details: snapshot(job, TOOL_OUTPUT_BYTES),
+				content: [{ type: "text", text: `Background terminal ${job.id} started in ${job.cwd}. Use terminal_write or job_output to inspect it.` }],
+				details: snapshot(job, PERSISTED_OUTPUT_BYTES),
 			};
 		},
-		renderCall: (args: any, theme: any) => new Text(`${theme.fg("accent", "●")} ${theme.bold("Starting background job")} ${args.reasoning || highlightShellCommand(compactCommand(args.command || ""), theme)}`, 0, 0),
-		renderResult: (result: any, _options: any, theme: any) => {
-			const data = result.details as JobSnapshot | undefined;
-			return data ? jobEntry(data, false, theme) : new Text(result?.content?.[0]?.text ?? "", 0, 0);
-		},
+		renderCall: (args: any, theme: any) => new Text(`${theme.fg("accent", "●")} ${theme.bold("Starting background terminal")} ${args.reasoning || highlightShellCommand(compactCommand(args.command || ""), theme)}`, 0, 0),
+		renderResult: liveResult,
 		renderShell: "self",
 	});
 
 	pi.registerTool({
 		name: "job_output",
 		label: "Job Output",
-		description: "Read bounded stdout/stderr from a managed background job. Optionally wait until it finishes.",
+		description: "Read only new bounded output from a managed terminal. Returns a cursor and can wait for new output or completion.",
 		parameters: {
 			type: "object",
 			properties: {
-				job_id: { type: "string", description: "Full job ID or an unambiguous prefix" },
-				wait: { type: "boolean", description: "Wait for completion before returning output", default: false },
+				job_id: { type: "string", description: "Full terminal ID or an unambiguous prefix" },
+				cursor: { type: "integer", minimum: 0, description: "Optional output cursor; defaults to this tool's last read position" },
+				waitMs: { type: "integer", minimum: 0, maximum: MAX_POLL_MS, description: "Wait this many milliseconds for new output" },
+				wait: { type: "boolean", description: "Compatibility option: wait until the terminal finishes", default: false },
 			},
 			required: ["job_id"],
 		} as any,
 		executionMode: "sequential",
 		async execute(_id: string, params: any, signal?: AbortSignal) {
 			const job = findJob(params.job_id);
-			if (!job) throw new Error(`Background job not found or prefix is ambiguous: ${params.job_id}`);
-			if (params.wait) await waitForJob(job, signal);
-			const data = snapshot(job, TOOL_OUTPUT_BYTES);
-			return { content: [{ type: "text", text: formatSnapshotText(data) }], details: data };
+			if (!job) throw new Error(`Background terminal not found or prefix is ambiguous: ${params.job_id}`);
+			const explicitCursor = params.cursor !== undefined;
+			const cursor = explicitCursor ? params.cursor : job.agentCursor;
+			if (!Number.isInteger(cursor) || cursor < 0) throw new Error("cursor must be a non-negative integer");
+			const waitMs = params.waitMs ?? 0;
+			if (!Number.isInteger(waitMs) || waitMs < 0 || waitMs > MAX_POLL_MS) throw new Error(`waitMs must be an integer between 0 and ${MAX_POLL_MS}`);
+			if (params.wait) await waitForCompletion(job, signal);
+			else await waitForActivity(job, cursor, waitMs, signal);
+			const { read, details } = readDelta(job, cursor, !explicitCursor);
+			return { content: [{ type: "text", text: formatDeltaText(job, read) }], details };
 		},
-		renderCall: (args: any, theme: any) => new Text(`${theme.fg("accent", "•")} Inspecting background job ${theme.fg("accent", args.job_id ?? "")}`, 0, 0),
-		renderResult: (result: any, options: any, theme: any) => {
-			const data = result.details as JobSnapshot | undefined;
-			return data ? jobEntry(data, Boolean(options.expanded), theme) : new Text(theme.fg("error", result?.content?.[0]?.text ?? "Job not found"), 0, 0);
+		renderCall: (args: any, theme: any) => new Text(`${theme.fg("accent", "•")} Reading terminal ${theme.fg("accent", args.job_id ?? "")}`, 0, 0),
+		renderResult: (result: any, _options: any, _theme: any) => new Text(result?.content?.[0]?.text ?? "", 0, 0),
+		renderShell: "self",
+	});
+
+	pi.registerTool({
+		name: "terminal_write",
+		label: "Terminal Write",
+		description: "Write characters to a managed terminal, or poll with empty input. Supports PTY control characters such as \\u0003 for Ctrl+C.",
+		parameters: {
+			type: "object",
+			properties: {
+				job_id: { type: "string", description: "Full terminal ID or an unambiguous prefix" },
+				chars: { type: "string", description: "Characters to write; empty polls without writing", default: "" },
+				"yield-time_ms": { type: "integer", minimum: 0, maximum: MAX_POLL_MS, description: `Wait for output after writing (default ${DEFAULT_POLL_MS} ms)` },
+				close_stdin: { type: "boolean", description: "Close stdin after writing", default: false },
+			},
+			required: ["job_id"],
+		} as any,
+		executionMode: "sequential",
+		async execute(_id: string, params: any, signal?: AbortSignal) {
+			const job = findJob(params.job_id);
+			if (!job) throw new Error(`Background terminal not found or prefix is ambiguous: ${params.job_id}`);
+			const chars = typeof params.chars === "string" ? params.chars : "";
+			const yieldMs = params["yield-time_ms"] ?? DEFAULT_POLL_MS;
+			if (!Number.isInteger(yieldMs) || yieldMs < 0 || yieldMs > MAX_POLL_MS) throw new Error(`yield-time_ms must be an integer between 0 and ${MAX_POLL_MS}`);
+			const cursor = job.agentCursor;
+			if (chars || params.close_stdin) await writeInput(job, chars, Boolean(params.close_stdin));
+			await waitForActivity(job, cursor, yieldMs, signal);
+			const { read, details } = readDelta(job, cursor, true);
+			return { content: [{ type: "text", text: formatDeltaText(job, read) }], details };
 		},
+		renderCall: (args: any, theme: any) => new Text(`${theme.fg("accent", "↳")} ${args.chars ? "Interacting with" : "Waiting for"} terminal ${theme.fg("accent", args.job_id ?? "")}`, 0, 0),
+		renderResult: (result: any) => new Text(result?.content?.[0]?.text ?? "", 0, 0),
 		renderShell: "self",
 	});
 
 	pi.registerTool({
 		name: "job_kill",
 		label: "Stop Job",
-		description: "Stop a managed background job after explicit user confirmation.",
+		description: "Stop one managed terminal after explicit user confirmation.",
 		parameters: {
 			type: "object",
-			properties: { job_id: { type: "string", description: "Full job ID or an unambiguous prefix" } },
+			properties: { job_id: { type: "string", description: "Full terminal ID or an unambiguous prefix" } },
 			required: ["job_id"],
 		} as any,
 		executionMode: "sequential",
 		async execute(_id: string, params: any, _signal: AbortSignal | undefined, _update: any, ctx: any) {
 			const job = findJob(params.job_id);
-			if (!job) throw new Error(`Background job not found or prefix is ambiguous: ${params.job_id}`);
-			if (job.status !== "running") return { content: [{ type: "text", text: `${job.id} is already ${job.status}.` }], details: snapshot(job, TOOL_OUTPUT_BYTES) };
+			if (!job) throw new Error(`Background terminal not found or prefix is ambiguous: ${params.job_id}`);
+			if (!isActive(job)) return { content: [{ type: "text", text: `${job.id} is already ${job.status}.` }], details: snapshot(job, PERSISTED_OUTPUT_BYTES) };
+			if (job.killReason) return { content: [{ type: "text", text: `Stop already requested for background terminal ${job.id}.` }], details: snapshot(job, PERSISTED_OUTPUT_BYTES) };
 			if (!(await confirmKill(job, ctx))) throw new Error(`Did not stop ${job.id}; user confirmation was not granted.`);
-			const requested = requestKill(job, "user");
-			const text = requested
-				? `Sent SIGTERM to background job ${job.id}.`
-				: `Stop already requested for background job ${job.id}.`;
-			return { content: [{ type: "text", text }], details: snapshot(job, TOOL_OUTPUT_BYTES) };
+			requestKill(job, "user");
+			return { content: [{ type: "text", text: `Sent SIGTERM to background terminal ${job.id}.` }], details: snapshot(job, PERSISTED_OUTPUT_BYTES) };
 		},
-		renderCall: (args: any, theme: any) => new Text(`${theme.fg("warning", "■")} Requesting stop for ${args.job_id ?? "job"}`, 0, 0),
+		renderCall: (args: any, theme: any) => new Text(`${theme.fg("warning", "■")} Requesting stop for ${args.job_id ?? "terminal"}`, 0, 0),
 		renderResult: (result: any, _options: any, theme: any, context: any) => new Text(context?.isError ? theme.fg("warning", result?.content?.[0]?.text ?? "") : result?.content?.[0]?.text ?? "", 0, 0),
 		renderShell: "self",
 	});
 
+	const handleJobsCommand = async (args: string, ctx: any) => {
+		const [action, id] = args.trim().split(/\s+/, 2);
+		if (action === "output" && id) {
+			const job = findJob(id);
+			if (!job) { ctx.ui.notify(`Terminal not found or prefix ambiguous: ${id}`, "warning"); return; }
+			await showOutput(job, ctx);
+			return;
+		}
+		if ((action === "stop" || action === "kill") && id === "all") {
+			const active = activeJobs().filter((job) => !job.killReason);
+			if (active.length === 0) { ctx.ui.notify("No running background terminals.", "info"); return; }
+			if (!ctx.hasUI || !(await ctx.ui.confirm("Stop all background terminals?", `${active.length} terminal${active.length === 1 ? "" : "s"} will receive SIGTERM, then SIGKILL if needed.`))) return;
+			for (const job of active) requestKill(job, "user");
+			ctx.ui.notify(`Stopping ${active.length} background terminal${active.length === 1 ? "" : "s"}.`, "info");
+			return;
+		}
+		if ((action === "kill" || action === "stop") && id) {
+			const job = findJob(id);
+			if (!job) { ctx.ui.notify(`Terminal not found or prefix ambiguous: ${id}`, "warning"); return; }
+			if (!isActive(job)) { ctx.ui.notify(`${job.id} is already ${job.status}.`, "info"); return; }
+			if (job.killReason) { ctx.ui.notify(`Stop already requested for ${job.id}.`, "info"); return; }
+			if (await confirmKill(job, ctx)) requestKill(job, "user");
+			return;
+		}
+		if (action && action !== "list") {
+			ctx.ui.notify("Usage: /jobs [list|output <id>|stop <id>|stop all]", "warning");
+			return;
+		}
+		const ordered = [...jobs.values()].sort((a, b) => Number(isActive(b)) - Number(isActive(a)) || b.startedAt - a.startedAt);
+		if (ordered.length === 0) { ctx.ui.notify("No background terminals in this session.", "info"); return; }
+		const labels = ordered.map((job) => {
+			const latest = plainPreview(job.output.latestLine(), 64);
+			return `${statusSymbol(job.status)} ${job.description} · ${job.id} · ${job.status} · ${compactDuration(duration(job))}${latest ? ` · ↳ ${latest}` : ""}`;
+		});
+		const selected = await ctx.ui.select(`Background terminals (${activeJobs().length} running)`, labels);
+		if (!selected) return;
+		const job = ordered[labels.indexOf(selected)];
+		if (!job) return;
+		const choices = isActive(job) ? ["View full output", "Stop terminal", "Cancel"] : ["View full output", "Cancel"];
+		const choice = await ctx.ui.select(`${job.id}\n${job.command}`, choices);
+		if (choice === "View full output") await showOutput(job, ctx);
+		else if (choice === "Stop terminal" && !job.killReason && await confirmKill(job, ctx)) requestKill(job, "user");
+	};
+
 	pi.registerCommand("jobs", {
-		description: "List, inspect, or stop managed background shell jobs",
-		handler: async (args, ctx) => {
-			const [action, id] = args.trim().split(/\s+/, 2);
-			if (action === "output" && id) {
-				const job = findJob(id);
-				if (!job) { ctx.ui.notify(`Job not found or prefix ambiguous: ${id}`, "warning"); return; }
-				await showOutput(job, ctx);
-				return;
-			}
-			if ((action === "kill" || action === "stop") && id) {
-				const job = findJob(id);
-				if (!job) { ctx.ui.notify(`Job not found or prefix ambiguous: ${id}`, "warning"); return; }
-				if (job.status !== "running") { ctx.ui.notify(`${job.id} is already ${job.status}.`, "info"); return; }
-				if (await confirmKill(job, ctx)) requestKill(job, "user");
-				return;
-			}
-			if (action && action !== "list") {
-				ctx.ui.notify("Usage: /jobs [list|output <id>|kill <id>]", "warning");
-				return;
-			}
-			const ordered = [...jobs.values()].sort((a, b) => Number(b.status === "running") - Number(a.status === "running") || b.startedAt - a.startedAt);
-			if (ordered.length === 0) { ctx.ui.notify("No background jobs in this session.", "info"); return; }
-			const labels = ordered.map((job) => `${statusSymbol(job.status)} ${job.id} · ${job.status} · ${compactDuration(duration(job))} · ${compactCommand(job.command, 72)}`);
-			const selected = await ctx.ui.select(`Background jobs (${runningJobs().length} running)`, labels);
-			if (!selected) return;
-			const job = ordered[labels.indexOf(selected)];
-			if (!job) return;
-			const choice = await ctx.ui.select(`${job.id}\n${job.command}`, job.status === "running" ? ["View output", "Stop job", "Cancel"] : ["View output", "Cancel"]);
-			if (choice === "View output") await showOutput(job, ctx);
-			else if (choice === "Stop job" && await confirmKill(job, ctx)) requestKill(job, "user");
-		},
+		description: "List, inspect, or stop managed background terminals",
+		handler: handleJobsCommand,
+	});
+	pi.registerCommand("ps", {
+		description: "Alias for /jobs: list managed background terminals",
+		handler: handleJobsCommand,
 	});
 
 	pi.on("session_start", (_event, ctx) => {
@@ -553,23 +853,22 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		for (const entry of ctx.sessionManager.getEntries()) {
 			if (entry.type !== "custom" || entry.customType !== ENTRY_TYPE || !entry.data) continue;
 			const data = entry.data as JobSnapshot;
-			if (data.status === "running") continue;
+			if (data.status === "running" || data.status === "stopping") continue;
 			jobs.set(data.id, restoredJob(data, sessionGeneration));
 		}
 		trimRetained();
+		updateStatus();
 	});
 
 	pi.on("session_shutdown", async () => {
 		sessionGeneration += 1;
-		const stopping = runningJobs();
+		const stopping = activeJobs();
 		for (const job of stopping) {
 			job.suppressPersistence = true;
 			requestKill(job, "shutdown");
 		}
-		// Pi exits after shutdown handlers resolve. Waiting here keeps the process
-		// alive long enough for SIGKILL escalation instead of orphaning jobs that
-		// ignore SIGTERM.
 		await Promise.all(stopping.map((job) => job.completion));
+		activeCtx?.ui.setStatus(STATUS_KEY, undefined);
 		jobs.clear();
 		activeCtx = undefined;
 	});
