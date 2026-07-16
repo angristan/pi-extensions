@@ -19,11 +19,11 @@ class StatsRow implements Component {
 		private readonly theme: any,
 	) {}
 	render(width: number): string[] {
-		// Render the stats line first through Text so margins/wrapping match the
-		// rest of the transcript; size the rule to the visible content width so it
-		// ends right where the stats text does, not all the way across the screen.
+		// Render the stats line through Text so margins/wrapping match the rest
+		// of the transcript. Size the rule to the stats text's own visible width
+		// (Text pads lines to full screen width, so measure the raw string).
 		const statsLines = new Text(this.stats, 1, 0).render(width);
-		const statsWidth = Math.min(width, Math.max(0, ...statsLines.map(visibleWidth)));
+		const statsWidth = Math.min(width, Math.max(0, visibleWidth(this.stats)));
 		const rule = this.theme.fg("borderMuted", "─".repeat(statsWidth));
 		return [rule, ...statsLines];
 	}
