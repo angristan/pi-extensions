@@ -481,7 +481,7 @@ export default function (pi: ExtensionAPI) {
 		overlayHost?.setModalHidden(modalOwners.size > 0);
 	});
 
-	pi.on("session_start", (_event, ctx) => {
+	const restoreState = (ctx: any) => {
 		activeCtx = ctx;
 		clearOverlay(ctx);
 		state = { items: [] };
@@ -496,7 +496,10 @@ export default function (pi: ExtensionAPI) {
 		if (restored) state = restored;
 		pi.events.emit("goal:request", undefined);
 		updateUi(ctx);
-	});
+	};
+
+	pi.on("session_start", (_event, ctx) => restoreState(ctx));
+	pi.on("session_tree", (_event, ctx) => restoreState(ctx));
 	pi.on("session_shutdown", (_event, ctx) => {
 		clearOverlay(ctx);
 		ctx.ui.setStatus("plan", undefined);

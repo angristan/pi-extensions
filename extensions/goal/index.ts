@@ -191,10 +191,13 @@ export default function (pi: ExtensionAPI) {
 	let state: GoalState | undefined;
 	let activeCtx: any;
 
+	const branchEntries = (ctx: any): readonly any[] => typeof ctx.sessionManager.getBranch === "function"
+		? ctx.sessionManager.getBranch()
+		: ctx.sessionManager.getEntries();
 	const persist = () => pi.appendEntry(ENTRY_TYPE, state ? { state } satisfies PersistedGoalEntry : { cleared: true } satisfies PersistedGoalEntry);
 	const emit = (ctx: any) => {
 		activeCtx = ctx;
-		const displayed = state ? displayState(state, ctx.sessionManager.getEntries()) : undefined;
+		const displayed = state ? displayState(state, branchEntries(ctx)) : undefined;
 		pi.events.emit(EVENT_NAME, displayed);
 		if (!displayed || displayed.status === "complete") {
 			ctx.ui.setStatus("goal", undefined);
@@ -243,7 +246,7 @@ export default function (pi: ExtensionAPI) {
 				updatedAt: now,
 				activeSince: now,
 				accumulatedActiveMs: 0,
-				baselinePromptTokens: promptTokens(ctx.sessionManager.getEntries()),
+				baselinePromptTokens: promptTokens(branchEntries(ctx)),
 			};
 		}
 		saveAndEmit(ctx);
@@ -254,7 +257,7 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.notify("No session goal. Use /goal set <objective> or /goal edit.", "info");
 			return;
 		}
-		const displayed = displayState(state, ctx.sessionManager.getEntries());
+		const displayed = displayState(state, branchEntries(ctx));
 		if (ctx.mode !== "tui") {
 			ctx.ui.notify(`${displayed.status}: ${displayed.objective}`, "info");
 			return;
@@ -287,7 +290,7 @@ export default function (pi: ExtensionAPI) {
 							updatedAt: now,
 							activeSince: now,
 							accumulatedActiveMs: 0,
-							baselinePromptTokens: promptTokens(ctx.sessionManager.getEntries()),
+							baselinePromptTokens: promptTokens(branchEntries(ctx)),
 						};
 						saveAndEmit(ctx);
 						ctx.ui.notify("Session goal set.", "info");
@@ -326,16 +329,21 @@ export default function (pi: ExtensionAPI) {
 		return { systemPrompt: `${event.systemPrompt}\n\n${buildGoalContext(state)}` };
 	});
 
-	pi.on("session_start", (_event, ctx) => {
+	const restoreState = (ctx: any) => {
 		activeCtx = ctx;
 		state = undefined;
-		for (const entry of ctx.sessionManager.getEntries()) {
+		for (const entry of branchEntries(ctx)) {
 			if (entry.type !== "custom" || entry.customType !== ENTRY_TYPE) continue;
 			const data = entry.data as PersistedGoalEntry | undefined;
-			state = data?.cleared ? undefined : data?.state;
+			state = data?.cleared || !data?.state
+				? undefined
+				: { ...data.state, validation: [...(data.state.validation ?? [])] };
 		}
 		emit(ctx);
-	});
+	};
+
+	pi.on("session_start", (_event, ctx) => restoreState(ctx));
+	pi.on("session_tree", (_event, ctx) => restoreState(ctx));
 	pi.on("agent_settled", (_event, ctx) => emit(ctx));
 	pi.on("session_compact", (_event, ctx) => emit(ctx));
 	pi.on("session_shutdown", (_event, ctx) => {
