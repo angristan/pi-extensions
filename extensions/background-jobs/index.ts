@@ -67,8 +67,11 @@ export class BoundedOutput {
 	text(limitBytes?: number): string {
 		if (limitBytes !== undefined) {
 			if (this.totalBytes === 0) return "";
-			const tail = this.tail.length > 0 ? this.tail : this.head;
-			const bounded = tail.length > limitBytes ? tail.subarray(tail.length - limitBytes) : tail;
+			// Before the retention window is exceeded, head and tail are contiguous.
+			// Combine them so a limit that can hold the complete output does not
+			// unnecessarily discard the head as soon as tail contains one byte.
+			const retained = this.omittedBytes === 0 ? Buffer.concat([this.head, this.tail]) : this.tail;
+			const bounded = retained.length > limitBytes ? retained.subarray(retained.length - limitBytes) : retained;
 			const omitted = Math.max(0, this.totalBytes - bounded.length);
 			return `${omitted > 0 ? `[... ${omitted.toLocaleString()} earlier bytes omitted ...]\n` : ""}${bounded.toString("utf8")}`;
 		}
@@ -274,8 +277,13 @@ function jobEntry(data: JobSnapshot, expanded: boolean, theme: any): Text {
 	return new Text(`${header}\n${command}\n${theme.fg("dim", formatSnapshotText(data))}`, 0, 0);
 }
 
-export default function (pi: ExtensionAPI) {
+interface BackgroundJobsOptions {
+	killGraceMs?: number;
+}
+
+export default function registerBackgroundJobs(pi: ExtensionAPI, options: BackgroundJobsOptions = {}) {
 	const jobs = new Map<string, ManagedJob>();
+	const killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
 	let activeCtx: any;
 	let sessionGeneration = 0;
 
@@ -306,11 +314,12 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 	const requestKill = (job: ManagedJob, reason: ManagedJob["killReason"]) => {
-		if (job.status !== "running") return false;
+		if (job.status !== "running" || job.killReason) return false;
+		// The first stop request owns the terminal status. A timeout followed by a
+		// user or shutdown request must remain timed_out and must not add timers.
 		job.killReason = reason;
 		signalProcessGroup(job, "SIGTERM");
-		job.killTimer = setTimeout(() => signalProcessGroup(job, "SIGKILL"), KILL_GRACE_MS);
-		job.killTimer.unref?.();
+		job.killTimer = setTimeout(() => signalProcessGroup(job, "SIGKILL"), killGraceMs);
 		return true;
 	};
 	const finalize = (job: ManagedJob, code: number | null, signal: NodeJS.Signals | null, spawnError?: Error) => {
@@ -346,8 +355,8 @@ export default function (pi: ExtensionAPI) {
 		const command = params.command.trim();
 		if (!command) throw new Error("Background command must not be empty");
 		const timeoutSeconds = params.timeoutSeconds;
-		if (timeoutSeconds !== undefined && (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0 || timeoutSeconds > MAX_TIMEOUT_SECONDS)) {
-			throw new Error(`timeoutSeconds must be between 1 and ${MAX_TIMEOUT_SECONDS}`);
+		if (timeoutSeconds !== undefined && (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > MAX_TIMEOUT_SECONDS)) {
+			throw new Error(`timeoutSeconds must be an integer between 1 and ${MAX_TIMEOUT_SECONDS}`);
 		}
 		const cwd = resolve(ctx.cwd, params.cwd?.trim() || ".");
 		const description = compactCommand(params.description?.trim() || command, 80);
@@ -411,7 +420,7 @@ export default function (pi: ExtensionAPI) {
 	const confirmKill = async (job: ManagedJob, ctx: any): Promise<boolean> => {
 		if (job.status !== "running") return false;
 		if (!ctx.hasUI && ctx.mode !== "tui") return false;
-		return ctx.ui.confirm("Stop background job?", `${job.id}\n${job.command}\n\nThis sends SIGTERM to the process group, then SIGKILL after ${KILL_GRACE_MS / 1000}s if needed.`);
+		return ctx.ui.confirm("Stop background job?", `${job.id}\n${job.command}\n\nThis sends SIGTERM to the process group, then SIGKILL after ${killGraceMs / 1000}s if needed.`);
 	};
 
 	pi.registerEntryRenderer<JobSnapshot>(ENTRY_TYPE, (entry: any, options: any, theme: any) =>
@@ -427,7 +436,7 @@ export default function (pi: ExtensionAPI) {
 				command: { type: "string", description: "Shell command to run" },
 				description: { type: "string", description: "Short human-readable job name" },
 				cwd: { type: "string", description: "Working directory, relative to the current project unless absolute" },
-				timeoutSeconds: { type: "number", description: `Optional timeout from 1 to ${MAX_TIMEOUT_SECONDS} seconds` },
+				timeoutSeconds: { type: "integer", minimum: 1, maximum: MAX_TIMEOUT_SECONDS, description: `Optional timeout from 1 to ${MAX_TIMEOUT_SECONDS} seconds` },
 				reasoning: { type: "string", description: "Goal or intent behind starting this background job" },
 			},
 			required: ["command", "reasoning"],
@@ -492,8 +501,11 @@ export default function (pi: ExtensionAPI) {
 			if (!job) throw new Error(`Background job not found or prefix is ambiguous: ${params.job_id}`);
 			if (job.status !== "running") return { content: [{ type: "text", text: `${job.id} is already ${job.status}.` }], details: snapshot(job, TOOL_OUTPUT_BYTES) };
 			if (!(await confirmKill(job, ctx))) throw new Error(`Did not stop ${job.id}; user confirmation was not granted.`);
-			requestKill(job, "user");
-			return { content: [{ type: "text", text: `Sent SIGTERM to background job ${job.id}.` }], details: snapshot(job, TOOL_OUTPUT_BYTES) };
+			const requested = requestKill(job, "user");
+			const text = requested
+				? `Sent SIGTERM to background job ${job.id}.`
+				: `Stop already requested for background job ${job.id}.`;
+			return { content: [{ type: "text", text }], details: snapshot(job, TOOL_OUTPUT_BYTES) };
 		},
 		renderCall: (args: any, theme: any) => new Text(`${theme.fg("warning", "■")} Requesting stop for ${args.job_id ?? "job"}`, 0, 0),
 		renderResult: (result: any, _options: any, theme: any, context: any) => new Text(context?.isError ? theme.fg("warning", result?.content?.[0]?.text ?? "") : result?.content?.[0]?.text ?? "", 0, 0),
@@ -547,13 +559,17 @@ export default function (pi: ExtensionAPI) {
 		trimRetained();
 	});
 
-	pi.on("session_shutdown", () => {
+	pi.on("session_shutdown", async () => {
 		sessionGeneration += 1;
-		for (const job of jobs.values()) {
-			if (job.status !== "running") continue;
+		const stopping = runningJobs();
+		for (const job of stopping) {
 			job.suppressPersistence = true;
 			requestKill(job, "shutdown");
 		}
+		// Pi exits after shutdown handlers resolve. Waiting here keeps the process
+		// alive long enough for SIGKILL escalation instead of orphaning jobs that
+		// ignore SIGTERM.
+		await Promise.all(stopping.map((job) => job.completion));
 		jobs.clear();
 		activeCtx = undefined;
 	});
