@@ -2,40 +2,41 @@
  * turn-separator — dim full-width rule between assistant messages that follow
  * tool work, so each step of a multi-step turn is visually separated.
  *
- * Emits a custom (non-LLM) entry rendered as a single full-width dim `─` line
- * (theme's `dim` token), with a centered `─ Worked for Xm ─` label for steps
- * longer than 60s. The separator is appended when a new assistant message
- * starts AND the preceding step performed concrete work (ran a tool) — so
- * conversational-only steps don't accumulate empty rules. This mirrors the
- * transcript separator pattern used by other terminal agents, where the rule
- * is drawn before a streamed assistant message that follows exec/patch/MCP
- * activity.
+ * Emits a custom (non-LLM) entry rendered as a single dim `─` line (theme's
+ * `dim` token), with a `─ Worked for Xm ─` label for steps longer than 60s.
+ * The separator is appended when a new assistant message starts AND the
+ * preceding step performed concrete work (ran a tool). The rendered rule leaves
+ * a tiny right margin because terminals can wrap full-width styled rows into a
+ * stray `──` line.
  */
-import type { Component } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const ENTRY_TYPE = "turn-separator";
-/** Only label steps longer than this (seconds) — short steps get a bare rule. */
+/** Only label steps longer than this (seconds); short steps get a bare rule. */
 const LABEL_THRESHOLD_SECONDS = 60;
 
 interface SeparatorData {
 	elapsedSeconds?: number;
 }
 
-/** A full-width dim `─` rule, optionally with a centered label. */
+/** A dim `─` rule, optionally with a label, with slack to avoid terminal wrap. */
 class RuleLine implements Component {
 	constructor(
 		private readonly dim: (s: string) => string,
 		private readonly label?: string,
 	) {}
 	render(width: number): string[] {
-		const w = Math.max(0, width);
+		// Do not fill the last terminal columns. In some terminals a styled line at
+		// exact width wraps and leaves a stray `──` row, which looked like an empty
+		// turn/separator block.
+		const w = Math.max(0, width - 2);
+		if (w <= 0) return [];
 		if (!this.label) return [this.dim("─".repeat(w))];
-		// `─ <label> ─` left-aligned with a trailing rule filling the rest,
-		// matching the reference rendering.
+
 		const labeled = `─ ${this.label} ─`;
-		const fill = "─".repeat(Math.max(0, w - labeled.length));
-		return [this.dim(`${labeled}${fill}`)];
+		const fill = "─".repeat(Math.max(0, w - visibleWidth(labeled)));
+		return [this.dim(truncateToWidth(`${labeled}${fill}`, w, ""))];
 	}
 	invalidate(): void {}
 }
@@ -50,7 +51,7 @@ function formatElapsed(seconds: number): string {
 }
 
 export default function turnSeparator(pi: ExtensionAPI) {
-	pi.registerEntryRenderer(ENTRY_TYPE, (entry: any, _options: any, theme: any) => {
+	pi.registerEntryRenderer<SeparatorData>(ENTRY_TYPE, (entry: any, _options: any, theme: any) => {
 		const dim = (s: string) =>
 			typeof theme?.fg === "function" ? theme.fg("dim", s) : s;
 		const data = (entry.data ?? {}) as SeparatorData;
@@ -77,7 +78,7 @@ export default function turnSeparator(pi: ExtensionAPI) {
 		// Emit before this assistant message starts, if the prior step did work.
 		if (prevStepDidWork && prevStepStartedAt !== undefined) {
 			const elapsedSeconds = (Date.now() - prevStepStartedAt) / 1000;
-			pi.appendEntry(ENTRY_TYPE, { elapsedSeconds });
+			pi.appendEntry<SeparatorData>(ENTRY_TYPE, { elapsedSeconds });
 		}
 		// Reset for this new step.
 		prevStepDidWork = false;
