@@ -14,13 +14,66 @@ const TRUECOLOR_FG = /\x1b\[38;2;(\d+);(\d+);(\d+)m/;
 /** Regex for an indexed (256-color) foreground ANSI sequence `[38;5;Nm`. */
 const INDEXED_FG = /\x1b\[38;5;(\d+)m/;
 
-/** Blend an RGB triple toward the terminal background by `factor` (0=bg, 1=orig). */
-function blendRgb(rgb: [number, number, number], bg: [number, number, number], factor: number): [number, number, number] {
-	return [
-		Math.round(rgb[0] * factor + bg[0] * (1 - factor)),
-		Math.round(rgb[1] * factor + bg[1] * (1 - factor)),
-		Math.round(rgb[2] * factor + bg[2] * (1 - factor)),
-	] as [number, number, number];
+/** RGB (0-255) → HSL where h is degrees [0,360), s/l are [0,1]. */
+function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
+	r /= 255; g /= 255; b /= 255;
+	const max = Math.max(r, g, b), min = Math.min(r, g, b);
+	let h = 0, s = 0;
+	const l = (max + min) / 2;
+	const d = max - min;
+	if (d !== 0) {
+		s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+		switch (max) {
+			case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+			case g: h = (b - r) / d + 2; break;
+			default: h = (r - g) / d + 4; break;
+		}
+		h *= 60;
+	}
+	return [h, s, l];
+}
+
+/** HSL → RGB (0-255). h in degrees, s/l in [0,1]. */
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+	h /= 360;
+	const hue = (p: number, q: number, t: number) => {
+		if (t < 0) t += 1;
+		if (t > 1) t -= 1;
+		if (t < 1 / 6) return p + (q - p) * 6 * t;
+		if (t < 1 / 2) return q;
+		if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+		return p;
+	};
+	const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+	const p = 2 * l - q;
+	return [Math.round(hue(p, q, h + 1 / 3) * 255), Math.round(hue(p, q, h) * 255), Math.round(hue(p, q, h - 1 / 3) * 255)];
+}
+
+/**
+ * Reduce a color's lightness by `factor` toward the theme-appropriate end:
+ * darker on dark themes (colored command text recedes against a dark bg),
+ * lighter on light themes. Preserves hue + saturation so the color keeps its
+ * identity (keyword still blue, string still green) — just less prominent.
+ */
+function shadeRgb(rgb: [number, number, number], factor: number, lighten: boolean): [number, number, number] {
+	const [h, s, l] = rgbToHsl(...rgb);
+	const target = lighten ? 1 : 0;
+	return hslToRgb(h, s, l + (target - l) * factor);
+}
+
+/** Dim an original ANSI foreground by shifting its lightness. */
+function dimAnsiFg(ansi: string, factor: number, lighten: boolean): string {
+	const tc = ansi.match(TRUECOLOR_FG);
+	if (tc) {
+		const dim = shadeRgb([Number(tc[1]), Number(tc[2]), Number(tc[3])], factor, lighten);
+		return `\x1b[38;2;${dim[0]};${dim[1]};${dim[2]}m`;
+	}
+	const idx = ansi.match(INDEXED_FG);
+	if (idx) {
+		const dim = shadeRgb(xterm256ToRgb(Number(idx[1])), factor, lighten);
+		return `\x1b[38;2;${dim[0]};${dim[1]};${dim[2]}m`;
+	}
+	return ansi;
 }
 
 /** xterm 256-color index → approximate RGB, matching the standard cube ramp. */
@@ -46,38 +99,22 @@ function xterm256ToRgb(index: number): [number, number, number] {
 }
 
 /**
- * Return a dimmed ANSI string for a given original ANSI foreground, blending
- * its color toward `bg` by `factor` (0=fully bg, 1=original). Passes through
- * unchanged if the original isn't a recognizable foreground color sequence.
- */
-function dimAnsiFg(ansi: string, bg: [number, number, number], factor: number): string {
-	const tc = ansi.match(TRUECOLOR_FG);
-	if (tc) {
-		const dim = blendRgb([Number(tc[1]), Number(tc[2]), Number(tc[3])], bg, factor);
-		return `\x1b[38;2;${dim[0]};${dim[1]};${dim[2]}m`;
-	}
-	const idx = ansi.match(INDEXED_FG);
-	if (idx) {
-		const dim = blendRgb(xterm256ToRgb(Number(idx[1])), bg, factor);
-		return `\x1b[38;2;${dim[0]};${dim[1]};${dim[2]}m`;
-	}
-	return ansi;
-}
-
-/**
  * Wrap a theme so every `fg(color, text)` call renders in a dimmer shade of
- * the original color, blended toward the terminal background. Unlike the ANSI
- * `DIM` attribute (which is lost when a line is re-wrapped/re-split), this
- * bakes a dimmer truecolor into each token, so dimming survives wrapping and
- * preserves the syntax color identity. Pass `factor≈0.7` for a gentle dim.
+ * the original color (lightness shifted toward black on dark themes, toward
+ * white on light themes). Unlike the ANSI `DIM` attribute (lost when a line
+ * is re-wrapped), this bakes a dimmer truecolor into each token, so dimming
+ * survives wrapping and preserves the syntax color identity. `factor≈0.45`
+ * shifts lightness ~halfway toward the bg end.
  */
-export function dimTheme(theme: any, factor = 0.7, bg: [number, number, number] = [30, 30, 40]): any {
+export function dimTheme(theme: any, factor = 0.45): any {
 	if (!theme || typeof theme.fg !== "function" || typeof theme.getFgAnsi !== "function") return theme;
+	const mode = typeof theme.getColorMode === "function" ? theme.getColorMode() : "dark";
+	const lighten = mode === "light";
 	return {
 		...theme,
 		fg: (color: string, text: string) => {
 			const original = theme.getFgAnsi(color);
-			const dim = dimAnsiFg(original, bg, factor);
+			const dim = dimAnsiFg(original, factor, lighten);
 			return `${dim}${text}\x1b[39m`;
 		},
 	};
