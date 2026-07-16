@@ -9,6 +9,80 @@
 
 import { CYAN, GREEN, MAGENTA, RESET } from "./render.js";
 
+/** Regex for a truecolor foreground ANSI sequence `[38;2;R;G;Bm`. */
+const TRUECOLOR_FG = /\x1b\[38;2;(\d+);(\d+);(\d+)m/;
+/** Regex for an indexed (256-color) foreground ANSI sequence `[38;5;Nm`. */
+const INDEXED_FG = /\x1b\[38;5;(\d+)m/;
+
+/** Blend an RGB triple toward the terminal background by `factor` (0=bg, 1=orig). */
+function blendRgb(rgb: [number, number, number], bg: [number, number, number], factor: number): [number, number, number] {
+	return [
+		Math.round(rgb[0] * factor + bg[0] * (1 - factor)),
+		Math.round(rgb[1] * factor + bg[1] * (1 - factor)),
+		Math.round(rgb[2] * factor + bg[2] * (1 - factor)),
+	] as [number, number, number];
+}
+
+/** xterm 256-color index → approximate RGB, matching the standard cube ramp. */
+function xterm256ToRgb(index: number): [number, number, number] {
+	if (index < 16) {
+		// Basic 16: map to the dark-theme's VGA-ish approximations (good enough
+		// for blending toward bg — we only need a rough dim, not exact color).
+		const basic: Array<[number, number, number]> = [
+			[0, 0, 0], [128, 0, 0], [0, 128, 0], [128, 128, 0],
+			[0, 0, 128], [128, 0, 128], [0, 128, 128], [192, 192, 192],
+			[128, 128, 128], [255, 0, 0], [0, 255, 0], [255, 255, 0],
+			[0, 0, 255], [255, 0, 255], [0, 255, 255], [255, 255, 255],
+		];
+		return basic[index] ?? [255, 255, 255];
+	}
+	if (index >= 232) {
+		const gray = 8 + (index - 232) * 10;
+		return [gray, gray, gray];
+	}
+	const cube = index - 16;
+	const levels = [0, 95, 135, 175, 215, 255];
+		return [levels[Math.floor(cube / 36)], levels[Math.floor(cube / 6) % 6], levels[cube % 6]];
+}
+
+/**
+ * Return a dimmed ANSI string for a given original ANSI foreground, blending
+ * its color toward `bg` by `factor` (0=fully bg, 1=original). Passes through
+ * unchanged if the original isn't a recognizable foreground color sequence.
+ */
+function dimAnsiFg(ansi: string, bg: [number, number, number], factor: number): string {
+	const tc = ansi.match(TRUECOLOR_FG);
+	if (tc) {
+		const dim = blendRgb([Number(tc[1]), Number(tc[2]), Number(tc[3])], bg, factor);
+		return `\x1b[38;2;${dim[0]};${dim[1]};${dim[2]}m`;
+	}
+	const idx = ansi.match(INDEXED_FG);
+	if (idx) {
+		const dim = blendRgb(xterm256ToRgb(Number(idx[1])), bg, factor);
+		return `\x1b[38;2;${dim[0]};${dim[1]};${dim[2]}m`;
+	}
+	return ansi;
+}
+
+/**
+ * Wrap a theme so every `fg(color, text)` call renders in a dimmer shade of
+ * the original color, blended toward the terminal background. Unlike the ANSI
+ * `DIM` attribute (which is lost when a line is re-wrapped/re-split), this
+ * bakes a dimmer truecolor into each token, so dimming survives wrapping and
+ * preserves the syntax color identity. Pass `factor≈0.7` for a gentle dim.
+ */
+export function dimTheme(theme: any, factor = 0.7, bg: [number, number, number] = [30, 30, 40]): any {
+	if (!theme || typeof theme.fg !== "function" || typeof theme.getFgAnsi !== "function") return theme;
+	return {
+		...theme,
+		fg: (color: string, text: string) => {
+			const original = theme.getFgAnsi(color);
+			const dim = dimAnsiFg(original, bg, factor);
+			return `${dim}${text}\x1b[39m`;
+		},
+	};
+}
+
 type ShellSyntaxColor =
 	| "syntaxComment"
 	| "syntaxKeyword"
