@@ -28,6 +28,9 @@ export function buildHeartbeatArgs(
 		"ai coding",
 		"--plugin",
 		`pi/${piVersion} pi-wakatime/${EXTENSION_VERSION}`,
+		"--sync-ai-disabled",
+		"--timeout",
+		"10",
 		"--project-folder",
 		heartbeat.projectFolder,
 	];
