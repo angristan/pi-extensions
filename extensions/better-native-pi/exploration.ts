@@ -1,12 +1,24 @@
+import { basename, dirname } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Container, sliceByColumn, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { Container, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import { shortPath } from "./render.js";
 
 export const EXPLORATION_DETAILS_KEY = "__pi_exploration";
 const REGISTRY_KEY = Symbol.for("pi.exploration.registry.v2");
+const TURN_SEPARATOR_ENTRY_TYPE = "turn-separator";
 const EXPLORATION_TOOLS = new Set(["read", "ls", "grep", "find"]);
 
 export interface Activity {
 	verb: "Read" | "List" | "Search";
+	detail: string;
+	/** Raw path for structured read coalescing; detail stays as fallback text. */
+	path?: string;
+	/** Human range label, e.g. "lines 10-40", for chunked reads. */
+	range?: string;
+}
+
+interface DisplayActivity {
+	verb: Activity["verb"];
 	detail: string;
 }
 
@@ -88,66 +100,145 @@ function strippedArgs(args: any): any {
 	return rest;
 }
 
+function readRangeLabel(args: any): string | undefined {
+	const offset = Number.isInteger(args.offset) ? args.offset : undefined;
+	const limit = Number.isInteger(args.limit) ? args.limit : undefined;
+	if (offset !== undefined && limit !== undefined) return `lines ${offset}-${offset + limit - 1}`;
+	if (offset !== undefined) return `from line ${offset}`;
+	if (limit !== undefined) return `first ${limit} lines`;
+	return undefined;
+}
+
+function readActivity(args: any): Activity {
+	const path = String(args.path);
+	const range = readRangeLabel(args);
+	return {
+		verb: "Read",
+		detail: range ? `${path} · ${range}` : path,
+		path,
+		range,
+	};
+}
+
 export function explorationActivity(toolName: string, rawArgs: any): Activity | undefined {
 	const args = strippedArgs(rawArgs);
-	if (toolName === "read" && typeof args.path === "string") {
-		return { verb: "Read", detail: args.path };
-	}
+	if (toolName === "read" && typeof args.path === "string") return readActivity(args);
 	if (toolName === "ls") {
-		return { verb: "List", detail: typeof args.path === "string" ? args.path : "." };
+		return { verb: "List", detail: typeof args.path === "string" ? shortPath(args.path) : "." };
 	}
 	if ((toolName === "grep" || toolName === "find") && typeof args.pattern === "string") {
 		return {
 			verb: "Search",
-			detail: typeof args.path === "string" ? `${args.pattern} in ${args.path}` : args.pattern,
+			detail: typeof args.path === "string" ? `${args.pattern} in ${shortPath(args.path)}` : args.pattern,
 		};
 	}
 	return undefined;
 }
 
 function wrapDetail(text: string, width: number): string[] {
-	const maxWidth = Math.max(1, width);
-	const rows: string[] = [];
-	let remaining = text.trim();
-	while (visibleWidth(remaining) > maxWidth) {
-		const window = sliceByColumn(remaining, 0, maxWidth);
-		const whitespace = Math.max(window.lastIndexOf(" "), window.lastIndexOf("\t"));
-		const slash = window.lastIndexOf("/");
-		const comma = window.lastIndexOf(",");
-		let split = Math.max(whitespace, slash, comma >= 0 ? comma + 1 : -1);
-		if (split <= 0) split = window.length;
-		const row = remaining.slice(0, split).trimEnd();
-		rows.push(row || window);
-		remaining = remaining.slice(split);
-		if (/^[\s,]/.test(remaining)) remaining = remaining.replace(/^\s+/, "");
-	}
-	rows.push(remaining);
-	return rows;
+	return wrapTextWithAnsi(text.trim(), Math.max(1, width));
 }
 
-function coalescedActivities(activities: readonly Activity[]): Activity[] {
-	const grouped: Activity[] = [];
+function compactRangeList(ranges: readonly string[]): string | undefined {
+	const unique = [...new Set(ranges.filter(Boolean))];
+	if (unique.length === 0) return undefined;
+	const linePrefix = "lines ";
+	if (unique.every((range) => range.startsWith(linePrefix))) {
+		return `${linePrefix}${unique.map((range) => range.slice(linePrefix.length)).join(", ")}`;
+	}
+	return unique.join(", ");
+}
+
+function readPathDisplay(path: string): string {
+	const file = basename(path);
+	const directory = dirname(path);
+	if (!directory || directory === ".") return file;
+	const displayDirectory = shortPath(directory);
+	const suffix = displayDirectory.endsWith("/") ? "" : "/";
+	return `${file} in ${displayDirectory}${suffix}`;
+}
+
+function appendReadRun(grouped: DisplayActivity[], reads: readonly Activity[]): void {
+	const byPath = new Map<string, { path: string; ranges: string[]; wholeFile: boolean }>();
+	for (const read of reads) {
+		const path = read.path ?? read.detail;
+		let item = byPath.get(path);
+		if (!item) {
+			item = { path, ranges: [], wholeFile: false };
+			byPath.set(path, item);
+		}
+		if (read.range) item.ranges.push(read.range);
+		else item.wholeFile = true;
+	}
+
+	for (const item of byPath.values()) {
+		const ranges = compactRangeList(item.ranges);
+		const suffix = item.wholeFile
+			? (ranges ? ` · whole file, ${ranges}` : "")
+			: (ranges ? ` · ${ranges}` : "");
+		grouped.push({ verb: "Read", detail: `${readPathDisplay(item.path)}${suffix}` });
+	}
+}
+
+function displayDetail(activity: Activity): string {
+	if (activity.verb === "List") return activity.detail === "." ? "." : shortPath(activity.detail);
+	if (activity.verb !== "Search") return activity.detail;
+	const separator = " in ";
+	const index = activity.detail.lastIndexOf(separator);
+	if (index < 0) return activity.detail;
+	return `${activity.detail.slice(0, index)}${separator}${shortPath(activity.detail.slice(index + separator.length))}`;
+}
+
+function coalescedActivities(activities: readonly Activity[]): DisplayActivity[] {
+	const grouped: DisplayActivity[] = [];
 	for (let index = 0; index < activities.length;) {
 		const current = activities[index];
 		if (current.verb !== "Read") {
-			grouped.push({ ...current });
+			grouped.push({ verb: current.verb, detail: displayDetail(current) });
 			index += 1;
 			continue;
 		}
 
-		const details: string[] = [];
-		const seen = new Set<string>();
+		const reads: Activity[] = [];
 		while (index < activities.length && activities[index].verb === "Read") {
-			const detail = activities[index].detail;
-			if (!seen.has(detail)) {
-				seen.add(detail);
-				details.push(detail);
-			}
+			reads.push(activities[index]);
 			index += 1;
 		}
-		grouped.push({ verb: "Read", detail: details.join(", ") });
+		appendReadRun(grouped, reads);
 	}
 	return grouped;
+}
+
+function dim(theme: any, text: string): string {
+	return typeof theme?.fg === "function" ? theme.fg("dim", text) : text;
+}
+
+function accent(theme: any, text: string): string {
+	return typeof theme?.fg === "function" ? theme.fg("accent", text) : text;
+}
+
+function styledReadDetail(detail: string, theme: any): string {
+	const rangeSeparator = " · ";
+	const rangeIndex = detail.indexOf(rangeSeparator);
+	const location = rangeIndex < 0 ? detail : detail.slice(0, rangeIndex);
+	const range = rangeIndex < 0 ? "" : detail.slice(rangeIndex);
+	const inSeparator = " in ";
+	const inIndex = location.lastIndexOf(inSeparator);
+	const styledLocation = inIndex < 0
+		? location
+		: `${location.slice(0, inIndex)}${dim(theme, inSeparator)}${location.slice(inIndex + inSeparator.length)}`;
+	return `${styledLocation}${range ? dim(theme, range) : ""}`;
+}
+
+function styledDetail(item: DisplayActivity, theme: any): string {
+	if (item.verb === "Read") return styledReadDetail(item.detail, theme);
+	if (item.verb === "Search") {
+		const separator = " in ";
+		const index = item.detail.lastIndexOf(separator);
+		if (index < 0) return item.detail;
+		return `${item.detail.slice(0, index)}${dim(theme, separator)}${item.detail.slice(index + separator.length)}`;
+	}
+	return item.detail;
 }
 
 export function renderExploration(
@@ -157,18 +248,21 @@ export function renderExploration(
 	width: number,
 ): string[] {
 	const maxWidth = Math.max(1, width);
-	const bullet = theme.fg(active ? "accent" : "dim", "•");
+	const styleHeading = active ? (text: string) => accent(theme, text) : (text: string) => text;
+	const bullet = styleHeading("•");
 	const title = active ? "Exploring" : "Explored";
-	const lines = [truncateToWidth(`${bullet} ${theme.bold(title)}`, maxWidth, "…")];
+	const lines = [truncateToWidth(`${bullet} ${styleHeading(theme.bold(title))}`, maxWidth, "…")];
 	const grouped = coalescedActivities(activities);
 
 	grouped.forEach((item, index) => {
-		const treePrefix = index === 0 ? "  └ " : "    ";
-		const verb = theme.fg("accent", item.verb);
-		const firstPrefix = `${treePrefix}${verb} `;
-		const continuationPrefix = " ".repeat(visibleWidth(firstPrefix));
+		const isLast = index === grouped.length - 1;
+		const connector = isLast ? "└" : "├";
+		const gutter = isLast ? "    " : "  │ ";
+		const verb = accent(theme, item.verb);
+		const firstPrefix = `${dim(theme, `  ${connector} `)}${verb} `;
+		const continuationPrefix = `${dim(theme, gutter)}${" ".repeat(visibleWidth(`${item.verb} `))}`;
 		const detailWidth = Math.max(1, maxWidth - visibleWidth(firstPrefix));
-		const detailRows = wrapDetail(item.detail, detailWidth);
+		const detailRows = wrapDetail(styledDetail(item, theme), detailWidth);
 		for (const [rowIndex, row] of detailRows.entries()) {
 			const prefix = rowIndex === 0 ? firstPrefix : continuationPrefix;
 			lines.push(truncateToWidth(`${prefix}${row}`, maxWidth, "…"));
@@ -373,15 +467,12 @@ function upsertPersistedMarker(marker: ExplorationMarker): ExplorationGroup {
 	return group;
 }
 
-function hasVisibleAssistantContent(entry: any): boolean {
-	if (entry?.type !== "message" || entry.message?.role !== "assistant") return false;
-	const content = entry.message?.content;
-	return Array.isArray(content)
-		&& content.some((item: any) => {
-			if (item?.type === "text" && typeof item.text === "string") return item.text.trim();
-			if (item?.type === "thinking" && typeof item.thinking === "string") return item.thinking.trim();
-			return false;
-		});
+function isAssistantMessageEntry(entry: any): boolean {
+	return entry?.type === "message" && entry.message?.role === "assistant";
+}
+
+function isTurnSeparatorEntry(entry: any): boolean {
+	return entry?.type === "custom" && entry.customType === TURN_SEPARATOR_ENTRY_TYPE;
 }
 
 function isNonEmptyThinkingDelta(event: any): boolean {
@@ -392,9 +483,9 @@ function isNonEmptyThinkingDelta(event: any): boolean {
 
 function restorePersistedGroups(entries: readonly any[]): void {
 	clearRegistry(true);
-	// Rebuild contiguous exploration stretches into one canonical group while
-	// preserving ordering inside each stored group. Visible assistant content,
-	// including non-empty reasoning/thinking, remains a hard boundary.
+	// Rebuild contiguous exploration calls within each assistant step. Tool-only
+	// assistant messages still get a turn separator, so grouping across assistant
+	// entries makes later calls render as empty followers below stacked separators.
 	let currentCanonicalGroup: ExplorationGroup | undefined;
 	let nextCanonicalIndex = 0;
 	const offsetsByStoredGroup = new Map<string, number>();
@@ -405,7 +496,7 @@ function restorePersistedGroups(entries: readonly any[]): void {
 	};
 
 	for (const entry of entries) {
-		if (hasVisibleAssistantContent(entry)) {
+		if (isAssistantMessageEntry(entry) || isTurnSeparatorEntry(entry)) {
 			closeRestoredGroup();
 			continue;
 		}
@@ -420,8 +511,16 @@ function restorePersistedGroups(entries: readonly any[]): void {
 		}
 
 		if (!currentCanonicalGroup) {
-			const firstMarker = { ...marker, index: 0, leaderId: marker.toolCallId };
-			currentCanonicalGroup = upsertPersistedMarker(firstMarker);
+			// Use a restore-local canonical id instead of marker.groupId. Older
+			// sessions may have persisted one group id across multiple assistant
+			// steps; after a boundary split, reusing that id would rejoin them.
+			const canonicalGroup = createGroup(false, undefined, marker.toolCallId);
+			currentCanonicalGroup = upsertPersistedMarker({
+				...marker,
+				groupId: canonicalGroup.id,
+				index: 0,
+				leaderId: marker.toolCallId,
+			});
 			nextCanonicalIndex = 1;
 			offsetsByStoredGroup.set(marker.groupId, 0 - marker.index);
 			continue;
@@ -504,6 +603,10 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("before_agent_start", () => {
 		closeCurrentGroup();
+	});
+
+	pi.on("message_start", (event: any) => {
+		if (event.message?.role === "assistant") closeCurrentGroup();
 	});
 
 	pi.on("tool_execution_start", (event: any) => {

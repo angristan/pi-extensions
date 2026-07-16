@@ -8,6 +8,7 @@
  * (background-jobs, mistral-web-search) consume.
  */
 
+import { basename, dirname } from "node:path";
 import { Container, visibleWidth, truncateToWidth } from "@earendil-works/pi-tui";
 import { hyperlinkPath } from "../hyperlinks/index.js";
 import {
@@ -53,6 +54,31 @@ export function fitToolLine(line: string, width: number): string {
 	return `${truncateToWidth(head, max - tailWidth - 1, "…")} ${tail}`;
 }
 
+function readRangeSuffix(args: Record<string, unknown>): string {
+	const offset = Number.isInteger(args.offset) ? args.offset as number : undefined;
+	const limit = Number.isInteger(args.limit) ? args.limit as number : undefined;
+	if (offset !== undefined && limit !== undefined) return ` lines ${offset}-${offset + limit - 1}`;
+	if (offset !== undefined) return ` from line ${offset}`;
+	if (limit !== undefined) return ` first ${limit} lines`;
+	return "";
+}
+
+function fg(theme: any, color: string, text: string): string {
+	return typeof theme?.fg === "function" ? theme.fg(color, text) : text;
+}
+
+function editPathParts(path: string, theme?: any): { file: string; location?: string } {
+	const file = hyperlinkPath(`${CYAN}${basename(path)}${RESET}`, path, cwd);
+	const directory = dirname(path);
+	if (!directory || directory === ".") return { file };
+	const displayDirectory = shortPath(directory);
+	const suffix = displayDirectory.endsWith("/") ? "" : "/";
+	return {
+		file,
+		location: `${fg(theme, "dim", "in ")}${hyperlinkPath(`${displayDirectory}${suffix}`, directory, cwd)}`,
+	};
+}
+
 /** Human-readable, one-line call detail; paths use `~` like display paths. */
 function argDetail(name: string, args: Record<string, unknown>, theme?: any): string {
 	if (name === "bash" && typeof args.command === "string") return highlightShellCommand(args.command, theme);
@@ -62,7 +88,10 @@ function argDetail(name: string, args: Record<string, unknown>, theme?: any): st
 			: undefined;
 		return oneLine(path ? `${args.pattern} in ${path}` : String(args.pattern));
 	}
-	if (typeof args.path === "string") return oneLine(hyperlinkPath(shortPath(args.path), args.path, cwd));
+	if (typeof args.path === "string") {
+		const path = hyperlinkPath(shortPath(args.path), args.path, cwd);
+		return oneLine(name === "read" ? `${path}${readRangeSuffix(args)}` : path);
+	}
 	if (typeof args.name === "string") return oneLine(args.name);
 	return "";
 }
@@ -299,15 +328,25 @@ export function buildToolBlock(
 	// command — headline carries both intent and outcome in one glance. Other
 	// tools keep their summary on the branch line where it belongs (real result
 	// detail like "+12 -3" or "3 matches in 2 files").
-	const bashMovesSummary = name === "bash";
-	const headlineSuffix = bashMovesSummary && summary ? ` ${summary}` : "";
-	const metadata = bashMovesSummary
-		? (hasDetail ? detail : "")
-		: (hasDetail ? `${detail} · ${summary}` : summary);
-	const lines: string[] = [
-		`${LEAD}${mark} ${verb}${headlineText ? ` ${headlineText}` : ""}${headlineSuffix}`,
-	];
-	if (metadata) lines.push(`${BRANCH}${metadata}`);
+	const editUsesHeadlinePath = name === "edit" && typeof rest.path === "string";
+	let lines: string[];
+	if (editUsesHeadlinePath) {
+		const path = editPathParts(rest.path as string, theme);
+		const intent = headlineText ? ` ${fg(theme, "dim", "to")} ${headlineText}` : "";
+		const summarySuffix = summary ? ` ${fg(theme, "dim", "·")} ${summary}` : "";
+		lines = [`${LEAD}${mark} ${verb} ${path.file}${intent}${summarySuffix}`];
+		if (path.location) lines.push(`${BRANCH}${path.location}`);
+	} else {
+		const bashMovesSummary = name === "bash";
+		const headlineSuffix = bashMovesSummary && summary ? ` ${summary}` : "";
+		const metadata = bashMovesSummary
+			? (hasDetail ? detail : "")
+			: (hasDetail ? `${detail} · ${summary}` : summary);
+		lines = [
+			`${LEAD}${mark} ${verb}${headlineText ? ` ${headlineText}` : ""}${headlineSuffix}`,
+		];
+		if (metadata) lines.push(`${BRANCH}${metadata}`);
+	}
 	const diff = result?.details?.diff as string | undefined;
 	const showsInlineDiff = !isPartial
 		&& !isError
