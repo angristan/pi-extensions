@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { Text, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 type Status = "pending" | "in_progress" | "completed";
 interface PlanItem { step: string; status: Status }
@@ -17,7 +17,6 @@ const OVERLAY_WIDTH = 58;
 const MAX_EXPLANATION_ROWS = 3;
 const MAX_GOAL_ROWS = 3;
 
-import { accentBorder } from "../accent-color/index.js";
 import { registerOverlayCard } from "../overlay-stack/index.js";
 
 const parameters = {
@@ -202,13 +201,6 @@ function planLines(state: PlanState, theme: any): string[] {
 	return lines;
 }
 
-function boxRow(content: string, width: number): string {
-	const contentWidth = Math.max(0, width - 4);
-	const fitted = truncateToWidth(content, contentWidth, "…");
-	const padding = " ".repeat(Math.max(0, contentWidth - visibleWidth(fitted)));
-	return `${accentBorder("│ ")}${fitted}${padding}${accentBorder(" │")}`;
-}
-
 function boundedWrap(content: string, width: number, maxRows: number, theme: any): string[] {
 	const wrapped = wrapTextWithAnsi(content, Math.max(1, width));
 	if (wrapped.length <= maxRows) return wrapped;
@@ -235,21 +227,14 @@ function itemRows(item: PlanItem, contentWidth: number, theme: any): string[] {
 	return wrapped.map((line, index) => `${index === 0 ? marker : "  "}${line}`);
 }
 
-function renderPlanCard(
+function renderPlanBody(
 	state: PlanState,
 	goal: GoalOverlayState | undefined,
 	theme: any,
 	width: number,
 	maxRows: number,
 ): string[] {
-	const stats = planStats(state.items);
-	const label = goal && goal.status !== "complete"
-		? ` Goal · Plan ${stats.completed}/${state.items.length} `
-		: ` Plan ${stats.completed}/${state.items.length} `;
-	const top = `${accentBorder("╭")}${theme.bold(label)}${accentBorder("─".repeat(Math.max(0, width - visibleWidth(label) - 2)))}${accentBorder("╮")}`;
-	const lines = [top];
-
-	const contentWidth = Math.max(1, width - 4);
+	const contentWidth = Math.max(1, width);
 	const body: string[] = [];
 	if (goal && goal.status !== "complete") {
 		const marker = goal.status === "active"
@@ -277,18 +262,12 @@ function renderPlanCard(
 	for (const item of state.items) body.push(...itemRows(item, contentWidth, theme));
 	if (!state.items.length && !(goal && goal.status !== "complete")) body.push(theme.fg("dim", "No active TODOs"));
 
-	// Keep the border intact when the shared stack allocates fewer rows than the
-	// plan needs. The final body row explains how much content was omitted.
-	const maxBodyRows = Math.max(1, maxRows - 2);
-	const hiddenRows = Math.max(0, body.length - maxBodyRows);
+	const hiddenRows = Math.max(0, body.length - maxRows);
 	const visibleBody = hiddenRows > 0
-		? body.slice(0, Math.max(0, maxBodyRows - 1))
+		? body.slice(0, Math.max(0, maxRows - 1))
 		: body;
 	if (hiddenRows > 0) visibleBody.push(theme.fg("dim", `… ${hiddenRows} more row${hiddenRows === 1 ? "" : "s"}; /plan-status for full list`));
-
-	for (const row of visibleBody) lines.push(boxRow(row, width));
-	lines.push(accentBorder(`╰${"─".repeat(Math.max(0, width - 2))}╯`));
-	return lines.map((line) => truncateToWidth(line, width, ""));
+	return visibleBody.map((line) => truncateToWidth(line, width, ""));
 }
 
 export default function (pi: ExtensionAPI) {
@@ -301,7 +280,7 @@ export default function (pi: ExtensionAPI) {
 		id: "plan-progress",
 		order: 10,
 		width: OVERLAY_WIDTH,
-		minHeight: 3,
+		minBodyHeight: 1,
 		minTerminalWidth: 90,
 		minTerminalHeight: 10,
 		visible: () => {
@@ -309,7 +288,14 @@ export default function (pi: ExtensionAPI) {
 			const activePlan = planOverlayActive && state.items.length > 0 && stats.completed < state.items.length;
 			return activePlan || Boolean(goalState && goalState.status !== "complete");
 		},
-		render: (width, maxHeight, theme) => renderPlanCard(state, goalState, theme, width, maxHeight),
+		title: (theme) => {
+			const stats = planStats(state.items);
+			const label = goalState && goalState.status !== "complete"
+				? ` Goal · Plan ${stats.completed}/${state.items.length} `
+				: ` Plan ${stats.completed}/${state.items.length} `;
+			return theme.bold(label);
+		},
+		renderBody: (width, maxHeight, theme) => renderPlanBody(state, goalState, theme, width, maxHeight),
 	});
 	const persist = () => pi.appendEntry("plan-progress", state);
 	const clearLegacyUi = (ctx: any) => {

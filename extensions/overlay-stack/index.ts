@@ -7,6 +7,7 @@ import {
 	type OverlayOptions,
 	type TUI,
 } from "@earendil-works/pi-tui";
+import { accentBorder } from "../accent-color/index.js";
 
 const HOST_WIDGET_KEY = "overlay-stack-host";
 const OVERLAY_MAX_HEIGHT_RATIO = 0.8;
@@ -15,11 +16,13 @@ export interface OverlayCardDefinition {
 	id: string;
 	order: number;
 	width: number;
-	minHeight: number;
+	minBodyHeight: number;
+	requiredBodyHeight?: () => number;
 	minTerminalWidth?: number;
 	minTerminalHeight?: number;
 	visible: () => boolean;
-	render: (width: number, maxHeight: number, theme: Theme) => string[];
+	title: (theme: Theme) => string;
+	renderBody: (width: number, maxHeight: number, theme: Theme) => string[];
 }
 
 export interface OverlayCardHandle {
@@ -89,6 +92,14 @@ function activeCards(terminalWidth: number, terminalHeight: number): OverlayCard
 		.sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
 }
 
+function minimumBodyHeight(card: OverlayCardDefinition): number {
+	try {
+		return Math.max(card.minBodyHeight, card.requiredBodyHeight?.() ?? 0);
+	} catch {
+		return card.minBodyHeight;
+	}
+}
+
 class OverlayStackComponent implements Component {
 	private terminalWidth = 0;
 	private terminalHeight = 0;
@@ -105,38 +116,74 @@ class OverlayStackComponent implements Component {
 		return Math.max(1, ...visible.map((card) => card.width));
 	}
 
+	private selectedCards(maxRows: number): OverlayCardDefinition[] {
+		const selected: OverlayCardDefinition[] = [];
+		for (const card of activeCards(this.terminalWidth, this.terminalHeight)) {
+			const next = [...selected, card];
+			const shellRows = next.length + 1; // top + section dividers + bottom
+			const minimumBodyRows = next.reduce((total, item) => total + minimumBodyHeight(item), 0);
+			if (shellRows + minimumBodyRows <= maxRows) selected.push(card);
+		}
+		return selected;
+	}
+
 	canRender(): boolean {
 		const maxRows = Math.max(1, Math.floor(this.terminalHeight * OVERLAY_MAX_HEIGHT_RATIO));
-		return activeCards(this.terminalWidth, this.terminalHeight).some((card) => card.minHeight <= maxRows);
+		return this.selectedCards(maxRows).length > 0;
 	}
 
 	render(width: number): string[] {
 		const maxRows = Math.max(1, Math.floor(this.terminalHeight * OVERLAY_MAX_HEIGHT_RATIO));
-		const lines: string[] = [];
+		const selected = this.selectedCards(maxRows);
+		if (selected.length === 0) return [];
 
-		for (const card of activeCards(this.terminalWidth, this.terminalHeight)) {
-			const gapRows = lines.length > 0 ? 1 : 0;
-			const remaining = maxRows - lines.length - gapRows;
-			if (remaining < card.minHeight) continue;
+		const contentWidth = Math.max(1, width - 4);
+		const shellRows = selected.length + 1;
+		let remainingBodyRows = maxRows - shellRows;
+		const sections: Array<{ title: string; body: string[] }> = [];
 
-			const cardWidth = Math.max(1, Math.min(width, card.width));
-			let rendered: string[];
+		for (let index = 0; index < selected.length; index++) {
+			const card = selected[index]!;
+			const reservedForLater = selected
+				.slice(index + 1)
+				.reduce((total, item) => total + minimumBodyHeight(item), 0);
+			const available = remainingBodyRows - reservedForLater;
+			let title: string;
+			let body: string[];
 			try {
-				rendered = card.render(cardWidth, remaining, this.theme);
+				title = card.title(this.theme);
+				body = card.renderBody(contentWidth, available, this.theme);
 			} catch {
 				continue;
 			}
-			if (rendered.length === 0 || rendered.length > remaining) continue;
-
-			if (gapRows) lines.push(" ".repeat(width));
-			const leftPadding = " ".repeat(Math.max(0, width - cardWidth));
-			for (const renderedLine of rendered) {
-				const clipped = truncateToWidth(renderedLine, cardWidth, "");
-				const rightPadding = " ".repeat(Math.max(0, cardWidth - visibleWidth(clipped)));
-				lines.push(`${leftPadding}${clipped}${rightPadding}`);
+			body = body.slice(0, Math.max(0, available));
+			if (body.length < card.minBodyHeight) {
+				body = Array.from({ length: card.minBodyHeight }, (_, row) => body[row] ?? "");
 			}
+			sections.push({ title, body });
+			remainingBodyRows -= body.length;
 		}
 
+		if (sections.length === 0) return [];
+
+		const borderLine = (left: string, right: string, rawTitle: string) => {
+			const title = truncateToWidth(rawTitle, Math.max(1, width - 2), "…");
+			const ruleWidth = Math.max(0, width - visibleWidth(title) - 2);
+			return `${accentBorder(left)}${title}${accentBorder("─".repeat(ruleWidth))}${accentBorder(right)}`;
+		};
+		const contentLine = (content: string) => {
+			const fitted = truncateToWidth(content, contentWidth, "…");
+			const padding = " ".repeat(Math.max(0, contentWidth - visibleWidth(fitted)));
+			return `${accentBorder("│ ")}${fitted}${padding}${accentBorder(" │")}`;
+		};
+
+		const lines: string[] = [];
+		for (let index = 0; index < sections.length; index++) {
+			const section = sections[index]!;
+			lines.push(borderLine(index === 0 ? "╭" : "├", index === 0 ? "╮" : "┤", section.title));
+			for (const bodyLine of section.body) lines.push(contentLine(bodyLine));
+		}
+		lines.push(accentBorder(`╰${"─".repeat(Math.max(0, width - 2))}╯`));
 		return lines;
 	}
 
