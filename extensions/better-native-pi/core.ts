@@ -67,7 +67,7 @@ function fg(theme: any, color: string, text: string): string {
 	return typeof theme?.fg === "function" ? theme.fg(color, text) : text;
 }
 
-function editPathParts(path: string, theme?: any): { file: string; location?: string } {
+function mutationPathParts(path: string, theme?: any): { file: string; location?: string } {
 	const file = hyperlinkPath(`${CYAN}${basename(path)}${RESET}`, path, cwd);
 	const directory = dirname(path);
 	if (!directory || directory === ".") return { file };
@@ -325,13 +325,13 @@ export function buildToolBlock(
 	// than the DIM'd output below — a middle tier between command and output.
 	// bash moves its result summary (✓ 12s / elapsed / ✗ exit N) onto the
 	// headline row after the reasoning, so the branch line becomes just the
-	// command — headline carries both intent and outcome in one glance. Other
-	// tools keep their summary on the branch line where it belongs (real result
-	// detail like "+12 -3" or "3 matches in 2 files").
-	const editUsesHeadlinePath = name === "edit" && typeof rest.path === "string";
+	// command. Mutation tools use a path-first headline and reserve the branch
+	// row for the containing directory. Other tools keep their summary beside
+	// their detail on the branch row.
+	const mutationUsesHeadlinePath = (name === "edit" || name === "write") && typeof rest.path === "string";
 	let lines: string[];
-	if (editUsesHeadlinePath) {
-		const path = editPathParts(rest.path as string, theme);
+	if (mutationUsesHeadlinePath) {
+		const path = mutationPathParts(rest.path as string, theme);
 		const intent = headlineText ? ` ${fg(theme, "dim", "to")} ${headlineText}` : "";
 		const summarySuffix = summary ? ` ${fg(theme, "dim", "·")} ${summary}` : "";
 		lines = [`${LEAD}${mark} ${verb} ${path.file}${intent}${summarySuffix}`];
