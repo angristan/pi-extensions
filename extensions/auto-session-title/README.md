@@ -2,7 +2,11 @@
 
 Generates and maintains short, descriptive titles for your pi sessions.
 
-As soon as the first prompt is accepted, it asks a cheap model to summarize it into a 3-word title-case phrase while the main agent turn runs. After every turn settles—including the first—it re-evaluates the title from the user discussion and reuses the previous title when the topic hasn't drifted.
+As soon as the first prompt is accepted, it asks a cheap model to summarize it
+into a 3-word title-case phrase while the main agent turn runs. After every turn
+settles—including the first—it re-evaluates the title from the user discussion.
+Sustained recent work can narrow a broad earlier title, while brief asides keep
+the existing title.
 
 ```
 before:  untitled

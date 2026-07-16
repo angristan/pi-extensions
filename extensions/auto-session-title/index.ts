@@ -66,10 +66,16 @@ Do not use quotes, markdown, prefixes, commentary, or sentence-ending punctuatio
 Mention the main codebase, product, or feature when useful.
 Do not name internal implementation files, helper extensions, or filenames unless the user explicitly asked to title that artifact.
 Prefer the user's stated goal over files or tools touched while doing the work.
-Use previous_session_title as a strong hint for continuity.
-If the previous session title still accurately describes the discussion, return it exactly unchanged.
-Change the title only when the discussion meaningfully drifted to a different codebase, feature, or task.
-Example: "Update the Pi footer to use compact telemetry" becomes "Compact Pi Footer".`;
+Weight the most recent sustained user requests more heavily than the session's initial umbrella topic.
+Choose the most specific stable description of the current work, especially when a broad topic has narrowed to one concrete feature or artifact.
+Treat previous_session_title as a candidate for continuity, not the default answer.
+Keep the previous title only when it remains the clearest specific summary of the recent discussion.
+Update it when recent requests repeatedly narrow, rename, or materially refocus the work, even within the same codebase or feature area.
+Do not rename for a brief aside, one-off question, or temporary debugging detour.
+Examples:
+- "Update the Pi footer to use compact telemetry" becomes "Compact Pi Footer".
+- Previous "Open Tool Strategy" plus sustained work on Mistral search output becomes "Mistral Web Search".
+- Previous "API Auth Refactor" plus one unrelated shell question remains "API Auth Refactor".`;
 
 function messageText(message: any): string | undefined {
 	if (typeof message?.content === "string") return message.content.trim() || undefined;
