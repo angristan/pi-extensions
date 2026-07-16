@@ -9,16 +9,21 @@ import { Text, type Component } from "@earendil-works/pi-tui";
 const ENTRY_TYPE = "turn-stats";
 
 /**
- * The stats line itself. Rendered through `Text` so margins/wrapping match the
- * rest of the transcript, with a one-space left margin so it lines up with
- * assistant message content rather than the prompt gutter.
+ * The stats block: a dim separator followed by the stats line. The stats text is
+ * rendered through `Text` so margins/wrapping match the rest of the transcript,
+ * with a one-space left margin so it lines up with assistant message content.
  */
-class StatsRow implements Component {
+class StatsBlock implements Component {
 	constructor(
 		private readonly stats: string,
+		private readonly dim: (s: string) => string,
 	) {}
 	render(width: number): string[] {
-		return new Text(this.stats, 1, 0).render(width);
+		// Leave a tiny right margin so styled full-width rules do not wrap into a
+		// stray `──` row on terminals that auto-wrap at the last column.
+		const ruleWidth = Math.max(0, width - 2);
+		const rule = ruleWidth > 0 ? [this.dim("─".repeat(ruleWidth))] : [];
+		return [...rule, ...new Text(this.stats, 1, 0).render(width)];
 	}
 	invalidate(): void {}
 }
@@ -245,7 +250,7 @@ export default function (pi: ExtensionAPI) {
 			groups.push(`${theme.fg("dim", prefix)}${amount}`);
 		}
 
-		return new StatsRow(groups.join(groupSep));
+		return new StatsBlock(groups.join(groupSep), (s: string) => theme.fg("dim", s));
 	});
 
 	const resetResponseTiming = () => {
