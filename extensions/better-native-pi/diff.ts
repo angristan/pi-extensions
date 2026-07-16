@@ -159,14 +159,31 @@ export function wrapBranchLine(line: string, width: number, branchPrefix = "  â”
 	const tail = hasTail ? line.slice(tailIndex) : "";
 
 	const contentWidth = Math.max(1, max - branchPrefix.length);
-	let chunks = wrapTextWithAnsi(detail, contentWidth);
-	// Reserve room for the tail on the last line; if it doesn't fit, the last
-	// detail chunk gets truncated by fitToolLine below.
+	// Word-wrap the detail on spaces (ANSI-aware via visibleWidth) rather than
+	// wrapTextWithAnsi, which splits mid-token on long path segments and cuts
+	// words like `~/.pi/agent/...angr` + `ions`. Then cap to MAX_BRANCH_LINES.
+	const detailWords = detail.split(" ");
+	let chunks: string[] = [];
+	let current = "";
+	for (const word of detailWords) {
+		const candidate = current ? `${current} ${word}` : word;
+		if (visibleWidth(candidate) <= contentWidth) {
+			current = candidate;
+		} else {
+			if (current) chunks.push(current);
+			// A single word longer than the line still wraps hard.
+			current = word;
+		}
+	}
+	if (current) chunks.push(current);
+	// Reserve room for the tail on the last line; cap total detail rows so the
+	// block stays compact. When overflowing, keep the head and put the rest on
+	// the final detail row (truncated by fitToolLine when joined with the tail).
 	const budget = MAX_BRANCH_LINES - (hasTail ? 1 : 0);
 	if (chunks.length > budget) {
 		const head = chunks.slice(0, Math.max(1, budget - 1));
 		const rest = chunks.slice(Math.max(1, budget - 1)).join(" ");
-		chunks = [...head, sliceByColumn(rest, 0, contentWidth)];
+		chunks = [...head, rest];
 	}
 
 	const rows = chunks.map((chunk, index) => index === 0 ? `${branchPrefix}${chunk}` : `${" ".repeat(branchPrefix.length)}${chunk}`);
