@@ -11,8 +11,9 @@ const TITLE_SPINNER_INTERVAL_MS = 200;
 const TITLE_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
-// The default palette is Catppuccin Mocha. The status line resolves
-// these syntax scopes and softens their saturation to 85% before rendering.
+// The default palette is Catppuccin Mocha, used as a fallback when no theme is
+// available. When a theme is present, segments resolve to theme color tokens
+// so the footer matches the rest of the TUI.
 const FOOTER_COLORS = {
 	thread: [156, 222, 211], // entity.name.section
 	path: [171, 223, 167], // string
@@ -21,6 +22,16 @@ const FOOTER_COLORS = {
 	usage: [242, 181, 144], // constant.numeric
 	timing: [185, 170, 224], // balanced accent for ttft/tps
 } as const;
+
+/** Map a footer segment accent to a theme color token. */
+const FOOTER_THEME_TOKEN: Record<StatusSegment["accent"], string> = {
+	thread: "accent",      // session identity — the accent color
+	path: "mdLink",        // cwd — link blue
+	branch: "syntaxFunction", // git branch — function yellow
+	model: "muted",        // model name — secondary, less prominent
+	usage: "syntaxString", // tokens/ctx — string green
+	timing: "accent",      // ttft/tps — accent
+};
 
 interface BranchChanges {
 	additions: number;
@@ -155,12 +166,15 @@ function dim(text: string): string {
 	return `\u001b[2m${text}\u001b[22m`;
 }
 
-function styleSegment(segment: StatusSegment): string {
+function styleSegment(segment: StatusSegment, theme?: any): string {
+	if (theme && typeof theme.fg === "function") {
+		return theme.fg(FOOTER_THEME_TOKEN[segment.accent] as any, segment.text);
+	}
 	return rgb(segment.text, FOOTER_COLORS[segment.accent]);
 }
 
-function styledSegments(segments: StatusSegment[], separator = SEPARATOR): string {
-	return segments.map(styleSegment).join(dim(separator));
+function styledSegments(segments: StatusSegment[], separator = SEPARATOR, theme?: any): string {
+	return segments.map((segment) => styleSegment(segment, theme)).join(dim(separator));
 }
 
 function renderSplitRow(left: string, right: string, width: number): string {
@@ -179,7 +193,7 @@ function renderSplitRow(left: string, right: string, width: number): string {
 	return `${FOOTER_INDENT}${fittedLeft}${" ".repeat(padding)}${right}`;
 }
 
-function renderAdaptiveRow(groups: FooterGroup[], right: string, width: number): string {
+function renderAdaptiveRow(groups: FooterGroup[], right: string, width: number, theme?: any): string {
 	const available = Math.max(0, width - visibleWidth(FOOTER_INDENT));
 	const rightWidth = visibleWidth(right);
 	const minimumGap = right ? 3 : 0;
@@ -192,7 +206,7 @@ function renderAdaptiveRow(groups: FooterGroup[], right: string, width: number):
 	const currentSegments = (group: (typeof active)[number]) =>
 		group.variants?.[group.variantIndex] ?? group.segments;
 	const renderActive = () => active
-		.map((group) => styledSegments(currentSegments(group), " "))
+		.map((group) => styledSegments(currentSegments(group), " ", theme))
 		.join(dim(SEPARATOR));
 
 	while (active.length > 1 && visibleWidth(renderActive()) > leftAvailable) {
@@ -391,7 +405,7 @@ export default function (pi: ExtensionAPI) {
 		renderTitle();
 		void refreshGitSummary(ctx);
 
-		ctx.ui.setFooter((tui: any, _theme: any, footerData: any) => {
+		ctx.ui.setFooter((tui: any, theme: any, footerData: any) => {
 			requestRender = () => tui.requestRender();
 			const onBranchChange = () => {
 				requestRender?.();
@@ -472,8 +486,8 @@ export default function (pi: ExtensionAPI) {
 							text: sanitizeStatusText(text),
 						}))
 						.filter((segment) => segment.text.length > 0);
-					const statusLine = styledSegments(statuses);
-					return [renderAdaptiveRow(groups, statusLine, width)];
+					const statusLine = styledSegments(statuses, SEPARATOR, theme);
+					return [renderAdaptiveRow(groups, statusLine, width, theme)];
 				},
 			};
 		});
