@@ -162,8 +162,12 @@ function summarize(
 	if (name === "bash") {
 		const m = text.match(/exit code: (\d+)/);
 		const exit = m ? Number(m[1]) : null;
-		const status = exit && exit !== 0 ? `${RED}exit ${exit}` : `${GREEN}done`;
-		return `${status}${RESET} in ${formatElapsed(elapsedMs)}`;
+		// Glyph carries pass/fail (✓ green / ✗ red), elapsed is the lone number —
+		// no redundant "done" word. Failed runs keep `exit N` so the code is visible.
+		const ok = !exit || exit === 0;
+		const glyph = ok ? `${GREEN}✓` : `${RED}✗`;
+		const tail = ok ? `` : ` ${RED}exit ${exit}`;
+		return `${glyph}${tail}${RESET} ${formatElapsed(elapsedMs)}`;
 	}
 	if (name === "grep") {
 		if (/^No matches found/.test(text.trim())) return "0 matches in 0 files";
