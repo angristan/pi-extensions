@@ -13,6 +13,7 @@ import {
 	wrapTextWithAnsi,
 	type TUI,
 } from "@earendil-works/pi-tui";
+import { accentBorder } from "../editor-accent/index.js";
 
 const CODE_BLOCK_PATCH = Symbol.for("pi.code-blocks.patch");
 const LINE_RESET_PATCH = Symbol.for("pi.cached-line-resets.patch");
@@ -397,11 +398,34 @@ function rendererStats(): Record<string, RendererStats> {
 	return root[RENDER_STATS_KEY] ?? {};
 }
 
+// Wrap a body row in the same accent-bordered box used by plan-progress/goal,
+// so doctor reads as part of the same overlay family rather than a bare list.
+function boxRow(content: string, width: number, theme: any): string {
+	const contentWidth = Math.max(0, width - 4);
+	const fitted = truncateToWidth(content, contentWidth, "…");
+	const padding = " ".repeat(Math.max(0, contentWidth - visibleWidth(fitted)));
+	return `${accentBorder("│ ")}${fitted}${padding}${accentBorder(" │")}`;
+}
+
 function statusIcon(status: "ok" | "warning" | "error" | "info", theme: any): string {
 	if (status === "ok") return theme.fg("success", "✓");
 	if (status === "warning") return theme.fg("warning", "!");
 	if (status === "error") return theme.fg("error", "×");
 	return theme.fg("dim", "·");
+}
+
+// Total error/warning counts, folded into the box border label by the pager.
+// Kept in sync with the item() calls below: every error-severity item should
+// contribute to errors, every warning to warnings.
+function issueCounts(snapshot: DoctorSnapshot): { errors: number; warnings: number } {
+	const errors = Number(Boolean(snapshot.settingsError || snapshot.modelsError))
+		+ snapshot.startupIssues.length
+		+ snapshot.missingEnabledModels.length
+		+ snapshot.missingFeatureFiles.length;
+	const warnings = snapshot.duplicates.length + snapshot.foundryIssues.length
+		+ Number((snapshot.session.fileBytes ?? 0) > 25 * 1024 * 1024)
+		+ Number(snapshot.session.entries > 5_000);
+	return { errors, warnings };
 }
 
 function reportLines(snapshot: DoctorSnapshot, tui: TUI, theme: any): string[] {
@@ -414,18 +438,6 @@ function reportLines(snapshot: DoctorSnapshot, tui: TUI, theme: any): string[] {
 		lines.push(`${statusIcon(status, theme)} ${theme.bold(label)}${detail ? ` ${theme.fg("muted", detail)}` : ""}`);
 	};
 	const detail = (text: string) => lines.push(`  ${theme.fg("dim", text)}`);
-
-	const errorCount = Number(Boolean(snapshot.settingsError || snapshot.modelsError))
-		+ snapshot.startupIssues.length
-		+ snapshot.missingEnabledModels.length
-		+ snapshot.missingFeatureFiles.length;
-	const warningCount = snapshot.duplicates.length + snapshot.foundryIssues.length
-		+ Number((snapshot.session.fileBytes ?? 0) > 25 * 1024 * 1024)
-		+ Number(snapshot.session.entries > 5_000);
-
-	lines.push(`${theme.fg("accent", theme.bold("Pi Doctor"))} ${theme.fg("dim", "read-only diagnostics")}`);
-	lines.push(theme.fg(errorCount > 0 ? "error" : warningCount > 0 ? "warning" : "success",
-		`${errorCount} error${errorCount === 1 ? "" : "s"} · ${warningCount} warning${warningCount === 1 ? "" : "s"}`));
 
 	section("Extensions");
 	item(snapshot.extensions.length > 0 ? "ok" : "error", `${snapshot.extensions.length} discovered extension entries`);
@@ -532,29 +544,45 @@ class DoctorPager {
 		private readonly done: (result?: unknown) => void,
 	) {}
 
+	// Wrap report lines to the box's *content* width (width - 4 for the `│ ` +
+	// ` │` borders). The cached key is the content width, not the outer width,
+	// so the same wrapped body serves any terminal height.
 	private lines(width: number): string[] {
-		if (this.cachedWidth === width) return this.cachedLines;
+		const contentWidth = Math.max(1, width - 4);
+		if (this.cachedWidth === contentWidth) return this.cachedLines;
 		const wrapped: string[] = [];
 		for (const line of reportLines(this.snapshot, this.tui, this.theme)) {
 			if (!line) { wrapped.push(""); continue; }
-			wrapped.push(...wrapTextWithAnsi(line, Math.max(1, width)));
+			wrapped.push(...wrapTextWithAnsi(line, contentWidth));
 		}
-		this.cachedWidth = width;
+		this.cachedWidth = contentWidth;
 		this.cachedLines = wrapped;
 		return wrapped;
 	}
 
-	render(width: number): string[] {
+	render(width: number): string {
 		const max = Math.max(1, width);
 		const height = Math.max(10, (process.stdout.rows || 24) - 5);
-		const bodyHeight = height - 1;
+		// Top border counts as one row; the footer (scroll hints) sits outside
+		// the box so the closing `╰──╯` is always the last boxed line.
+		const bodyHeight = Math.max(1, height - 3);
 		const lines = this.lines(max);
 		const maxScroll = Math.max(0, lines.length - bodyHeight);
 		this.scroll = Math.min(this.scroll, maxScroll);
-		const visible = lines.slice(this.scroll, this.scroll + bodyHeight).map((line) => truncateToWidth(line, max, "…"));
+
+		const { errors, warnings } = issueCounts(this.snapshot);
+		const status = errors > 0 ? this.theme.fg("error", `${errors} error${errors === 1 ? "" : "s"}`)
+			: warnings > 0 ? this.theme.fg("warning", `${warnings} warning${warnings === 1 ? "" : "s"}`)
+			: this.theme.fg("success", "all green");
+		const label = ` Pi Doctor ${this.theme.fg("dim", "·")} ${status} `;
+		const top = `${accentBorder("╭")}${this.theme.bold(label)}${accentBorder("─".repeat(Math.max(0, max - visibleWidth(label) - 2)))}${accentBorder("╮")}`;
+
+		const visible = lines.slice(this.scroll, this.scroll + bodyHeight);
 		while (visible.length < bodyHeight) visible.push("");
+		const boxed = visible.map((line) => boxRow(line, max, this.theme));
+		const bottom = accentBorder(`╰${"─".repeat(Math.max(0, max - 2))}╯`);
 		const footer = this.theme.fg("dim", `↑↓/PgUp/PgDn scroll · Home/End · q close · ${lines.length} rows`);
-		return [...visible, truncateToWidth(footer, max, "")];
+		return [top, ...boxed, bottom, truncateToWidth(footer, max, "")];
 	}
 
 	handleInput(data: string): void {
