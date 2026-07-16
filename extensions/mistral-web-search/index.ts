@@ -356,10 +356,10 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 		name: "web_search",
 		label: "Web Search",
 		description:
-			"Search the web using Mistral's direct web_search MCP connector. Returns raw search results with URLs, titles, descriptions, snippets, ranks, and source metadata; it does not generate a final answer.",
-		promptSnippet: "Search the web through Mistral's direct MCP connector and return raw results",
+			"Search the web using Mistral's direct web_search MCP connector. Returns bounded structured results with URLs, titles, unique snippets, ranks, websites, and search-engine metadata; it does not generate a final answer.",
+		promptSnippet: "Search the web through Mistral's direct MCP connector and return structured results",
 		promptGuidelines: [
-			"Use web_search to discover current or potentially changed web information; it returns raw results, not a final answer.",
+			"Use web_search to discover current or potentially changed web information; it returns structured results, not a final answer.",
 			"Prefer official or primary-source results from web_search. Inspect important pages with local content tools like `ax`; use open_url only when local retrieval is unavailable or fails.",
 			"Do not use web_search for local codebase search; use grep/read/ls/find for local files.",
 		],
@@ -376,10 +376,10 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 		name: "news_search",
 		label: "News Search",
 		description:
-			"Search news articles using Mistral's direct news_search MCP connector. Returns raw news results with snippets, dates, URLs or article IDs, ranks, and source metadata.",
-		promptSnippet: "Search recent news through Mistral's direct MCP connector and return raw results",
+			"Search news articles using Mistral's direct news_search MCP connector. Returns bounded structured results with unique snippets, dates, URLs or article IDs, ranks, websites, and search-engine metadata.",
+		promptSnippet: "Search recent news through Mistral's direct MCP connector and return structured results",
 		promptGuidelines: [
-			"Use news_search for recent events, journalism, or date-bounded news queries; it returns raw news results, not a final answer.",
+			"Use news_search for recent events, journalism, or date-bounded news queries; it returns structured results, not a final answer.",
 			"When news_search returns a URL or article ID that matters, inspect it with local content tools like `ax`; use open_url only when local retrieval is unavailable or fails.",
 		],
 		parameters: newsSearchSchema,

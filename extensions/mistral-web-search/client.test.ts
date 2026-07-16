@@ -77,7 +77,7 @@ describe("search tool persistence", () => {
 			expect(result.url).toMatch(/^https:\/\/example\.com\/\d+$/);
 			expect(result.website).toBe("example.com");
 			expect(result.searchEngine).toBe("brave");
-			expect(result.description).toBeTruthy();
+			expect(result.description).toBeUndefined();
 			expect(result.snippets).toHaveLength(1);
 		}
 		expect(text).toMatch(/\[Results truncated: \d+ of 400 result\(s\) shown; remaining results omitted by output limit\.\]$/);
@@ -96,7 +96,8 @@ describe("search tool persistence", () => {
 		expect(toolResult.content[0].text).toContain("Kimi K2.6 & API pricing");
 		expect(toolResult.content[0].text).toContain("Website: kimi.com");
 		expect(toolResult.content[0].text).toContain("Search engine: brave");
-		expect(toolResult.content[0].text).toContain("Moonshot's official pricing.");
+		expect(toolResult.content[0].text).not.toContain("Moonshot's official pricing.");
+		expect(toolResult.content[0].text).not.toContain("Description:");
 		expect(toolResult.content[0].text).toContain("Costs $0.95 & scales.");
 		expect(toolResult.content[0].text).not.toMatch(/<\/?(?:strong|em)>|&#x27;|&amp;/);
 		expect(toolResult.details.results[0]).toMatchObject({
@@ -106,6 +107,28 @@ describe("search tool persistence", () => {
 			description: "Moonshot's official pricing.",
 			snippets: ["Costs $0.95 & scales."],
 		});
+	});
+
+	test("removes descriptions and deduplicates normalized snippets from agent output", () => {
+		const result = largeNewsResult();
+		result.results = [{
+			...result.results[0],
+			description: "Description that should remain UI-only.",
+			snippets: [
+				"Same <strong>claim</strong>",
+				"Same claim",
+				"SAME CLAIM",
+				"Different claim",
+			],
+		}];
+		const toolResult = createSearchToolResult(result);
+		const text = toolResult.content[0].text;
+		const parsed = parseSearchResultText(text);
+		expect(text).not.toContain("Description:");
+		expect(text).not.toContain("Description that should remain UI-only.");
+		expect(parsed.results[0]?.snippets).toEqual(["Same claim", "Different claim"]);
+		expect(toolResult.details.results[0]?.description).toBe("Description that should remain UI-only.");
+		expect(toolResult.details.results[0]?.snippets).toEqual(["Same claim"]);
 	});
 
 	test("removes terminal controls and rejects unsafe result URLs", () => {

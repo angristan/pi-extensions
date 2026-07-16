@@ -22,6 +22,8 @@ Results render as tree-structured rows:
 ```
 
 Agent-facing content and human-facing display details are bounded separately.
+Agent output omits descriptions and deduplicates normalized snippets; bounded
+descriptions remain available only as a renderer fallback when no snippet exists.
 Search output truncates only between complete result records, while the compact
 renderer keeps clickable titles, website/search-engine/date metadata, and one
 clean evidence line. Shared search-engine attribution appears once in the
