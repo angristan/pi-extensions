@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder, getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
@@ -190,6 +190,84 @@ export async function discoverExtensionEntries(extensionDir: string): Promise<Ex
 	return entries.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+async function extensionEntryAt(path: string, name: string): Promise<ExtensionEntry[]> {
+	try {
+		const info = await stat(path);
+		if (info.isFile() && path.endsWith(".ts") && !path.endsWith(".d.ts")) {
+			return [{ name, path, kind: "file" }];
+		}
+		if (!info.isDirectory()) return [];
+		const indexPath = join(path, "index.ts");
+		if ((await stat(indexPath)).isFile()) {
+			return [{ name: `${name.replace(/\/$/, "")}/index.ts`, path: indexPath, kind: "package" }];
+		}
+	} catch {
+		return [];
+	}
+	return [];
+}
+
+export async function discoverPackageExtensionEntries(packageRoot: string): Promise<ExtensionEntry[]> {
+	let manifest: any;
+	try {
+		manifest = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
+	} catch {
+		return [];
+	}
+	const packageName = typeof manifest.name === "string" && manifest.name.trim()
+		? manifest.name.trim()
+		: basename(packageRoot);
+	const configured = Array.isArray(manifest.pi?.extensions)
+		? manifest.pi.extensions.filter((value: unknown): value is string => typeof value === "string")
+		: undefined;
+	const entries: ExtensionEntry[] = [];
+
+	if (configured === undefined) {
+		for (const entry of await discoverExtensionEntries(join(packageRoot, "extensions"))) {
+			entries.push({ ...entry, name: `${packageName}/${entry.name}` });
+		}
+		return entries;
+	}
+
+	for (const configuredPath of configured) {
+		const relativePath = configuredPath.replace(/^\.\//, "");
+		if (relativePath.endsWith("/*")) {
+			const extensionDir = resolve(packageRoot, relativePath.slice(0, -2));
+			for (const entry of await discoverExtensionEntries(extensionDir)) {
+				entries.push({ ...entry, name: `${packageName}/${relative(packageRoot, entry.path)}` });
+			}
+			continue;
+		}
+		const path = resolve(packageRoot, relativePath);
+		entries.push(...await extensionEntryAt(path, `${packageName}/${relativePath}`));
+	}
+	return entries;
+}
+
+interface RuntimeSourceInfo {
+	path?: unknown;
+	baseDir?: unknown;
+	origin?: unknown;
+}
+
+export async function discoverConfiguredExtensions(agentDir: string, sourceInfos: readonly RuntimeSourceInfo[]): Promise<ExtensionEntry[]> {
+	const entries = await discoverExtensionEntries(join(agentDir, "extensions"));
+	const visitedRoots = new Set<string>();
+	for (const sourceInfo of sourceInfos) {
+		if (typeof sourceInfo.baseDir !== "string") continue;
+		const root = resolve(sourceInfo.baseDir);
+		if (visitedRoots.has(root)) continue;
+		visitedRoots.add(root);
+		const discovered = sourceInfo.origin === "package"
+			? await discoverPackageExtensionEntries(root)
+			: await discoverExtensionEntries(root);
+		entries.push(...discovered);
+	}
+	const byPath = new Map<string, ExtensionEntry>();
+	for (const entry of entries) byPath.set(resolve(entry.path), entry);
+	return [...byPath.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export function findDuplicateRegistrations(sources: ReadonlyArray<{ file: string; source: string }>): DuplicateRegistration[] {
 	const registrations: Registration[] = [];
 	const patterns: Array<[Registration["kind"], RegExp]> = [
@@ -284,20 +362,30 @@ async function notificationState(agentDir: string): Promise<boolean | undefined>
 async function buildSnapshot(pi: ExtensionAPI, ctx: any): Promise<DoctorSnapshot> {
 	const agentDir = getAgentDir();
 	const extensionDir = join(agentDir, "extensions");
-	const extensions = await discoverExtensionEntries(extensionDir);
+	const runtimeItems = [...pi.getCommands(), ...pi.getAllTools()];
+	const sourceInfos = runtimeItems
+		.map((item: any) => item.sourceInfo)
+		.filter((sourceInfo: unknown): sourceInfo is RuntimeSourceInfo => Boolean(sourceInfo && typeof sourceInfo === "object"));
+	const extensions = await discoverConfiguredExtensions(agentDir, sourceInfos);
 	const sources = await Promise.all(extensions.map(async (entry) => ({
 		file: entry.name,
 		source: await readFile(entry.path, "utf8").catch(() => ""),
 	})));
 	const duplicates = findDuplicateRegistrations(sources);
-	const runtimeItems = [...pi.getCommands(), ...pi.getAllTools()];
-	const runtimeLoadedFiles = [...new Set(runtimeItems
-		.map((item: any) => item.sourceInfo?.path)
+	const runtimeSourcePaths = [...new Set(sourceInfos
+		.map((sourceInfo) => sourceInfo.path)
 		.filter((path: unknown): path is string => typeof path === "string")
-		.map((path) => resolve(path))
-		.filter((path) => path === extensionDir || path.startsWith(`${extensionDir}/`))
-		.map((path) => relative(extensionDir, path) || "."))].sort();
-	const runtimePaths = new Set(runtimeLoadedFiles.map((path) => path.replace(/\\/g, "/")));
+		.map((path) => resolve(path)))];
+	const runtimeLoadedFiles = extensions
+		.filter((entry) => runtimeSourcePaths.some((path) => {
+			const entryPath = resolve(entry.path);
+			return path === entryPath
+				|| path === dirname(entryPath)
+				|| entryPath.startsWith(`${path}${sep}`);
+		}))
+		.map((entry) => entry.name)
+		.sort();
+	const runtimePaths = new Set(runtimeLoadedFiles);
 	const passiveOrUnverifiedFiles = extensions
 		.map((entry) => entry.name)
 		.filter((name) => !runtimePaths.has(name));
