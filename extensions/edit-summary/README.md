@@ -16,9 +16,12 @@ the agent settles it keeps the result as the **last** turn's summary.
 ```
 
 The overlay is non-capturing, so it never takes keyboard focus from the editor.
-It hides automatically when a turn has no file edits and on terminals narrower
-than 72 columns. The latest completed summary is stored in the session, so it
-survives reloads and resumes.
+When the `plan-progress` TODO overlay is visible, the edit summary automatically
+moves below it and follows changes to the plan card's height. It returns to the
+top-right when the TODO overlay closes. It also hides when a turn has no file
+edits, when the terminal is narrower than 72 columns, or when there is not enough
+room below the TODO card. The latest completed summary is stored in the session,
+so it survives reloads and resumes.
 
 ## Commands
 

@@ -26,6 +26,11 @@ const MAX_EXPLANATION_ROWS = 3;
 const MAX_GOAL_ROWS = 3;
 
 import { accentBorder } from "../accent-color/index.js";
+import {
+	PLAN_OVERLAY_LAYOUT_EVENT,
+	PLAN_OVERLAY_LAYOUT_REQUEST_EVENT,
+	type PlanOverlayLayout,
+} from "./layout.js";
 
 const parameters = {
 	type: "object",
@@ -249,6 +254,7 @@ class PlanOverlay implements Component {
 		private readonly getState: () => PlanState,
 		private readonly getGoal: () => GoalOverlayState | undefined,
 		private readonly theme: any,
+		private readonly onHeightChange: (height: number) => void,
 	) {}
 
 	setMaxRows(maxRows: number) {
@@ -305,7 +311,9 @@ class PlanOverlay implements Component {
 
 		for (const row of visibleBody) lines.push(boxRow(row, width));
 		lines.push(accentBorder(`╰${"─".repeat(Math.max(0, width - 2))}╯`));
-		return lines.map((line) => truncateToWidth(line, width, ""));
+		const rendered = lines.map((line) => truncateToWidth(line, width, ""));
+		this.onHeightChange(rendered.length);
+		return rendered;
 	}
 
 	invalidate() {}
@@ -315,15 +323,23 @@ class PlanOverlayHost implements Component {
 	private readonly overlay: PlanOverlay;
 	private readonly handle: OverlayHandle;
 	private disposed = false;
+	private eligibleVisible = false;
+	private modalHidden = false;
+	private height = 0;
 
 	constructor(
 		private readonly tui: TUI,
 		theme: any,
 		getState: () => PlanState,
 		getGoal: () => GoalOverlayState | undefined,
+		private readonly onLayoutChange: (layout: PlanOverlayLayout) => void,
 		private readonly onDispose: () => void,
 	) {
-		this.overlay = new PlanOverlay(getState, getGoal, theme);
+		this.overlay = new PlanOverlay(getState, getGoal, theme, (height) => {
+			if (height === this.height) return;
+			this.height = height;
+			this.emitLayout();
+		});
 		this.handle = tui.showOverlay(this.overlay, {
 			nonCapturing: true,
 			anchor: "top-right",
@@ -332,8 +348,18 @@ class PlanOverlayHost implements Component {
 			margin: { top: 1, right: 2 },
 			visible: (termWidth, termHeight) => {
 				this.overlay.setMaxRows(Math.floor(termHeight * 0.8));
-				return termWidth >= 90 && termHeight >= 10;
+				this.eligibleVisible = termWidth >= 90 && termHeight >= 10;
+				this.emitLayout();
+				return this.eligibleVisible;
 			},
+		});
+		this.emitLayout();
+	}
+
+	private emitLayout() {
+		this.onLayoutChange({
+			visible: !this.disposed && this.eligibleVisible && !this.modalHidden,
+			height: this.height,
 		});
 	}
 
@@ -343,7 +369,9 @@ class PlanOverlayHost implements Component {
 	}
 
 	setModalHidden(hidden: boolean) {
+		this.modalHidden = hidden;
 		this.handle.setHidden(hidden);
+		this.emitLayout();
 		this.tui.requestRender();
 	}
 
@@ -359,6 +387,7 @@ class PlanOverlayHost implements Component {
 		if (this.disposed) return;
 		this.disposed = true;
 		this.handle.hide();
+		this.emitLayout();
 		this.onDispose();
 	}
 }
@@ -369,13 +398,20 @@ export default function (pi: ExtensionAPI) {
 	let activeCtx: any;
 	let planOverlayActive = false;
 	let overlayHost: PlanOverlayHost | undefined;
+	let latestPlanLayout: PlanOverlayLayout = { visible: false, height: 0 };
 	const modalOwners = new Set<string>();
 
+	const emitPlanLayout = (layout: PlanOverlayLayout) => {
+		if (layout.visible === latestPlanLayout.visible && layout.height === latestPlanLayout.height) return;
+		latestPlanLayout = layout;
+		pi.events.emit(PLAN_OVERLAY_LAYOUT_EVENT, layout);
+	};
 	const persist = () => pi.appendEntry("plan-progress", state);
 	const clearOverlay = (ctx: any) => {
 		ctx.ui.setWidget(LEGACY_WIDGET_KEY, undefined);
 		ctx.ui.setWidget(OVERLAY_HOST_KEY, undefined);
 		overlayHost = undefined;
+		emitPlanLayout({ visible: false, height: 0 });
 	};
 	const ensureOverlay = (ctx: any) => {
 		if (ctx.mode !== "tui") return;
@@ -385,7 +421,7 @@ export default function (pi: ExtensionAPI) {
 		}
 		ctx.ui.setWidget(OVERLAY_HOST_KEY, (tui: TUI, theme: any) => {
 			let host: PlanOverlayHost;
-			host = new PlanOverlayHost(tui, theme, () => state, () => goalState, () => {
+			host = new PlanOverlayHost(tui, theme, () => state, () => goalState, emitPlanLayout, () => {
 				if (overlayHost === host) overlayHost = undefined;
 			});
 			overlayHost = host;
@@ -393,6 +429,9 @@ export default function (pi: ExtensionAPI) {
 			return host;
 		});
 	};
+	const stopLayoutRequests = pi.events.on(PLAN_OVERLAY_LAYOUT_REQUEST_EVENT, () => {
+		pi.events.emit(PLAN_OVERLAY_LAYOUT_EVENT, latestPlanLayout);
+	});
 	const updateUi = (ctx: any) => {
 		const stats = planStats(state.items);
 		const activePlan = planOverlayActive && state.items.length > 0 && stats.completed < state.items.length;
@@ -507,5 +546,6 @@ export default function (pi: ExtensionAPI) {
 		goalState = undefined;
 		planOverlayActive = false;
 		modalOwners.clear();
+		stopLayoutRequests();
 	});
 }
