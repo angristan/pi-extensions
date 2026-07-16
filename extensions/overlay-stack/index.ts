@@ -32,8 +32,21 @@ interface RegisteredCard {
 	definition: OverlayCardDefinition;
 }
 
-const cards = new Map<string, RegisteredCard>();
-const registryListeners = new Set<() => void>();
+interface OverlayRegistry {
+	cards: Map<string, RegisteredCard>;
+	listeners: Set<() => void>;
+}
+
+// Pi can evaluate an extension entry point and a sibling's relative import as
+// separate Jiti module instances. Keep the registry process-global so the host
+// and cards still meet at one shared boundary without sharing feature state.
+const REGISTRY_KEY = Symbol.for("pi-extensions.overlay-stack.registry.v1");
+const registry = ((globalThis as any)[REGISTRY_KEY] ??= {
+	cards: new Map<string, RegisteredCard>(),
+	listeners: new Set<() => void>(),
+}) as OverlayRegistry;
+const cards = registry.cards;
+const registryListeners = registry.listeners;
 
 function notifyRegistryListeners() {
 	for (const listener of registryListeners) listener();
