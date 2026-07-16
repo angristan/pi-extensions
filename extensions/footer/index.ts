@@ -254,6 +254,7 @@ function sanitizeStatusText(text: string): string {
 function extensionStatusAccent(key: string): StatusSegment["accent"] {
 	if (key === "goal") return "thread";
 	if (key === "plan") return "branch";
+	if (key === "fast") return "cost";
 	return "usage";
 }
 
@@ -491,7 +492,7 @@ export default function (pi: ExtensionAPI) {
 						},
 					];
 
-					const statusPriority = new Map([["goal", 1], ["plan", 2]]);
+					const statusPriority = new Map([["goal", 1], ["plan", 2], ["fast", 3]]);
 					const statuses = [...footerData.getExtensionStatuses().entries()]
 						.sort(([left], [right]) =>
 							(statusPriority.get(left) ?? 100) - (statusPriority.get(right) ?? 100)

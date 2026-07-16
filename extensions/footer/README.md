@@ -17,3 +17,4 @@ another tab.
 - Cost from token usage × provider pricing (input/output/cache)
 - Window-title spinner (OSC 0) while the agent is running
 - Softened Catppuccin-Mocha-derived palette that adapts to the active theme
+- Purple `fast` status when the bundled OpenAI Codex Fast mode is enabled
