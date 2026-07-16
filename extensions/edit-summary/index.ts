@@ -108,28 +108,17 @@ function sortedFiles(files: Iterable<FileSummary>): FileSummary[] {
 	return [...files].sort((a, b) => a.path.localeCompare(b.path));
 }
 
-function summaryHeight(summary: DisplaySummary): number {
+function summaryBodyHeight(summary: DisplaySummary): number {
 	const visibleFiles = Math.min(summary.files.length, MAX_VISIBLE_FILES);
 	const overflowRow = summary.files.length > visibleFiles ? 1 : 0;
-	return 6 + visibleFiles + overflowRow;
+	return visibleFiles + overflowRow + 2; // files + optional overflow + spacer + totals
 }
 
-function renderEditSummary(summary: DisplaySummary, width: number, theme: Theme): string[] {
-	if (width < 18 || summary.files.length === 0) return [];
+function renderEditSummaryBody(summary: DisplaySummary, width: number, theme: Theme): string[] {
+	if (width < 12 || summary.files.length === 0) return [];
 
-	const innerWidth = width - 2;
-	const border = (text: string) => theme.fg("borderMuted", text);
-	const horizontal = "─".repeat(innerWidth);
-	const line = (content = "") => {
-		const clipped = truncateToWidth(content, innerWidth, "");
-		const padding = " ".repeat(Math.max(0, innerWidth - visibleWidth(clipped)));
-		return `${border("│")}${clipped}${padding}${border("│")}`;
-	};
-
-	const title = `${theme.bold("File edits")} ${theme.fg("dim", `· ${summary.phase}`)}`;
-	const lines = [border(`┌${horizontal}┐`), line(` ${title}`), line()];
+	const lines: string[] = [];
 	const visibleFiles = summary.files.slice(0, MAX_VISIBLE_FILES);
-
 	for (const file of visibleFiles) {
 		const status = file.status === "added"
 			? theme.fg("success", "A")
@@ -138,16 +127,16 @@ function renderEditSummary(summary: DisplaySummary, width: number, theme: Theme)
 			file.additions > 0 ? theme.fg("success", `+${file.additions}`) : "",
 			file.removals > 0 ? theme.fg("error", `-${file.removals}`) : "",
 		].filter(Boolean).join(" ");
-		const prefix = ` ${status} `;
+		const prefix = `${status} `;
 		const reserved = visibleWidth(prefix) + visibleWidth(counts) + (counts ? 1 : 0);
-		const pathWidth = Math.max(1, innerWidth - reserved);
+		const pathWidth = Math.max(1, width - reserved);
 		const path = truncateToWidth(file.path, pathWidth, "…");
-		const gap = " ".repeat(Math.max(1, innerWidth - visibleWidth(prefix) - visibleWidth(path) - visibleWidth(counts)));
-		lines.push(line(`${prefix}${path}${counts ? `${gap}${counts}` : ""}`));
+		const gap = " ".repeat(Math.max(1, width - visibleWidth(prefix) - visibleWidth(path) - visibleWidth(counts)));
+		lines.push(`${prefix}${path}${counts ? `${gap}${counts}` : ""}`);
 	}
 
 	if (summary.files.length > visibleFiles.length) {
-		lines.push(line(theme.fg("dim", `   … ${summary.files.length - visibleFiles.length} more`)));
+		lines.push(theme.fg("dim", `  … ${summary.files.length - visibleFiles.length} more`));
 	}
 
 	const additions = summary.files.reduce((total, file) => total + file.additions, 0);
@@ -157,7 +146,7 @@ function renderEditSummary(summary: DisplaySummary, width: number, theme: Theme)
 		theme.fg("success", `+${additions}`),
 		theme.fg("error", `-${removals}`),
 	];
-	lines.push(line(), line(` ${theme.fg("dim", totalBits.join("  "))}`), border(`└${horizontal}┘`));
+	lines.push("", theme.fg("dim", totalBits.join("  ")));
 	return lines;
 }
 
@@ -172,12 +161,14 @@ export default function (pi: ExtensionAPI) {
 		id: "edit-summary",
 		order: 20,
 		width: 46,
-		minHeight: 7,
+		minBodyHeight: 3,
+		requiredBodyHeight: () => summaryBodyHeight(displaySummary),
 		minTerminalWidth: 72,
 		visible: () => enabled && displaySummary.files.length > 0,
-		render: (width, maxHeight, theme) => {
-			if (summaryHeight(displaySummary) > maxHeight) return [];
-			return renderEditSummary(displaySummary, width, theme);
+		title: (theme) => `${theme.bold(" File edits ")}${theme.fg("dim", `· ${displaySummary.phase} `)}`,
+		renderBody: (width, maxHeight, theme) => {
+			if (summaryBodyHeight(displaySummary) > maxHeight) return [];
+			return renderEditSummaryBody(displaySummary, width, theme);
 		},
 	});
 	const syncOverlay = () => overlayCard.invalidate();
