@@ -254,7 +254,6 @@ function sanitizeStatusText(text: string): string {
 function extensionStatusAccent(key: string): StatusSegment["accent"] {
 	if (key === "goal") return "thread";
 	if (key === "plan") return "branch";
-	if (key === "fast") return "cost";
 	return "usage";
 }
 
@@ -466,11 +465,18 @@ export default function (pi: ExtensionAPI) {
 						]
 						: [];
 
+					const extensionStatuses = footerData.getExtensionStatuses();
+					const fastStatus = sanitizeStatusText(extensionStatuses.get("fast") ?? "");
+					const modelSegments: StatusSegment[] = [
+						{ accent: "model", text: modelWithReasoning(current, thinkingLevel) },
+					];
+					if (fastStatus) modelSegments.push({ accent: "cost", text: fastStatus });
+
 					const groups: FooterGroup[] = [
 						{ segments: [{ accent: "thread", text: threadTitle(current) }], priority: 0, required: true },
 						{ segments: [{ accent: "path", text: formatDirectory(current.cwd) }], priority: 8 },
 						{ segments: branchText ? [{ accent: "branch", text: branchText }] : [], priority: 6 },
-						{ segments: [{ accent: "model", text: modelWithReasoning(current, thinkingLevel) }], priority: 7 },
+						{ segments: modelSegments, priority: 7 },
 						{
 							segments: contextWindow > 0
 								? [{ accent: "timing", label: "ctx", text: `${contextRemainingPercent(usage?.tokens, contextWindow)}%/${formatTokensCompact(contextWindow)}` }]
@@ -492,8 +498,9 @@ export default function (pi: ExtensionAPI) {
 						},
 					];
 
-					const statusPriority = new Map([["goal", 1], ["plan", 2], ["fast", 3]]);
-					const statuses = [...footerData.getExtensionStatuses().entries()]
+					const statusPriority = new Map([["goal", 1], ["plan", 2]]);
+					const statuses = [...extensionStatuses.entries()]
+						.filter(([key]) => key !== "fast")
 						.sort(([left], [right]) =>
 							(statusPriority.get(left) ?? 100) - (statusPriority.get(right) ?? 100)
 							|| left.localeCompare(right),
