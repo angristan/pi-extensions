@@ -20,7 +20,7 @@ function stateEntry(index: number) {
 		type: "custom",
 		customType: TITLE_STATE_TYPE,
 		data: {
-			version: 1,
+			version: 2,
 			turnSummary: `Turn ${index}`,
 			focusSummary: `Focus ${index}`,
 			title: `Title ${index}`,
@@ -53,6 +53,20 @@ describe("auto-session-title context", () => {
 		expect(context.recentTurnSummaries).toEqual([]);
 	});
 
+	test("bootstraps legacy sessions from only the latest completed turn", () => {
+		const entries = [
+			{ type: "message", message: { role: "user", content: "Use AX for website content." } },
+			{ type: "message", message: { role: "assistant", content: "Configured AX." } },
+			{ type: "message", message: { role: "user", content: "Add rolling summaries to automatic session titles." } },
+			{ type: "message", message: { role: "assistant", content: "Implemented rolling title summaries and branch persistence." } },
+		];
+		const context = buildTitleContext(entries);
+		expect(context.previousFocus).toBeUndefined();
+		expect(context.recentTurnSummaries).toEqual([]);
+		expect(context.currentUserRequest).toBe("Add rolling summaries to automatic session titles.");
+		expect(context.currentAssistantOutcome).toBe("Implemented rolling title summaries and branch persistence.");
+	});
+
 	test("enforces every context and prompt cap", () => {
 		const huge = "word ".repeat(2_000);
 		const entries = [
@@ -60,7 +74,7 @@ describe("auto-session-title context", () => {
 				type: "custom",
 				customType: TITLE_STATE_TYPE,
 				data: {
-					version: 1,
+					version: 2,
 					turnSummary: huge,
 					focusSummary: huge,
 					title: "Long Session",
