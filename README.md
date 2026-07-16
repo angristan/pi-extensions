@@ -2,7 +2,7 @@
 
 A collection of [pi](https://github.com/earendil-works/pi-coding-agent) TUI
 extensions: nicer tool-block rendering, context telemetry, goal/plan tracking,
-background jobs, and quality-of-life features for the terminal UI.
+background jobs, working timers, and quality-of-life features for the terminal UI.
 
 These are generic, dependency-free extensions that ship together because a few
 of them share rendering helpers (`better-native-pi` exposes primitives used by
@@ -53,6 +53,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | [`transcript`](extensions/transcript/) | Open a full, scrollable view of the entire session transcript |
 | [`turn-separator`](extensions/turn-separator/) | Dim full-width rule between assistant messages that follow tool work, labeling long steps |
 | [`turn-stats`](extensions/turn-stats/) | Per-turn timing and token-usage entries appended to the transcript after each settled response |
+| [`working-timer`](extensions/working-timer/) | Adds a live elapsed timer to pi's built-in `Working...` row for long-running turns |
 
 Each extension has its own `README.md` with commands, config, and sample output.
 
