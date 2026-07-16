@@ -13,6 +13,10 @@ the agent settles it keeps the result as the **last** turn's summary.
 ╰────────────────────────────────────────────╯
 ```
 
+Long paths use a stats-aware middle ellipsis, preserving both leading context and
+the filename instead of truncating the useful tail. Zero addition/removal counts
+are omitted from rows and totals.
+
 The overlay is non-capturing, so it never takes keyboard focus from the editor.
 The package's generic `overlay-stack` host renders this as a separate card below
 `plan-progress` when both are visible. Both cards share the same width, border,

@@ -9,7 +9,7 @@ import {
 	type ExtensionContext,
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { sliceByColumn, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { registerOverlayCard } from "../overlay-stack/index.js";
 
 const ENTRY_TYPE = "edit-summary-state-v1";
@@ -108,6 +108,22 @@ function sortedFiles(files: Iterable<FileSummary>): FileSummary[] {
 	return [...files].sort((a, b) => a.path.localeCompare(b.path));
 }
 
+/** Preserve both the path root/context and the filename when space is tight. */
+export function truncateMiddleToWidth(text: string, maxWidth: number, ellipsis = "…"): string {
+	if (maxWidth <= 0) return "";
+	const textWidth = visibleWidth(text);
+	if (textWidth <= maxWidth) return text;
+
+	const ellipsisWidth = visibleWidth(ellipsis);
+	if (maxWidth <= ellipsisWidth) return truncateToWidth(ellipsis, maxWidth, "");
+	const available = maxWidth - ellipsisWidth;
+	const headWidth = Math.ceil(available / 2);
+	const tailWidth = Math.floor(available / 2);
+	const head = sliceByColumn(text, 0, headWidth, true);
+	const tail = sliceByColumn(text, Math.max(0, textWidth - tailWidth), tailWidth, true);
+	return `${head}${ellipsis}${tail}`;
+}
+
 function summaryBodyHeight(summary: DisplaySummary): number {
 	const visibleFiles = Math.min(summary.files.length, MAX_VISIBLE_FILES);
 	const overflowRow = summary.files.length > visibleFiles ? 1 : 0;
@@ -130,7 +146,7 @@ function renderEditSummaryBody(summary: DisplaySummary, width: number, theme: Th
 		const prefix = `${status} `;
 		const reserved = visibleWidth(prefix) + visibleWidth(counts) + (counts ? 1 : 0);
 		const pathWidth = Math.max(1, width - reserved);
-		const path = truncateToWidth(file.path, pathWidth, "…");
+		const path = truncateMiddleToWidth(file.path, pathWidth);
 		const gap = " ".repeat(Math.max(1, width - visibleWidth(prefix) - visibleWidth(path) - visibleWidth(counts)));
 		lines.push(`${prefix}${path}${counts ? `${gap}${counts}` : ""}`);
 	}
@@ -141,11 +157,9 @@ function renderEditSummaryBody(summary: DisplaySummary, width: number, theme: Th
 
 	const additions = summary.files.reduce((total, file) => total + file.additions, 0);
 	const removals = summary.files.reduce((total, file) => total + file.removals, 0);
-	const totalBits = [
-		`${summary.files.length} ${summary.files.length === 1 ? "file" : "files"}`,
-		theme.fg("success", `+${additions}`),
-		theme.fg("error", `-${removals}`),
-	];
+	const totalBits = [`${summary.files.length} ${summary.files.length === 1 ? "file" : "files"}`];
+	if (additions > 0) totalBits.push(theme.fg("success", `+${additions}`));
+	if (removals > 0) totalBits.push(theme.fg("error", `-${removals}`));
 	lines.push("", theme.fg("dim", totalBits.join("  ")));
 	return lines;
 }
