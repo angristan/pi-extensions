@@ -42,6 +42,9 @@ interface BranchChanges {
 interface StatusSegment {
 	accent: "thread" | "path" | "branch" | "model" | "usage" | "timing";
 	text: string;
+	/** Optional leading label (e.g. "↓", "↑", "ctx") rendered in the muted tone,
+	 * mirroring turn-stats' muted-label + colored-value pattern. */
+	label?: string;
 }
 
 interface FooterGroup {
@@ -168,10 +171,16 @@ function dim(text: string): string {
 }
 
 function styleSegment(segment: StatusSegment, theme?: any): string {
-	if (theme && typeof theme.fg === "function") {
-		return theme.fg(FOOTER_THEME_TOKEN[segment.accent] as any, segment.text);
+	const value = theme && typeof theme.fg === "function"
+		? theme.fg(FOOTER_THEME_TOKEN[segment.accent] as any, segment.text)
+		: rgb(segment.text, FOOTER_COLORS[segment.accent]);
+	if (segment.label) {
+		const labelText = theme && typeof theme.fg === "function"
+			? theme.fg("muted", segment.label)
+			: dim(segment.label);
+		return `${labelText} ${value}`;
 	}
-	return rgb(segment.text, FOOTER_COLORS[segment.accent]);
+	return value;
 }
 
 function styledSegments(segments: StatusSegment[], separator = SEPARATOR, theme?: any): string {
@@ -433,20 +442,20 @@ export default function (pi: ExtensionAPI) {
 					}
 
 					const hasCache = totals.cacheRead > 0 || totals.cacheWrite > 0;
-					const inputLabel = `↓ ${formatTokensCompact(totals.input)}`;
+					const inputValue = formatTokensCompact(totals.input);
 					const fullCacheDetails: string[] = [];
 					if (totals.cacheRead > 0) fullCacheDetails.push(`${formatTokensCompact(totals.cacheRead)} cached`);
 					if (totals.cacheWrite > 0) fullCacheDetails.push(`${formatTokensCompact(totals.cacheWrite)} written`);
 					if (hasCache && totals.sessionCacheHit !== undefined) fullCacheDetails.push(`${totals.sessionCacheHit.toFixed(0)}% avg`);
 					const inputCacheVariants: StatusSegment[][] = totals.input > 0 || hasCache
 						? [
-							[{ accent: "usage", text: fullCacheDetails.length > 0 ? `${inputLabel} (${fullCacheDetails.join(" ")})` : inputLabel }],
-							[{ accent: "usage", text: hasCache && totals.sessionCacheHit !== undefined
-								? `${inputLabel} (${formatTokensCompact(totals.cacheRead)} cached ${totals.sessionCacheHit.toFixed(0)}% avg)`
-								: inputLabel }],
-							[{ accent: "usage", text: hasCache && totals.sessionCacheHit !== undefined
-								? `${inputLabel} (${totals.sessionCacheHit.toFixed(0)}% avg)`
-								: inputLabel }],
+							[{ accent: "usage", label: "↓", text: fullCacheDetails.length > 0 ? `${inputValue} (${fullCacheDetails.join(" ")})` : inputValue }],
+							[{ accent: "usage", label: "↓", text: hasCache && totals.sessionCacheHit !== undefined
+								? `${inputValue} (${formatTokensCompact(totals.cacheRead)} cached ${totals.sessionCacheHit.toFixed(0)}% avg)`
+								: inputValue }],
+							[{ accent: "usage", label: "↓", text: hasCache && totals.sessionCacheHit !== undefined
+								? `${inputValue} (${totals.sessionCacheHit.toFixed(0)}% avg)`
+								: inputValue }],
 						]
 						: [];
 
@@ -457,7 +466,7 @@ export default function (pi: ExtensionAPI) {
 						{ segments: [{ accent: "model", text: modelWithReasoning(current, thinkingLevel) }], priority: 7 },
 						{
 							segments: contextWindow > 0
-								? [{ accent: "usage", text: `ctx ${contextRemainingPercent(usage?.tokens, contextWindow)}%/${formatTokensCompact(contextWindow)}` }]
+								? [{ accent: "usage", label: "ctx", text: `${contextRemainingPercent(usage?.tokens, contextWindow)}%/${formatTokensCompact(contextWindow)}` }]
 								: [],
 							priority: 1,
 						},
@@ -467,7 +476,7 @@ export default function (pi: ExtensionAPI) {
 							priority: 3,
 						},
 						{
-							segments: totals.output > 0 ? [{ accent: "usage", text: `↑ ${formatTokensCompact(totals.output)}` }] : [],
+							segments: totals.output > 0 ? [{ accent: "usage", label: "↑", text: formatTokensCompact(totals.output) }] : [],
 							priority: 4,
 						},
 						{
