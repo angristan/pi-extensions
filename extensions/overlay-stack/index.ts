@@ -166,10 +166,12 @@ class OverlayStackComponent implements Component {
 
 		if (sections.length === 0) return [];
 
-		const borderLine = (left: string, right: string, rawTitle: string) => {
-			const title = truncateToWidth(rawTitle, Math.max(1, width - 2), "…");
-			const ruleWidth = Math.max(0, width - visibleWidth(title) - 2);
-			return `${accentBorder(left)}${title}${accentBorder("─".repeat(ruleWidth))}${accentBorder(right)}`;
+		const borderLine = (left: string, right: string, rawTitle: string, leadingRuleWidth = 0) => {
+			const leadingRule = "─".repeat(Math.min(leadingRuleWidth, Math.max(0, width - 2)));
+			const title = truncateToWidth(rawTitle, Math.max(1, width - visibleWidth(leadingRule) - 2), "…");
+			const trailingRuleWidth = Math.max(0, width - visibleWidth(leadingRule) - visibleWidth(title) - 2);
+			const styledLeadingRule = leadingRule ? accentBorder(leadingRule) : "";
+			return `${accentBorder(left)}${styledLeadingRule}${title}${accentBorder("─".repeat(trailingRuleWidth))}${accentBorder(right)}`;
 		};
 		const contentLine = (content: string) => {
 			const fitted = truncateToWidth(content, contentWidth, "…");
@@ -180,7 +182,12 @@ class OverlayStackComponent implements Component {
 		const lines: string[] = [];
 		for (let index = 0; index < sections.length; index++) {
 			const section = sections[index]!;
-			lines.push(borderLine(index === 0 ? "╭" : "├", index === 0 ? "╮" : "┤", section.title));
+			lines.push(borderLine(
+				index === 0 ? "╭" : "├",
+				index === 0 ? "╮" : "┤",
+				section.title,
+				index === 0 ? 0 : 2,
+			));
 			for (const bodyLine of section.body) lines.push(contentLine(bodyLine));
 		}
 		lines.push(accentBorder(`╰${"─".repeat(Math.max(0, width - 2))}╯`));
