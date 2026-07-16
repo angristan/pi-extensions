@@ -47,6 +47,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | [`mistral-web-search`](extensions/mistral-web-search/) | Web search via Mistral's web-search connector, rendered as compact transcript rows |
 | [`notifications`](extensions/notifications/) | Desktop notifications for agent activity, so you can context-switch away and get pinged |
 | [`openai-codex-fast`](extensions/openai-codex-fast/) | Toggle OpenAI Codex Fast mode and show a purple `fast` footer indicator when active |
+| [`overlay-stack`](extensions/overlay-stack/) | Internal host that vertically composes independent top-right overlay cards |
 | [`petit-chat-input-bar`](extensions/petit-chat-input-bar/) | A tiny static companion sprite above the editor (a la Vibe's petit chat) |
 | [`plan-progress`](extensions/plan-progress/) | Track a multi-step plan as a collapsible overlay above the editor, and expose a tool the agent can call to maintain it |
 | [`questions`](extensions/questions/) | A tool the agent can call to ask you structured questions and preserve the answers in the transcript |

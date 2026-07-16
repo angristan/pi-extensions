@@ -1,13 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import {
-	Text,
-	truncateToWidth,
-	visibleWidth,
-	wrapTextWithAnsi,
-	type Component,
-	type OverlayHandle,
-	type TUI,
-} from "@earendil-works/pi-tui";
+import { Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 type Status = "pending" | "in_progress" | "completed";
 interface PlanItem { step: string; status: Status }
@@ -19,18 +11,14 @@ interface GoalOverlayState {
 	usedTokens?: number;
 }
 
-const OVERLAY_HOST_KEY = "plan-overlay-host";
+const LEGACY_OVERLAY_HOST_KEY = "plan-overlay-host";
 const LEGACY_WIDGET_KEY = "plan";
 const OVERLAY_WIDTH = 58;
 const MAX_EXPLANATION_ROWS = 3;
 const MAX_GOAL_ROWS = 3;
 
 import { accentBorder } from "../accent-color/index.js";
-import {
-	PLAN_OVERLAY_LAYOUT_EVENT,
-	PLAN_OVERLAY_LAYOUT_REQUEST_EVENT,
-	type PlanOverlayLayout,
-} from "./layout.js";
+import { registerOverlayCard } from "../overlay-stack/index.js";
 
 const parameters = {
 	type: "object",
@@ -247,149 +235,60 @@ function itemRows(item: PlanItem, contentWidth: number, theme: any): string[] {
 	return wrapped.map((line, index) => `${index === 0 ? marker : "  "}${line}`);
 }
 
-class PlanOverlay implements Component {
-	private maxRows = 24;
+function renderPlanCard(
+	state: PlanState,
+	goal: GoalOverlayState | undefined,
+	theme: any,
+	width: number,
+	maxRows: number,
+): string[] {
+	const stats = planStats(state.items);
+	const label = goal && goal.status !== "complete"
+		? ` Goal · Plan ${stats.completed}/${state.items.length} `
+		: ` Plan ${stats.completed}/${state.items.length} `;
+	const top = `${accentBorder("╭")}${theme.bold(label)}${accentBorder("─".repeat(Math.max(0, width - visibleWidth(label) - 2)))}${accentBorder("╮")}`;
+	const lines = [top];
 
-	constructor(
-		private readonly getState: () => PlanState,
-		private readonly getGoal: () => GoalOverlayState | undefined,
-		private readonly theme: any,
-		private readonly onHeightChange: (height: number) => void,
-	) {}
-
-	setMaxRows(maxRows: number) {
-		this.maxRows = Math.max(5, maxRows);
-	}
-
-	render(width: number): string[] {
-		const state = this.getState();
-		const goal = this.getGoal();
-		const stats = planStats(state.items);
-		const label = goal && goal.status !== "complete"
-			? ` Goal · Plan ${stats.completed}/${state.items.length} `
-			: ` Plan ${stats.completed}/${state.items.length} `;
-		const top = `${accentBorder("╭")}${this.theme.bold(label)}${accentBorder("─".repeat(Math.max(0, width - visibleWidth(label) - 2)))}${accentBorder("╮")}`;
-		const lines = [top];
-
-		const contentWidth = Math.max(1, width - 4);
-		const body: string[] = [];
-		if (goal && goal.status !== "complete") {
-			const marker = goal.status === "active"
-				? this.theme.fg("success", this.theme.bold("● Goal "))
-				: this.theme.fg("warning", this.theme.bold("◐ Goal "));
-			const objective = this.theme.fg(goal.status === "active" ? "text" : "muted", goal.objective);
-			const wrapped = boundedWrap(objective, Math.max(1, contentWidth - 7), MAX_GOAL_ROWS, this.theme);
-			body.push(...wrapped.map((line, index) => `${index === 0 ? marker : "       "}${line}`));
-			if (goal.tokenBudget) {
-				const used = Math.max(0, goal.usedTokens ?? 0);
-				body.push(this.theme.fg("dim", `  budget ${Math.round((used / goal.tokenBudget) * 100)}% · ${used.toLocaleString()}/${goal.tokenBudget.toLocaleString()} tokens`));
-			}
-			if (state.items.length || state.explanation?.trim()) body.push("");
+	const contentWidth = Math.max(1, width - 4);
+	const body: string[] = [];
+	if (goal && goal.status !== "complete") {
+		const marker = goal.status === "active"
+			? theme.fg("success", theme.bold("● Goal "))
+			: theme.fg("warning", theme.bold("◐ Goal "));
+		const objective = theme.fg(goal.status === "active" ? "text" : "muted", goal.objective);
+		const wrapped = boundedWrap(objective, Math.max(1, contentWidth - 7), MAX_GOAL_ROWS, theme);
+		body.push(...wrapped.map((line, index) => `${index === 0 ? marker : "       "}${line}`));
+		if (goal.tokenBudget) {
+			const used = Math.max(0, goal.usedTokens ?? 0);
+			body.push(theme.fg("dim", `  budget ${Math.round((used / goal.tokenBudget) * 100)}% · ${used.toLocaleString()}/${goal.tokenBudget.toLocaleString()} tokens`));
 		}
-		if (state.explanation?.trim()) {
-			body.push(...boundedWrap(
-				this.theme.fg("dim", this.theme.italic(state.explanation.trim())),
-				contentWidth,
-				MAX_EXPLANATION_ROWS,
-				this.theme,
-			));
-			body.push("");
-		}
-
-		for (const item of state.items) body.push(...itemRows(item, contentWidth, this.theme));
-		if (!state.items.length && !(goal && goal.status !== "complete")) body.push(this.theme.fg("dim", "No active TODOs"));
-
-		// Render every TODO row when the terminal can fit it. If the terminal is too
-		// short, keep the border intact and make clipping explicit instead of letting
-		// the overlay host silently chop off the bottom of the card.
-		const maxBodyRows = Math.max(1, this.maxRows - 2);
-		const hiddenRows = Math.max(0, body.length - maxBodyRows);
-		const visibleBody = hiddenRows > 0
-			? body.slice(0, Math.max(0, maxBodyRows - 1))
-			: body;
-		if (hiddenRows > 0) visibleBody.push(this.theme.fg("dim", `… ${hiddenRows} more row${hiddenRows === 1 ? "" : "s"}; /plan-status for full list`));
-
-		for (const row of visibleBody) lines.push(boxRow(row, width));
-		lines.push(accentBorder(`╰${"─".repeat(Math.max(0, width - 2))}╯`));
-		const rendered = lines.map((line) => truncateToWidth(line, width, ""));
-		this.onHeightChange(rendered.length);
-		return rendered;
+		if (state.items.length || state.explanation?.trim()) body.push("");
+	}
+	if (state.explanation?.trim()) {
+		body.push(...boundedWrap(
+			theme.fg("dim", theme.italic(state.explanation.trim())),
+			contentWidth,
+			MAX_EXPLANATION_ROWS,
+			theme,
+		));
+		body.push("");
 	}
 
-	invalidate() {}
-}
+	for (const item of state.items) body.push(...itemRows(item, contentWidth, theme));
+	if (!state.items.length && !(goal && goal.status !== "complete")) body.push(theme.fg("dim", "No active TODOs"));
 
-class PlanOverlayHost implements Component {
-	private readonly overlay: PlanOverlay;
-	private readonly handle: OverlayHandle;
-	private disposed = false;
-	private eligibleVisible = false;
-	private modalHidden = false;
-	private height = 0;
+	// Keep the border intact when the shared stack allocates fewer rows than the
+	// plan needs. The final body row explains how much content was omitted.
+	const maxBodyRows = Math.max(1, maxRows - 2);
+	const hiddenRows = Math.max(0, body.length - maxBodyRows);
+	const visibleBody = hiddenRows > 0
+		? body.slice(0, Math.max(0, maxBodyRows - 1))
+		: body;
+	if (hiddenRows > 0) visibleBody.push(theme.fg("dim", `… ${hiddenRows} more row${hiddenRows === 1 ? "" : "s"}; /plan-status for full list`));
 
-	constructor(
-		private readonly tui: TUI,
-		theme: any,
-		getState: () => PlanState,
-		getGoal: () => GoalOverlayState | undefined,
-		private readonly onLayoutChange: (layout: PlanOverlayLayout) => void,
-		private readonly onDispose: () => void,
-	) {
-		this.overlay = new PlanOverlay(getState, getGoal, theme, (height) => {
-			if (height === this.height) return;
-			this.height = height;
-			this.emitLayout();
-		});
-		this.handle = tui.showOverlay(this.overlay, {
-			nonCapturing: true,
-			anchor: "top-right",
-			width: OVERLAY_WIDTH,
-			maxHeight: "80%",
-			margin: { top: 1, right: 2 },
-			visible: (termWidth, termHeight) => {
-				this.overlay.setMaxRows(Math.floor(termHeight * 0.8));
-				this.eligibleVisible = termWidth >= 90 && termHeight >= 10;
-				this.emitLayout();
-				return this.eligibleVisible;
-			},
-		});
-		this.emitLayout();
-	}
-
-	private emitLayout() {
-		this.onLayoutChange({
-			visible: !this.disposed && this.eligibleVisible && !this.modalHidden,
-			height: this.height,
-		});
-	}
-
-	refresh() {
-		this.overlay.invalidate();
-		this.tui.requestRender();
-	}
-
-	setModalHidden(hidden: boolean) {
-		this.modalHidden = hidden;
-		this.handle.setHidden(hidden);
-		this.emitLayout();
-		this.tui.requestRender();
-	}
-
-	render(): string[] {
-		return [];
-	}
-
-	invalidate() {
-		this.overlay.invalidate();
-	}
-
-	dispose() {
-		if (this.disposed) return;
-		this.disposed = true;
-		this.handle.hide();
-		this.emitLayout();
-		this.onDispose();
-	}
+	for (const row of visibleBody) lines.push(boxRow(row, width));
+	lines.push(accentBorder(`╰${"─".repeat(Math.max(0, width - 2))}╯`));
+	return lines.map((line) => truncateToWidth(line, width, ""));
 }
 
 export default function (pi: ExtensionAPI) {
@@ -397,52 +296,29 @@ export default function (pi: ExtensionAPI) {
 	let goalState: GoalOverlayState | undefined;
 	let activeCtx: any;
 	let planOverlayActive = false;
-	let overlayHost: PlanOverlayHost | undefined;
-	let latestPlanLayout: PlanOverlayLayout = { visible: false, height: 0 };
-	const modalOwners = new Set<string>();
 
-	const emitPlanLayout = (layout: PlanOverlayLayout) => {
-		if (layout.visible === latestPlanLayout.visible && layout.height === latestPlanLayout.height) return;
-		latestPlanLayout = layout;
-		pi.events.emit(PLAN_OVERLAY_LAYOUT_EVENT, layout);
-	};
-	const persist = () => pi.appendEntry("plan-progress", state);
-	const clearOverlay = (ctx: any) => {
-		ctx.ui.setWidget(LEGACY_WIDGET_KEY, undefined);
-		ctx.ui.setWidget(OVERLAY_HOST_KEY, undefined);
-		overlayHost = undefined;
-		emitPlanLayout({ visible: false, height: 0 });
-	};
-	const ensureOverlay = (ctx: any) => {
-		if (ctx.mode !== "tui") return;
-		if (overlayHost) {
-			overlayHost.refresh();
-			return;
-		}
-		ctx.ui.setWidget(OVERLAY_HOST_KEY, (tui: TUI, theme: any) => {
-			let host: PlanOverlayHost;
-			host = new PlanOverlayHost(tui, theme, () => state, () => goalState, emitPlanLayout, () => {
-				if (overlayHost === host) overlayHost = undefined;
-			});
-			overlayHost = host;
-			host.setModalHidden(modalOwners.size > 0);
-			return host;
-		});
-	};
-	const stopLayoutRequests = pi.events.on(PLAN_OVERLAY_LAYOUT_REQUEST_EVENT, () => {
-		pi.events.emit(PLAN_OVERLAY_LAYOUT_EVENT, latestPlanLayout);
+	const overlayCard = registerOverlayCard({
+		id: "plan-progress",
+		order: 10,
+		width: OVERLAY_WIDTH,
+		minHeight: 3,
+		minTerminalWidth: 90,
+		minTerminalHeight: 10,
+		visible: () => {
+			const stats = planStats(state.items);
+			const activePlan = planOverlayActive && state.items.length > 0 && stats.completed < state.items.length;
+			return activePlan || Boolean(goalState && goalState.status !== "complete");
+		},
+		render: (width, maxHeight, theme) => renderPlanCard(state, goalState, theme, width, maxHeight),
 	});
-	const updateUi = (ctx: any) => {
-		const stats = planStats(state.items);
-		const activePlan = planOverlayActive && state.items.length > 0 && stats.completed < state.items.length;
-		const visibleGoal = Boolean(goalState && goalState.status !== "complete");
-		if (!activePlan && !visibleGoal) {
-			clearOverlay(ctx);
-			ctx.ui.setStatus("plan", undefined);
-			return;
-		}
+	const persist = () => pi.appendEntry("plan-progress", state);
+	const clearLegacyUi = (ctx: any) => {
 		ctx.ui.setWidget(LEGACY_WIDGET_KEY, undefined);
-		ensureOverlay(ctx);
+		ctx.ui.setWidget(LEGACY_OVERLAY_HOST_KEY, undefined);
+	};
+	const updateUi = (ctx: any) => {
+		clearLegacyUi(ctx);
+		overlayCard.invalidate();
 		// Keep TODO state visible in the overlay only; the footer is too easy to
 		// confuse with a finalization guard and tends to linger visually.
 		ctx.ui.setStatus("plan", undefined);
@@ -511,22 +387,12 @@ export default function (pi: ExtensionAPI) {
 		goalState = goal && typeof goal === "object" ? goal as GoalOverlayState : undefined;
 		if (activeCtx) updateUi(activeCtx);
 	});
-	pi.events.on("modal-overlay", (event: unknown) => {
-		if (!event || typeof event !== "object") return;
-		const payload = event as { id?: unknown; hidden?: unknown };
-		if (typeof payload.id !== "string" || typeof payload.hidden !== "boolean") return;
-		if (payload.hidden) modalOwners.add(payload.id);
-		else modalOwners.delete(payload.id);
-		overlayHost?.setModalHidden(modalOwners.size > 0);
-	});
-
 	const restoreState = (ctx: any) => {
 		activeCtx = ctx;
-		clearOverlay(ctx);
+		clearLegacyUi(ctx);
 		state = { items: [] };
 		goalState = undefined;
 		planOverlayActive = false;
-		modalOwners.clear();
 		const entries = typeof ctx.sessionManager.getBranch === "function"
 			? ctx.sessionManager.getBranch()
 			: ctx.sessionManager.getEntries();
@@ -540,12 +406,11 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => restoreState(ctx));
 	pi.on("session_tree", (_event, ctx) => restoreState(ctx));
 	pi.on("session_shutdown", (_event, ctx) => {
-		clearOverlay(ctx);
+		clearLegacyUi(ctx);
 		ctx.ui.setStatus("plan", undefined);
 		activeCtx = undefined;
 		goalState = undefined;
 		planOverlayActive = false;
-		modalOwners.clear();
-		stopLayoutRequests();
+		overlayCard.unregister();
 	});
 }
