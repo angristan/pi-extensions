@@ -4,7 +4,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 
 const FOOTER_INDENT = " ";
-const SEPARATOR = " · ";
+const SEPARATOR = " │ ";
 const CONTEXT_BASELINE_TOKENS = 12_000;
 const COMMAND_TIMEOUT_MS = 2_500;
 const TITLE_SPINNER_INTERVAL_MS = 200;
