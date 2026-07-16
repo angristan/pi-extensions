@@ -23,15 +23,16 @@ const FOOTER_COLORS = {
 	timing: [185, 170, 224], // balanced accent for ttft/tps
 } as const;
 
-/** Map a footer segment accent to a theme color token, mirroring turn-stats
- * so the footer and the per-turn transcript row share one color vocabulary. */
+/** Map a footer segment accent to a theme color token. Token values (↓/↑/ctx)
+ * use 'text' to match turn-stats; labels are muted. Other segments use distinct
+ * theme tokens so the footer has color life, not just two greys. */
 const FOOTER_THEME_TOKEN: Record<StatusSegment["accent"], string> = {
-	thread: "accent",       // session identity — same as turn-stats cost/tps (accent)
-	path: "muted",          // cwd — secondary text, like turn-stats labels
-	branch: "success",     // git branch — a status-ish green, like turn-stats duration
-	model: "muted",        // model name — secondary, less prominent
-	usage: "text",         // tokens/ctx — default text, like turn-stats token values
-	timing: "accent",      // ttft/tps — accent, like turn-stats tps
+	thread: "accent",        // session identity
+	path: "mdLink",          // cwd — link blue, distinct from model
+	branch: "success",      // git branch — green status
+	model: "mdHeading",     // model name — heading tone, distinct
+	usage: "text",          // tokens/ctx values — default text, like turn-stats
+	timing: "accent",       // ttft/tps
 };
 
 interface BranchChanges {
