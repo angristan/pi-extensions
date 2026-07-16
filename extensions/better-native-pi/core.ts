@@ -13,7 +13,6 @@ import { hyperlinkPath } from "../hyperlinks/index.js";
 import {
 	BOLD,
 	CYAN,
-	DIM,
 	GREEN,
 	MAGENTA,
 	RED,
@@ -21,11 +20,11 @@ import {
 	nonEmptyLineCount,
 	shortPath,
 } from "./render.js";
-import { highlightShellCommand, highlightedShellLine } from "./shell.js";
+import { dimTheme, highlightShellCommand, highlightedShellLine } from "./shell.js";
 import { colorizeDiff, diffPalette, WidthAwareLines } from "./diff.js";
 
 // Re-export so restylers import everything from one place (./core.js).
-export { Container, diffPalette, WidthAwareLines, colorizeDiff, highlightShellCommand, highlightedShellLine };
+export { Container, dimTheme, diffPalette, WidthAwareLines, colorizeDiff, highlightShellCommand, highlightedShellLine };
 export type { WidthAwareLines as WidthAwareLinesType } from "./diff.js";
 
 // Match the transcript hierarchy directly at the transcript margin.
@@ -55,7 +54,7 @@ export function fitToolLine(line: string, width: number): string {
 
 /** Human-readable, one-line call detail; paths use `~` like display paths. */
 function argDetail(name: string, args: Record<string, unknown>, theme?: any): string {
-	if (name === "bash" && typeof args.command === "string") return highlightShellCommand(args.command, theme);
+	if (name === "bash" && typeof args.command === "string") return highlightShellCommand(args.command, dimTheme(theme));
 	if ((name === "grep" || name === "find") && typeof args.pattern === "string") {
 		const path = typeof args.path === "string"
 			? hyperlinkPath(shortPath(args.path), args.path, cwd)
@@ -261,12 +260,11 @@ export function buildToolBlock(
 	const headlineTone = headline
 		? (typeof theme?.fg === "function" ? theme.fg("warning", headline) : `${headline}`)
 		: "";
-	// Command stays full-color: it's naturally brighter than the DIM'd output
-	// below, giving a clear hierarchy (command > reasoning > output) without
-	// an extra dim attribute that competes with the output's dim.
-	const dimmedDetail = hasDetail ? detail : "";
+	// Command colors are lightly dimmed via dimTheme (gentle HSL lightness
+	// shift) so they recede slightly from full-bright, but stay clearly brighter
+	// than the DIM'd output below — a middle tier between command and output.
 	const metadata = hasDetail
-		? `${dimmedDetail} · ${summary}`
+		? `${detail} · ${summary}`
 		: summary;
 	const lines: string[] = [
 		`${LEAD}${mark} ${verb}${headlineTone ? ` ${headlineTone}` : ""}`,
