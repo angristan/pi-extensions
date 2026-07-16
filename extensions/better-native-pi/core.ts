@@ -254,11 +254,11 @@ export function buildToolBlock(
 	// Reasoning is the informative part — bold it so it's the emphasis, but keep
 	// it default-colored (accent was too loud). The verb stays plain text.
 	const headline = oneLine(reasoning);
-	// Reasoning in a distinct-but-not-loud tone (warning = warm yellow on
-	// gruvbox): stands apart from white default text and the colorful command
-	// without screaming like accent. No bold — the color does the work.
+	// Reasoning in the theme's accent tone: distinct from every syntax token
+	// (red/green/blue/yellow) and from default text, so it never blends with the
+	// command. On gruvbox this is the signature purple.
 	const headlineTone = headline
-		? (typeof theme?.fg === "function" ? theme.fg("warning", headline) : `${headline}`)
+		? (typeof theme?.fg === "function" ? theme.fg("accent", headline) : `${headline}`)
 		: "";
 	// Command colors are lightly dimmed via dimTheme (gentle HSL lightness
 	// shift) so they recede slightly from full-bright, but stay clearly brighter
