@@ -6,7 +6,11 @@
  * only after agent_settled. Pi's retry and compaction loaders keep their native
  * messages; the elapsed time resumes when the normal working row returns.
  */
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+	keyText,
+	type ExtensionAPI,
+	type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 
 const UPDATE_INTERVAL_MS = 1_000;
 
@@ -17,9 +21,10 @@ function formatElapsed(elapsedMs: number): string {
 	const seconds = totalSeconds % 60;
 
 	if (hours > 0) {
-		return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+		return `${hours}h ${String(minutes).padStart(2, "0")}m ${String(seconds).padStart(2, "0")}s`;
 	}
-	return `${minutes}:${String(seconds).padStart(2, "0")}`;
+	if (minutes > 0) return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+	return `${seconds}s`;
 }
 
 export default function workingTimer(pi: ExtensionAPI) {
@@ -43,9 +48,12 @@ export default function workingTimer(pi: ExtensionAPI) {
 		startedAt ??= Date.now();
 		if (timer) return;
 
+		const interruptKey = keyText("app.interrupt");
+		const interruptHint = interruptKey ? ` • ${interruptKey} to interrupt` : "";
 		const update = () => {
 			if (startedAt === undefined) return;
-			ctx.ui.setWorkingMessage(`Working... ${formatElapsed(Date.now() - startedAt)}`);
+			const elapsed = formatElapsed(Date.now() - startedAt);
+			ctx.ui.setWorkingMessage(`Working (${elapsed}${interruptHint})`);
 		};
 
 		update();
