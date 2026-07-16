@@ -1,0 +1,60 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`mistral web search renderer collapsed results use shared engine attribution and semantic colors 1`] = `
+[
+  "<green>•</> <bold>Searched</> “Kimi pricing” · 2026-04-01 → 2026-04-30",
+  "  └ <green>6 results</><dim> · </dim><muted>via Brave</muted><dim> · </dim>1.2s",
+  "    <syntaxNumber>1.</syntaxNumber> <link:https://www.example1.com/article><mdLink>Result 1</mdLink></link> <dim>—</dim> <accent>example1.com</accent><dim> · </dim><syntaxNumber>2026-04-21</syntaxNumber>",
+  "       <dim>Evidence 1</dim>",
+  "    <syntaxNumber>2.</syntaxNumber> <link:https://www.example2.com/article><mdLink>Result 2</mdLink></link> <dim>—</dim> <accent>example2.com</accent><dim> · </dim><syntaxNumber>2026-04-21</syntaxNumber>",
+  "       <dim>Evidence 2</dim>",
+  "    <syntaxNumber>3.</syntaxNumber> <link:https://www.example3.com/article><mdLink>Result 3</mdLink></link> <dim>—</dim> <accent>example3.com</accent><dim> · </dim><syntaxNumber>2026-04-21</syntaxNumber>",
+  "       <dim>Evidence 3</dim>",
+  "    <syntaxNumber>4.</syntaxNumber> <link:https://www.example4.com/article><mdLink>Result 4</mdLink></link> <dim>—</dim> <accent>example4.com</accent><dim> · </dim><syntaxNumber>2026-04-21</syntaxNumber>",
+  "       <dim>Evidence 4</dim>",
+  "    <syntaxNumber>5.</syntaxNumber> <link:https://www.example5.com/article><mdLink>Result 5</mdLink></link> <dim>—</dim> <accent>example5.com</accent><dim> · </dim><syntaxNumber>2026-04-21</syntaxNumber>",
+  "       <dim>Evidence 5</dim>",
+  "    <syntaxNumber>5</syntaxNumber><muted> shown · </muted><syntaxNumber>1</syntaxNumber><muted> more</muted>",
+]
+`;
+
+exports[`mistral web search renderer expanded mixed-engine results retain per-result attribution 1`] = `
+[
+  "<green>•</> <bold>Searched</> “mixed sources”",
+  "  └ <green>2 results</><dim> · </dim><1s",
+  "    <syntaxNumber>1.</syntaxNumber> <link:https://www.example1.com/article><mdLink>Result 1</mdLink></link> <dim>—</dim> <accent>example1.com</accent><dim> · </dim><muted>via Brave</muted><dim> · </dim><syntaxNumber>2026-04-21</syntaxNumber>",
+  "       <dim>Evidence 1</dim>",
+  "    <syntaxNumber>2.</syntaxNumber> <link:https://www.example2.com/article><mdLink>Result 2</mdLink></link> <dim>—</dim> <accent>example2.com</accent><dim> · </dim><muted>via Bing</muted><dim> · </dim><syntaxNumber>2026-04-21</syntaxNumber>",
+  "       <dim>Evidence 2</dim>",
+]
+`;
+
+exports[`mistral web search renderer empty results remain distinct from failures 1`] = `
+[
+  "<green>•</> <bold>Searched</> “no matches”",
+  "  └ <green>No results</><dim> · </dim><1s",
+]
+`;
+
+exports[`mistral web search renderer search failures show sanitized reasons 1`] = `
+[
+  "<red>•</> <bold>Search failed</> “pricingquery”",
+  "  └ <error>Request timed out after 10s</error>",
+]
+`;
+
+exports[`mistral web search renderer open failures use the requested target and actual reason 1`] = `
+[
+  "<red>•</> <bold>Open failed</> <link:https://example.com/docs><mdLink>https://example.com/docs</mdLink></link>",
+  "  └ <error>Timed out while opening this page. Try another source.</error>",
+]
+`;
+
+exports[`mistral web search renderer expanded open content strips terminal controls 1`] = `
+[
+  "<green>•</> <bold>Opened</> <link:https://example.com/docs><mdLink>https://example.com/docs</mdLink></link>",
+  "  └ <green>1 line · 32b</> · <1s",
+  "",
+  "    <dim>Readable red content</dim>",
+]
+`;

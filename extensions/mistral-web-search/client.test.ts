@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
 	createSearchToolResult,
+	detectOpenUrlFailure,
+	normalizeHttpUrl,
 	parseSearchResultText,
 	type NewsSearchResult,
 } from "./client";
@@ -46,6 +48,7 @@ describe("search tool persistence", () => {
 			startDate: "2026-03-01",
 			endDate: "2026-03-31",
 			lang: "en",
+			searchEngine: "brave",
 			elapsedMs: 124,
 			resultCount: 400,
 		});
@@ -67,6 +70,7 @@ describe("search tool persistence", () => {
 		const text = createSearchToolResult(largeNewsResult()).content[0].text;
 		const parsed = parseSearchResultText(text);
 		expect(parsed.resultCount).toBe(400);
+		expect(parsed.searchEngine).toBe("brave");
 		expect(parsed.results.length).toBeGreaterThan(0);
 		expect(parsed.results.length).toBeLessThan(400);
 		for (const result of parsed.results) {
@@ -102,6 +106,34 @@ describe("search tool persistence", () => {
 			description: "Moonshot's official pricing.",
 			snippets: ["Costs $0.95 & scales."],
 		});
+	});
+
+	test("removes terminal controls and rejects unsafe result URLs", () => {
+		const result = largeNewsResult();
+		result.query = "pricing\x1b[31m red\x1b[0m";
+		result.results = [{
+			...result.results[0],
+			url: "javascript:alert(1)",
+			title: "Safe\x1b]8;;https://evil.example\x07Injected\x1b]8;;\x07 title",
+			description: "Control\u0000free",
+			snippets: ["Normal \x1b[31mred\x1b[0m text"],
+		}];
+		const toolResult = createSearchToolResult(result);
+		const serialized = JSON.stringify(toolResult);
+		expect(serialized).not.toMatch(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/);
+		expect(toolResult.content[0].text).toContain("SafeInjected title");
+		expect(toolResult.content[0].text).toContain("URL: n/a");
+		expect(toolResult.content[0].text).toContain("Normal red text");
+		expect(toolResult.details.results[0]?.url).toBeUndefined();
+		expect(toolResult.details.results[0]?.website).toBeUndefined();
+		expect(normalizeHttpUrl("https://user:pass@example.com/private")).toBeUndefined();
+		expect(normalizeHttpUrl("ftp://example.com/file")).toBeUndefined();
+		expect(normalizeHttpUrl("https://www.example.com/path")).toBe("https://www.example.com/path");
+	});
+
+	test("detects connector timeout text as an open failure", () => {
+		expect(detectOpenUrlFailure("Timed out while opening this page. You may retry once, or try a different source.")).toContain("Timed out while opening this page.");
+		expect(detectOpenUrlFailure("Page content loaded normally.")).toBeUndefined();
 	});
 
 	test("keeps description available when snippets are absent", () => {

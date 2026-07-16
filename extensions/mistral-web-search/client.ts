@@ -85,6 +85,7 @@ export interface SearchDisplayDetails {
 	startDate?: string;
 	endDate?: string;
 	lang?: string;
+	searchEngine?: string;
 	elapsedMs?: number;
 	resultCount: number;
 	results: SearchDisplayItem[];
@@ -249,7 +250,7 @@ function parseRagResults(result: unknown): RagResult[] {
 				: [];
 			return {
 				id,
-				url: asNullableString(record.url),
+				url: normalizeHttpUrl(asNullableString(record.url)) ?? null,
 				title: asNullableString(record.title),
 				description: asNullableString(record.description),
 				snippets,
@@ -358,11 +359,19 @@ function parseOpenUrlContent(result: unknown): string {
 	return text;
 }
 
+export function detectOpenUrlFailure(content: string): string | undefined {
+	const normalized = stripTerminalControls(content).replace(/\s+/g, " ").trim();
+	return /^Timed out while opening this page\b/i.test(normalized) ? normalized : undefined;
+}
+
 export async function openMistralUrl(url: string, options: MistralMcpOptions = {}): Promise<OpenUrlResult> {
-	const trimmedUrl = url.trim();
+	const trimmedUrl = stripTerminalControls(url).trim();
 	if (!trimmedUrl) throw new Error("url must not be empty");
 	const { result, elapsedMs } = await callMcpTool("open_url", { url: trimmedUrl }, options);
-	const truncated = truncateText(parseOpenUrlContent(result));
+	const content = parseOpenUrlContent(result);
+	const failure = detectOpenUrlFailure(content);
+	if (failure) throw new Error(failure);
+	const truncated = truncateText(content);
 	return {
 		provider: "mistral-web-search-mcp",
 		tool: "open_url",
@@ -375,8 +384,17 @@ export async function openMistralUrl(url: string, options: MistralMcpOptions = {
 	};
 }
 
+function stripTerminalControls(value: string): string {
+	return value
+		.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
+		.replace(/\x1b[P^_].*?(?:\x1b\\|\x07)/gs, "")
+		.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+		.replace(/\x1b[@-_]/g, "")
+		.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, "");
+}
+
 function shorten(value: string, maxChars: number): string {
-	const normalized = value.replace(/\s+/g, " ").trim();
+	const normalized = stripTerminalControls(value).replace(/\s+/g, " ").trim();
 	return normalized.length <= maxChars ? normalized : `${normalized.slice(0, maxChars).trimEnd()}…`;
 }
 
@@ -409,33 +427,42 @@ function decodeHtmlEntities(value: string): string {
 	});
 }
 
-function cleanSearchText(value: string, maxChars: number): string {
+export function sanitizeSearchText(value: string, maxChars: number): string {
 	return shorten(decodeHtmlEntities(value).replace(/<[^>]*>/g, " "), maxChars);
 }
 
-function websiteFromUrl(url: string | null | undefined): string | undefined {
-	if (!url) return undefined;
+export function normalizeHttpUrl(value: string | null | undefined): string | undefined {
+	if (!value) return undefined;
 	try {
-		return new URL(url).hostname.replace(/^www\./i, "") || undefined;
+		const parsed = new URL(stripTerminalControls(value).trim());
+		if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username || parsed.password) return undefined;
+		return parsed.href;
 	} catch {
 		return undefined;
 	}
 }
 
+function websiteFromUrl(url: string | null | undefined): string | undefined {
+	const normalized = normalizeHttpUrl(url);
+	if (!normalized) return undefined;
+	return new URL(normalized).hostname.replace(/^www\./i, "") || undefined;
+}
+
 function formatResultItem(result: RagResult, index: number): string[] {
+	const url = normalizeHttpUrl(result.url);
 	const lines = [
-		`${index + 1}. ${cleanSearchText(result.title ?? result.url ?? result.id, MAX_TITLE_CHARS)}`,
-		`   URL: ${result.url ? shorten(result.url, MAX_URL_CHARS) : "n/a"}`,
+		`${index + 1}. ${sanitizeSearchText(result.title ?? url ?? result.id, MAX_TITLE_CHARS)}`,
+		`   URL: ${url ? shorten(url, MAX_URL_CHARS) : "n/a"}`,
 		`   Rank: ${result.rank}`,
-		`   Website: ${websiteFromUrl(result.url) ?? "n/a"}`,
-		`   Search engine: ${cleanSearchText(result.source, MAX_SOURCE_CHARS)}`,
+		`   Website: ${websiteFromUrl(url) ?? "n/a"}`,
+		`   Search engine: ${sanitizeSearchText(result.source, MAX_SOURCE_CHARS)}`,
 	];
-	if (result.date) lines.push(`   Date: ${cleanSearchText(result.date, MAX_DATE_CHARS)}`);
-	if (result.description) lines.push(`   Description: ${cleanSearchText(result.description, 600)}`);
+	if (result.date) lines.push(`   Date: ${sanitizeSearchText(result.date, MAX_DATE_CHARS)}`);
+	if (result.description) lines.push(`   Description: ${sanitizeSearchText(result.description, 600)}`);
 	if (result.snippets.length > 0) {
 		lines.push("   Snippets:");
 		for (const snippet of result.snippets.slice(0, MAX_SNIPPETS_PER_RESULT)) {
-			lines.push(`   - ${cleanSearchText(snippet, MAX_SNIPPET_CHARS)}`);
+			lines.push(`   - ${sanitizeSearchText(snippet, MAX_SNIPPET_CHARS)}`);
 		}
 	}
 	if (!result.canOpen) lines.push("   Can open: false");
@@ -486,24 +513,27 @@ export function formatSearchResults(result: WebSearchResult | NewsSearchResult):
 }
 
 function createSearchDisplayDetails(result: WebSearchResult | NewsSearchResult): SearchDisplayDetails {
+	const results = result.results.slice(0, MAX_DISPLAY_RESULTS).map((item) => ({
+		title: sanitizeSearchText(item.title ?? item.url ?? item.id, MAX_TITLE_CHARS),
+		url: normalizeHttpUrl(item.url),
+		website: websiteFromUrl(item.url),
+		searchEngine: sanitizeSearchText(item.source, MAX_SOURCE_CHARS),
+		rank: item.rank,
+		date: item.date ? sanitizeSearchText(item.date, MAX_DATE_CHARS) : undefined,
+		description: item.description ? sanitizeSearchText(item.description, 600) : undefined,
+		snippets: item.snippets.slice(0, 1).map((snippet) => sanitizeSearchText(snippet, MAX_SNIPPET_CHARS)),
+		canOpen: item.canOpen ? undefined : false,
+	}));
+	const searchEngines = new Set(results.map((item) => item.searchEngine).filter((value): value is string => Boolean(value)));
 	return {
-		query: shorten(result.query, MAX_QUERY_CHARS),
-		startDate: result.startDate ? shorten(result.startDate, MAX_DATE_CHARS) : undefined,
-		endDate: result.endDate ? shorten(result.endDate, MAX_DATE_CHARS) : undefined,
-		lang: result.tool === "news_search" && result.lang ? shorten(result.lang, MAX_SOURCE_CHARS) : undefined,
+		query: sanitizeSearchText(result.query, MAX_QUERY_CHARS),
+		startDate: result.startDate ? sanitizeSearchText(result.startDate, MAX_DATE_CHARS) : undefined,
+		endDate: result.endDate ? sanitizeSearchText(result.endDate, MAX_DATE_CHARS) : undefined,
+		lang: result.tool === "news_search" && result.lang ? sanitizeSearchText(result.lang, MAX_SOURCE_CHARS) : undefined,
+		searchEngine: searchEngines.size === 1 ? [...searchEngines][0] : undefined,
 		elapsedMs: Math.round(result.elapsedMs),
 		resultCount: result.results.length,
-		results: result.results.slice(0, MAX_DISPLAY_RESULTS).map((item) => ({
-			title: cleanSearchText(item.title ?? item.url ?? item.id, MAX_TITLE_CHARS),
-			url: item.url ? shorten(item.url, MAX_URL_CHARS) : undefined,
-			website: websiteFromUrl(item.url),
-			searchEngine: cleanSearchText(item.source, MAX_SOURCE_CHARS),
-			rank: item.rank,
-			date: item.date ? cleanSearchText(item.date, MAX_DATE_CHARS) : undefined,
-			description: item.description ? cleanSearchText(item.description, 600) : undefined,
-			snippets: item.snippets.slice(0, 1).map((snippet) => cleanSearchText(snippet, MAX_SNIPPET_CHARS)),
-			canOpen: item.canOpen ? undefined : false,
-		})),
+		results,
 	};
 }
 
@@ -566,9 +596,10 @@ export function parseSearchResultText(text: string): SearchDisplayDetails {
 		if (!current) continue;
 		match = /^ {3}URL:\s(.*)$/.exec(line);
 		if (match) {
-			if (match[1] !== "n/a") {
-				current.url = match[1];
-				current.website = websiteFromUrl(match[1]);
+			const url = match[1] === "n/a" ? undefined : normalizeHttpUrl(match[1]);
+			if (url) {
+				current.url = url;
+				current.website = websiteFromUrl(url);
 			}
 			continue;
 		}
@@ -612,6 +643,8 @@ export function parseSearchResultText(text: string): SearchDisplayDetails {
 		match = /^ {3}-\s(.*)$/.exec(line);
 		if (match) current.snippets.push(match[1]);
 	}
+	const searchEngines = new Set(details.results.map((item) => item.searchEngine ?? item.source).filter((value): value is string => Boolean(value)));
+	if (searchEngines.size === 1) details.searchEngine = [...searchEngines][0];
 	return details;
 }
 
