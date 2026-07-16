@@ -211,17 +211,14 @@ export default function (pi: ExtensionAPI) {
 		if (usage && (usage.input > 0 || usage.output > 0 || usage.cacheRead > 0 || usage.cacheWrite > 0)) {
 			const tokenBits: string[] = [];
 			tokenBits.push(`${theme.fg("muted", "↓")} ${theme.fg("text", formatTokensCompact(usage.input))}`);
-			if (usage.cacheRead > 0) tokenBits.push(`${theme.fg("muted", "cached")} ${theme.fg("text", formatTokensCompact(usage.cacheRead))}`);
+			// Cache detail colored by hit rate like the footer: success green when
+			// ≥50%, warning yellow otherwise — so cache health is visible at a glance.
+			const cacheColor = (data.cacheHitPercent ?? 0) >= 50 ? "success" : "warning";
+			if (usage.cacheRead > 0) tokenBits.push(`${theme.fg("muted", "cached")} ${theme.fg(cacheColor, formatTokensCompact(usage.cacheRead))}`);
+			if (usage.cacheWrite > 0) tokenBits.push(`${theme.fg("muted", "written")} ${theme.fg(cacheColor, formatTokensCompact(usage.cacheWrite))}`);
+			if (data.cacheHitPercent !== undefined) tokenBits.push(`${theme.fg("muted", "hit")} ${theme.fg(cacheColor, `${data.cacheHitPercent.toFixed(0)}%`)}`);
 			tokenBits.push(`${theme.fg("muted", "↑")} ${theme.fg("text", formatTokensCompact(usage.output))}`);
 			groups.push(tokenBits.join(theme.fg("dim", "  ")));
-		}
-
-		// ── Cache hit rate: green when ≥50% (good), warning yellow below ──────────
-		// Same definition the footer used for "last" so the two stay comparable.
-		if (data.cacheHitPercent !== undefined) {
-			const hit = data.cacheHitPercent;
-			const color = hit >= 50 ? "success" : "warning";
-			groups.push(`${theme.fg("muted", "cache")} ${theme.fg(color, `${hit.toFixed(0)}%`)}`);
 		}
 
 		// ── Cost: run's marginal cost in accent (the interesting per-turn metric) ──
