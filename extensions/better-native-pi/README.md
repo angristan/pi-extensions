@@ -27,7 +27,9 @@ Re-registers pi's built-in tools under their native names (`read`, `write`,
   line per tool), draws a tight block inline
 - a **required `reasoning` parameter** injected into each tool's schema; the
   model must state the GOAL of the call, which renders as the line-1 headline
-- `execute` delegates to the real built-in tool (reasoning stripped first)
+- `execute` delegates to the real built-in tool (reasoning stripped first); when
+  `background-jobs` is loaded, `bash` instead uses its managed terminal service
+  so quick commands, yielded processes, and `tty: true` prompts share one tool
 
 Successful `edit`/`write` calls append a syntax-highlighted, line-numbered
 diff inline. Bash commands reuse the bordered box from the `code-blocks`

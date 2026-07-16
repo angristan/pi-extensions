@@ -2,11 +2,13 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import registerBetterNativeBash from "../better-native-pi/bash";
 import registerBackgroundJobs, { BoundedOutput, CursorOutput } from "./index";
 import { isPtySupported } from "./terminal-process";
 
 interface Harness {
 	tools: Map<string, any>;
+	activeTools: Set<string>;
 	commands: Map<string, any>;
 	handlers: Map<string, (...args: any[]) => any>;
 	statuses: Map<string, string | undefined>;
@@ -23,8 +25,9 @@ afterEach(() => {
 	cleanupGroups.clear();
 });
 
-function createHarness(options: { killGraceMs?: number } = {}): Harness {
+function createHarness(options: { killGraceMs?: number; betterNative?: boolean } = {}): Harness {
 	const tools = new Map<string, any>();
+	const activeTools = new Set<string>();
 	const commands = new Map<string, any>();
 	const handlers = new Map<string, (...args: any[]) => any>();
 	const statuses = new Map<string, string | undefined>();
@@ -45,15 +48,18 @@ function createHarness(options: { killGraceMs?: number } = {}): Harness {
 		sessionManager: { getEntries: () => [] },
 	};
 	const pi = {
-		registerTool(definition: any) { tools.set(definition.name, definition); },
+		registerTool(definition: any) { tools.set(definition.name, definition); activeTools.add(definition.name); },
 		registerCommand(name: string, definition: any) { commands.set(name, definition); },
+		getActiveTools() { return [...activeTools]; },
+		setActiveTools(names: string[]) { activeTools.clear(); for (const name of names) activeTools.add(name); },
 		registerEntryRenderer() {},
 		on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
 		appendEntry() {},
 		events: { emit() {} },
 	};
 	registerBackgroundJobs(pi as any, options);
-	return { tools, commands, handlers, statuses, selectCalls, ctx };
+	if (options.betterNative !== false) registerBetterNativeBash(pi as any);
+	return { tools, activeTools, commands, handlers, statuses, selectCalls, ctx };
 }
 
 async function startHarness(harness: Harness): Promise<void> {
@@ -126,6 +132,7 @@ describe("terminal tools", () => {
 		const harness = createHarness();
 		await startHarness(harness);
 		expect([...harness.tools.keys()]).toEqual([
+			"bash",
 			"terminal_exec",
 			"background_bash",
 			"job_output",
@@ -133,6 +140,13 @@ describe("terminal tools", () => {
 			"job_kill",
 		]);
 		expect([...harness.commands.keys()]).toEqual(["jobs", "ps"]);
+		expect([...harness.activeTools]).toContain("bash");
+		expect([...harness.activeTools]).not.toContain("terminal_exec");
+		expect([...harness.activeTools]).not.toContain("background_bash");
+		const bash = harness.tools.get("bash");
+		expect(bash.parameters.properties.tty).toMatchObject({ type: "boolean" });
+		expect(bash.parameters.properties["yield-time_ms"]).toMatchObject({ minimum: 250, maximum: 30_000 });
+		expect(bash.description).toContain("prompts and REPLs");
 	});
 
 	test("requires integer timeout seconds in schema and execution", async () => {
@@ -154,7 +168,7 @@ describe("terminal tools", () => {
 	test("returns quick commands normally and clears persistent status", async () => {
 		const harness = createHarness();
 		await startHarness(harness);
-		const result = await harness.tools.get("terminal_exec").execute("exec", {
+		const result = await harness.tools.get("bash").execute("exec", {
 			command: "printf 'quick-output'",
 			reasoning: "test quick execution",
 		}, undefined, undefined, harness.ctx);
@@ -167,7 +181,7 @@ describe("terminal tools", () => {
 	test("yields long commands and returns only unseen output", async () => {
 		const harness = createHarness();
 		await startHarness(harness);
-		const started = await harness.tools.get("terminal_exec").execute("exec", {
+		const started = await harness.tools.get("bash").execute("exec", {
 			command: "printf 'first\\n'; sleep 0.4; printf 'second\\n'",
 			reasoning: "test unified yielding",
 			"yield-time_ms": 250,
@@ -194,7 +208,7 @@ describe("terminal tools", () => {
 	test("writes stdin to a running non-PTY command", async () => {
 		const harness = createHarness();
 		await startHarness(harness);
-		const started = await harness.tools.get("terminal_exec").execute("exec", {
+		const started = await harness.tools.get("bash").execute("exec", {
 			command: "read -r value; printf 'got:%s\\n' \"$value\"",
 			reasoning: "test terminal input",
 			"yield-time_ms": 250,
@@ -213,10 +227,11 @@ describe("terminal tools", () => {
 	test("updates the original running card when the command completes", async () => {
 		const harness = createHarness();
 		await startHarness(harness);
-		const tool = harness.tools.get("background_bash");
+		const tool = harness.tools.get("bash");
 		const started = await tool.execute("start", {
-			command: "sleep 0.1",
+			command: "sleep 0.4",
 			reasoning: "test live card",
+			"yield-time_ms": 250,
 		}, undefined, undefined, harness.ctx);
 		const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
 		const context = { state: {}, invalidate() {} };
@@ -234,7 +249,7 @@ describe("terminal tools", () => {
 	test("keeps tool output below Pi's 50KB limit", async () => {
 		const harness = createHarness();
 		await startHarness(harness);
-		const result = await harness.tools.get("terminal_exec").execute("exec", {
+		const result = await harness.tools.get("bash").execute("exec", {
 			command: "yes x | head -c 100000",
 			reasoning: "test output limit",
 		}, undefined, undefined, harness.ctx);
@@ -345,7 +360,7 @@ describe("PTY terminals", () => {
 		if (!isPtySupported()) return;
 		const harness = createHarness({ killGraceMs: 100 });
 		await startHarness(harness);
-		const prompt = await harness.tools.get("terminal_exec").execute("pty", {
+		const prompt = await harness.tools.get("bash").execute("pty", {
 			command: "read -r value; printf 'got:%s\\n' \"$value\"; trap 'echo interrupted; exit 0' INT; while :; do sleep 1; done",
 			reasoning: "test PTY interaction",
 			tty: true,

@@ -5,18 +5,22 @@ sessions without blocking the agent or losing track of child processes.
 
 ## Agent tools
 
-- `terminal_exec` — run a command and wait up to 10 seconds by default
+- `bash` — the single default command tool
   - quick commands return their final output normally
   - commands still running after `yield-time_ms` return a terminal ID
   - `tty: true` allocates a PTY for prompts, REPLs, watch processes, and control characters
-- `terminal_write` — write characters to a terminal or poll with empty input
+- `terminal_write` — write characters to a yielded terminal or poll with empty input
 - `job_output` — read only output produced since the previous cursor
 - `job_kill` — stop one terminal after explicit confirmation
-- `background_bash` — compatibility alias that backgrounds immediately
 
-`terminal_write` accepts literal control characters, including `\u0003` for
-Ctrl+C. PTY mode uses the system `expect` utility on macOS and `script` from
-util-linux on Linux, avoiding a native Node dependency.
+`terminal_exec` and `background_bash` remain registered for resumed-session
+compatibility but are removed from the active tool set in favor of `bash`.
+
+For an interactive prompt, call `bash` with `tty: true`; if it yields, send the
+answer with `terminal_write`. `terminal_write` also accepts literal control
+characters, including `\u0003` for Ctrl+C. PTY mode uses the system `expect`
+utility on macOS and `script` from util-linux on Linux, avoiding a native Node
+dependency.
 
 ## User experience
 
