@@ -8,6 +8,7 @@ import { fitToolLine, formatElapsed } from "../better-native-pi/core.js";
 import { BOLD, GREEN, MAGENTA, RED, RESET } from "../better-native-pi/render.js";
 import {
 	createSearchToolResult,
+	detectOpenUrlFailure,
 	formatOpenUrlResult,
 	normalizeHttpUrl,
 	openMistralUrl,
@@ -324,9 +325,12 @@ function renderOpenResult(
 		.join("\n") ?? "";
 
 	if (context.isError) {
+		const failure = detectOpenUrlFailure(storedText);
+		const blocked = failure?.kind === "blocked";
+		const reason = failure?.message ?? compactError(storedText, "Unknown open error");
 		component.update(() => [
-			headlineRow(false, true, "Open failed", target ? renderOpenTarget(target, theme) : ""),
-			`${BRANCH}${theme.fg("error", compactError(storedText, "Unknown open error"))}`,
+			headlineRow(false, true, blocked ? "Open blocked" : "Open failed", target ? renderOpenTarget(target, theme) : ""),
+			`${BRANCH}${theme.fg("error", compactError(reason, "Unknown open error"))}`,
 		]);
 		return component;
 	}

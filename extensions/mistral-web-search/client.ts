@@ -359,9 +359,29 @@ function parseOpenUrlContent(result: unknown): string {
 	return text;
 }
 
-export function detectOpenUrlFailure(content: string): string | undefined {
+export interface OpenUrlFailure {
+	kind: "blocked" | "failed";
+	message: string;
+}
+
+export function detectOpenUrlFailure(content: string): OpenUrlFailure | undefined {
 	const normalized = stripTerminalControls(content).replace(/\s+/g, " ").trim();
-	return /^Timed out while opening this page\b/i.test(normalized) ? normalized : undefined;
+	if (!normalized) return undefined;
+
+	const explicitBlocked = /\bOpen blocked:\s*(.+)$/i.exec(normalized);
+	if (explicitBlocked) return { kind: "blocked", message: explicitBlocked[1]!.trim() };
+	const explicitFailed = /\bOpen failed:\s*(.+)$/i.exec(normalized);
+	if (explicitFailed) return { kind: "failed", message: explicitFailed[1]!.trim() };
+	if (/^Timed out while opening this page\b/i.test(normalized)) return { kind: "failed", message: normalized };
+
+	const challengeText = normalized.slice(0, 2_000);
+	if (/JavaScript is disabled/i.test(challengeText) && /(?:not a robot|bot verification|requires JavaScript)/i.test(challengeText)) {
+		return { kind: "blocked", message: "Page requires JavaScript and bot verification." };
+	}
+	if (/(?:CAPTCHA|checking your browser|verify (?:that )?you(?:'|’)re (?:a human|not a robot)|security verification)/i.test(challengeText)) {
+		return { kind: "blocked", message: "Page requires bot or browser verification." };
+	}
+	return undefined;
 }
 
 export async function openMistralUrl(url: string, options: MistralMcpOptions = {}): Promise<OpenUrlResult> {
@@ -370,7 +390,7 @@ export async function openMistralUrl(url: string, options: MistralMcpOptions = {
 	const { result, elapsedMs } = await callMcpTool("open_url", { url: trimmedUrl }, options);
 	const content = parseOpenUrlContent(result);
 	const failure = detectOpenUrlFailure(content);
-	if (failure) throw new Error(failure);
+	if (failure) throw new Error(`${failure.kind === "blocked" ? "Open blocked" : "Open failed"}: ${failure.message}`);
 	const truncated = truncateText(content);
 	return {
 		provider: "mistral-web-search-mcp",

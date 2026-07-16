@@ -50,6 +50,13 @@ exports[`mistral web search renderer open failures use the requested target and 
 ]
 `;
 
+exports[`mistral web search renderer bot challenges render as blocked rather than opened 1`] = `
+[
+  "<red>•</> <bold>Open blocked</> <link:https://guide.example.com/restaurants><mdLink>https://guide.example.com/restaurants</mdLink></link>",
+  "  └ <error>Page requires JavaScript and bot verification.</error>",
+]
+`;
+
 exports[`mistral web search renderer expanded open content strips terminal controls 1`] = `
 [
   "<green>•</> <bold>Opened</> <link:https://example.com/docs><mdLink>https://example.com/docs</mdLink></link>",
