@@ -3,13 +3,13 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
+	Container,
 	Key,
 	Markdown,
 	matchesKey,
-	truncateToWidth,
-	visibleWidth,
+	Text,
 	wrapTextWithAnsi,
 	type TUI,
 } from "@earendil-works/pi-tui";
@@ -398,15 +398,6 @@ function rendererStats(): Record<string, RendererStats> {
 	return root[RENDER_STATS_KEY] ?? {};
 }
 
-// Wrap a body row in the same accent-bordered box used by plan-progress/goal,
-// so doctor reads as part of the same overlay family rather than a bare list.
-function boxRow(content: string, width: number, theme: any): string {
-	const contentWidth = Math.max(0, width - 4);
-	const fitted = truncateToWidth(content, contentWidth, "…");
-	const padding = " ".repeat(Math.max(0, contentWidth - visibleWidth(fitted)));
-	return `${accentBorder("│ ")}${fitted}${padding}${accentBorder(" │")}`;
-}
-
 function statusIcon(status: "ok" | "warning" | "error" | "info", theme: any): string {
 	if (status === "ok") return theme.fg("success", "✓");
 	if (status === "warning") return theme.fg("warning", "!");
@@ -414,7 +405,7 @@ function statusIcon(status: "ok" | "warning" | "error" | "info", theme: any): st
 	return theme.fg("dim", "·");
 }
 
-// Total error/warning counts, folded into the box border label by the pager.
+// Total error/warning counts, shown in the report title line.
 // Kept in sync with the item() calls below: every error-severity item should
 // contribute to errors, every warning to warnings.
 function issueCounts(snapshot: DoctorSnapshot): { errors: number; warnings: number } {
@@ -536,53 +527,68 @@ class DoctorPager {
 	private scroll = 0;
 	private cachedWidth = 0;
 	private cachedLines: string[] = [];
+	private readonly container: Container;
+	private readonly border: DynamicBorder;
+	private readonly title: Text;
+	private readonly body: Text;
+	private readonly footer: Text;
 
 	constructor(
 		private readonly snapshot: DoctorSnapshot,
 		private readonly tui: TUI,
 		private readonly theme: any,
 		private readonly done: (result?: unknown) => void,
-	) {}
+	) {
+		// Canonical pi pattern (see tui.md Pattern 1 / summarize.ts): a Container
+		// framed by DynamicBorder top+bottom, with Text children. Pi draws the
+		// border and handles width/resize, so we avoid hand-drawn box chars and
+		// manual width math.
+		this.border = new DynamicBorder((s: string) => this.theme.fg("accent", s));
+		this.title = new Text("", 1, 0);
+		this.body = new Text("", 1, 0);
+		this.footer = new Text(this.theme.fg("dim", "↑↓/PgUp/PgDn scroll · Home/End · q close"), 1, 0);
 
-	// Wrap report lines to the box's *content* width (width - 4 for the `│ ` +
-	// ` │` borders). The cached key is the content width, not the outer width,
-	// so the same wrapped body serves any terminal height.
-	private lines(width: number): string[] {
-		const contentWidth = Math.max(1, width - 4);
-		if (this.cachedWidth === contentWidth) return this.cachedLines;
-		const wrapped: string[] = [];
-		for (const line of reportLines(this.snapshot, this.tui, this.theme)) {
-			if (!line) { wrapped.push(""); continue; }
-			wrapped.push(...wrapTextWithAnsi(line, contentWidth));
-		}
-		this.cachedWidth = contentWidth;
-		this.cachedLines = wrapped;
-		return wrapped;
-	}
+		this.container = new Container();
+		this.container.addChild(this.border);
+		this.container.addChild(this.title);
+		this.container.addChild(this.body);
+		this.container.addChild(this.footer);
+		this.container.addChild(this.border);
 
-	render(width: number): string {
-		const max = Math.max(1, width);
-		const height = Math.max(10, (process.stdout.rows || 24) - 5);
-		// Top border counts as one row; the footer (scroll hints) sits outside
-		// the box so the closing `╰──╯` is always the last boxed line.
-		const bodyHeight = Math.max(1, height - 3);
-		const lines = this.lines(max);
-		const maxScroll = Math.max(0, lines.length - bodyHeight);
-		this.scroll = Math.min(this.scroll, maxScroll);
-
+		// Title: status summary — same colors as before, now a Text line.
 		const { errors, warnings } = issueCounts(this.snapshot);
 		const status = errors > 0 ? this.theme.fg("error", `${errors} error${errors === 1 ? "" : "s"}`)
 			: warnings > 0 ? this.theme.fg("warning", `${warnings} warning${warnings === 1 ? "" : "s"}`)
 			: this.theme.fg("success", "all green");
-		const label = ` Pi Doctor ${this.theme.fg("dim", "·")} ${status} `;
-		const top = `${accentBorder("╭")}${this.theme.bold(label)}${accentBorder("─".repeat(Math.max(0, max - visibleWidth(label) - 2)))}${accentBorder("╮")}`;
+		this.title.setText(`${this.theme.fg("accent", this.theme.bold("Pi Doctor"))} ${this.theme.fg("dim", "·")} ${status} ${this.theme.fg("dim", "· read-only diagnostics")}`);
+	}
 
+	// Wrap report lines to the available width. Cache key is the width so a
+	// re-render at the same width is cheap.
+	private lines(width: number): string[] {
+		if (this.cachedWidth === width) return this.cachedLines;
+		const wrapped: string[] = [];
+		for (const line of reportLines(this.snapshot, this.tui, this.theme)) {
+			if (!line) { wrapped.push(""); continue; }
+			wrapped.push(...wrapTextWithAnsi(line, Math.max(1, width)));
+		}
+		this.cachedWidth = width;
+		this.cachedLines = wrapped;
+		return wrapped;
+	}
+
+	render(width: number): string[] {
+		const max = Math.max(1, width);
+		// Reserve rows for: top border, title, footer, bottom border (4 rows).
+		const height = Math.max(10, (process.stdout.rows || 24) - 5);
+		const bodyHeight = Math.max(1, height - 4);
+		const lines = this.lines(max);
+		const maxScroll = Math.max(0, lines.length - bodyHeight);
+		this.scroll = Math.min(this.scroll, maxScroll);
 		const visible = lines.slice(this.scroll, this.scroll + bodyHeight);
 		while (visible.length < bodyHeight) visible.push("");
-		const boxed = visible.map((line) => boxRow(line, max, this.theme));
-		const bottom = accentBorder(`╰${"─".repeat(Math.max(0, max - 2))}╯`);
-		const footer = this.theme.fg("dim", `↑↓/PgUp/PgDn scroll · Home/End · q close · ${lines.length} rows`);
-		return [top, ...boxed, bottom, truncateToWidth(footer, max, "")];
+		this.body.setText(visible.join("\n"));
+		return this.container.render(max);
 	}
 
 	handleInput(data: string): void {
@@ -597,9 +603,11 @@ class DoctorPager {
 		this.tui.requestRender();
 	}
 
-	invalidate(): void { this.cachedWidth = 0; }
+	invalidate(): void {
+		this.cachedWidth = 0;
+		this.container.invalidate();
+	}
 }
-
 export default function (pi: ExtensionAPI) {
 	pi.registerCommand("doctor", {
 		description: "Inspect extension, provider, session, cache, and terminal health",
