@@ -255,8 +255,12 @@ export function buildToolBlock(
 	// Reasoning is the informative part — bold it so it's the emphasis, but keep
 	// it default-colored (accent was too loud). The verb stays plain text.
 	const headline = oneLine(reasoning);
+	// Reasoning in the theme's muted tone (secondary text) + bold: distinct from
+	// both the default text and the colorful command, but not loud like accent.
 	const headlineTone = headline
-		? (typeof theme?.bold === "function" ? theme.bold(headline) : `${BOLD}${headline}${RESET}`)
+		? (typeof theme?.fg === "function"
+			? theme.fg("muted", typeof theme.bold === "function" ? theme.bold(headline) : headline)
+			: `${DIM}${BOLD}${headline}${RESET}`)
 		: "";
 	const metadata = hasDetail
 		? `${detail} · ${summary}`
