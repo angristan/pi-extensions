@@ -222,27 +222,46 @@ describe("terminal tools", () => {
 		});
 		expect(result.details.status).toBe("completed");
 		expect(result.content[0].text).toContain("got:hello");
+		const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+		const rendered = harness.tools.get("terminal_write").renderResult(
+			result,
+			{ expanded: false },
+			theme,
+			{ args: { job_id: started.details.id, chars: "hello\n" } },
+		).render(120).join("\n");
+		expect(rendered).toContain("Interacted with");
+		expect(rendered).toContain("  │ got:hello");
+		expect(rendered).not.toContain(`✓ ${started.details.id} · completed`);
 	});
 
 	test("updates the original running card when the command completes", async () => {
 		const harness = createHarness();
 		await startHarness(harness);
 		const tool = harness.tools.get("bash");
-		const started = await tool.execute("start", {
-			command: "sleep 0.4",
+		const args = {
+			command: "printf 'styled-output\\n'; sleep 0.4",
 			reasoning: "test live card",
 			"yield-time_ms": 250,
-		}, undefined, undefined, harness.ctx);
+		};
+		const started = await tool.execute("start", args, undefined, undefined, harness.ctx);
 		const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
-		const context = { state: {}, invalidate() {} };
+		const context = { state: {}, args, cwd: harness.ctx.cwd, invalidate() {} };
 		const component = tool.renderResult(started, { expanded: false }, theme, context);
-		expect(component.render(120).join("\n")).toContain("running");
+		const running = component.render(120).join("\n");
+		expect(running).toContain("Running test live card");
+		expect(running).toContain("╭ bash ");
+		expect(running).toContain("  │ styled-output");
+		expect(running).toContain("running · /ps");
+		expect(running).not.toContain(`\n● ${started.details.id} · running`);
 
 		await harness.tools.get("job_output").execute("wait", {
 			job_id: started.details.id,
 			wait: true,
 		});
-		expect(component.render(120).join("\n")).toContain("completed");
+		const completed = component.render(120).join("\n");
+		expect(completed).toContain("Ran test live card");
+		expect(completed).toContain("completed");
+		expect(completed).not.toContain("/ps");
 		component.dispose?.();
 	});
 

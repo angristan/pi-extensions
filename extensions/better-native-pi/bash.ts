@@ -11,12 +11,14 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBashTool, createBashToolDefinition, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Container, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { getBackgroundTerminalService } from "../background-jobs/service.js";
+import { getBackgroundTerminalService, type BackgroundTerminalService } from "../background-jobs/service.js";
 import { renderCodeBox } from "../code-blocks/index.js";
 import { buildToolBlock, fitToolLine, formatShellCommandForDisplay, highlightedShellLine, withReasoning } from "./core.js";
 
 const OUTPUT_ROWS = 5;
 const COMMAND_ROWS = 8;
+const EXPANDED_OUTPUT_BYTES = 256 * 1024;
+const COLLAPSED_OUTPUT_BYTES = 24 * 1024;
 const COMMAND_INDENT = "  ";
 const DIM = "\x1b[2m";
 const RESET = "\x1b[0m";
@@ -91,7 +93,18 @@ function renderedCommand(command: string, width: number, expanded: boolean, them
 	const normalized = command.replace(/\t/g, "   ").replace(/\s+$/, "");
 	const boxWidth = Math.max(1, max - COMMAND_INDENT.length);
 	const formatted = formatShellCommandForDisplay(normalized, Math.max(1, boxWidth - 4));
-	const markdownTheme = getMarkdownTheme();
+	let markdownTheme: any;
+	try {
+		markdownTheme = getMarkdownTheme();
+		markdownTheme.codeBlockBorder("");
+	} catch {
+		// Render tests and early extension discovery can run before Pi initializes
+		// its global theme proxy. The callback theme still provides safe colors.
+		markdownTheme = {
+			codeBlock: (text: string) => text,
+			codeBlockBorder: (text: string) => typeof theme?.fg === "function" ? theme.fg("borderMuted", text) : text,
+		};
+	}
 	const commandTheme = {
 		...markdownTheme,
 		highlightCode: (code: string) => code.split("\n").map((line) => highlightedShellLine(line, theme)),
@@ -124,6 +137,23 @@ function boundedRows(rows: string[]): string[] {
 		barLine(`… +${omitted} lines (Ctrl+O for full output)`),
 		...rows.slice(-tail),
 	];
+}
+
+function terminalStatusColor(status: string): string {
+	if (status === "running") return "accent";
+	if (status === "stopping" || status === "timed_out") return "warning";
+	if (status === "completed") return "success";
+	if (status === "killed") return "muted";
+	return "error";
+}
+
+function terminalStatusSymbol(status: string): string {
+	if (status === "running") return "●";
+	if (status === "stopping") return "◌";
+	if (status === "completed") return "✓";
+	if (status === "timed_out") return "◷";
+	if (status === "killed") return "■";
+	return "×";
 }
 
 class CommandComponent {
@@ -177,6 +207,86 @@ class CommandComponent {
 	}
 }
 
+class ManagedCommandComponent {
+	private timer?: ReturnType<typeof setInterval>;
+	private fallback: any;
+	private expanded: boolean;
+
+	constructor(
+		private readonly args: any,
+		result: any,
+		expanded: boolean,
+		private readonly theme: any,
+		private readonly cwd: string | undefined,
+		private readonly service: BackgroundTerminalService,
+		private readonly requestRender: () => void,
+	) {
+		this.fallback = result?.details ?? {};
+		this.expanded = expanded;
+		this.syncTimer();
+	}
+
+	update(result: any, expanded: boolean): void {
+		this.fallback = result?.details ?? this.fallback;
+		this.expanded = expanded;
+		this.syncTimer();
+	}
+
+	private view(): { details: any; output: string } {
+		return this.service.getView(
+			this.fallback.id,
+			this.fallback,
+			this.expanded ? EXPANDED_OUTPUT_BYTES : COLLAPSED_OUTPUT_BYTES,
+		);
+	}
+
+	private syncTimer(): void {
+		const status = this.view().details.status;
+		const active = status === "running" || status === "stopping";
+		if (active && !this.timer) {
+			this.timer = setInterval(() => this.requestRender(), 500);
+			this.timer.unref?.();
+		} else if (!active) this.dispose();
+	}
+
+	render(width: number): string[] {
+		const max = Math.max(1, width);
+		const view = this.view();
+		const details = view.details;
+		const status = details.status ?? "failed";
+		const active = status === "running" || status === "stopping";
+		if (!active) this.dispose();
+		const elapsedMs = Math.max(0, (details.endedAt ?? Date.now()) - (details.startedAt ?? Date.now()));
+		const failed = status === "failed" || status === "killed" || status === "timed_out";
+		const summaryText = details.exitCode === undefined ? status : `Command exited with code ${details.exitCode}`;
+		const summaryResult = { content: [{ type: "text", text: summaryText }] };
+		const block = buildToolBlock("bash", withoutCommand(this.args), summaryResult, {
+			isPartial: active,
+			isError: failed,
+			elapsedMs,
+			theme: this.theme,
+			cwd: this.cwd,
+		}).map((line) => fitToolLine(line, max));
+		const command = typeof this.args?.command === "string"
+			? renderedCommand(this.args.command, max, this.expanded, this.theme)
+			: [];
+		const text = view.output.replace(/\s+$/, "");
+		let output = text ? wrappedOutput(text, max) : [barLine(active ? "(waiting for output)" : "(no output)")];
+		if (!this.expanded) output = boundedRows(output);
+		const color = terminalStatusColor(status);
+		const metadata = [details.id, status, details.tty ? "tty" : undefined, active ? "/ps" : undefined].filter(Boolean).join(" · ");
+		const footer = fitToolLine(`  └ ${this.theme.fg(color, terminalStatusSymbol(status))} ${this.theme.fg("dim", metadata)}`, max);
+		return [...block, ...command, ...output, footer];
+	}
+
+	invalidate(): void {}
+
+	dispose(): void {
+		if (this.timer) clearInterval(this.timer);
+		this.timer = undefined;
+	}
+}
+
 export default function bash(pi: ExtensionAPI) {
 	const bashTool = createBashToolDefinition(process.cwd());
 	const terminalEnabled = Boolean(getBackgroundTerminalService());
@@ -217,7 +327,22 @@ export default function bash(pi: ExtensionAPI) {
 		renderResult: (result: any, options: any, theme: any, context: any) => {
 			if (options?.isPartial) return new Container();
 			const terminal = getBackgroundTerminalService();
-			if (terminal && result?.details?.managedTerminal) return terminal.renderResult(result, options, theme, context);
+			if (terminal && result?.details?.managedTerminal) {
+				let component = context.state.managedCommand as ManagedCommandComponent | undefined;
+				if (!component) {
+					component = new ManagedCommandComponent(
+						context.args ?? { command: result.details.command, reasoning: result.details.description },
+						result,
+						Boolean(options.expanded),
+						theme,
+						context.cwd,
+						terminal,
+						context.invalidate,
+					);
+					context.state.managedCommand = component;
+				} else component.update(result, Boolean(options.expanded));
+				return component;
+			}
 			context.state.startedAt ??= Date.now();
 			context.state.endedAt ??= Date.now();
 			return new CommandComponent(context.args ?? {}, result, {
