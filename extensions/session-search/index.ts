@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
+import { unlink } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import type { ExtensionAPI, SessionInfo } from "@earendil-works/pi-coding-agent";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
@@ -309,9 +310,13 @@ export default function (pi: ExtensionAPI) {
 				]);
 				if (!action || action === "Cancel") return;
 				if (action === "Resume this session") {
-					await ctx.switchSession(selected.session.path, {
+					const result = await ctx.switchSession(selected.session.path, {
 						withSession: async (replacementCtx: any) => replacementCtx.ui.notify(`Resumed match for “${parsed.query}”.`, "info"),
 					});
+					if (result.cancelled) {
+						ctx.ui.notify("Session switch was canceled.", "warning");
+						return;
+					}
 					switched = true;
 					return;
 				}
@@ -327,9 +332,17 @@ export default function (pi: ExtensionAPI) {
 						ctx.ui.notify("Could not create a persisted session fork.", "error");
 						return;
 					}
-					await ctx.switchSession(forkPath, {
+					const result = await ctx.switchSession(forkPath, {
 						withSession: async (replacementCtx: any) => replacementCtx.ui.notify(`Forked search match from ${selected.session.id.slice(0, 8)}.`, "info"),
 					});
+					if (result.cancelled) {
+						const removed = await unlink(forkPath).then(() => true, () => false);
+						ctx.ui.notify(
+							removed ? "Fork switch was canceled; the unused fork was removed." : `Fork switch was canceled; unused fork remains at ${forkPath}.`,
+							"warning",
+						);
+						return;
+					}
 					switched = true;
 					return;
 				}
