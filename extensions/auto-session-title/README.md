@@ -2,16 +2,31 @@
 
 Generates and maintains short, descriptive titles for your pi sessions.
 
-As soon as the first prompt is accepted, it asks a cheap model to summarize it
-into a 3-word title-case phrase while the main agent turn runs. After every turn
-settles—including the first—it re-evaluates the title from the user discussion.
-Sustained recent work can narrow a broad earlier title, while brief asides keep
-the existing title.
+As soon as the first prompt is accepted, it asks a cheap model for a provisional
+3-word title while the main agent turn runs. After each completed turn, one
+bounded request summarizes the user intent and final assistant outcome, updates
+a rolling focus summary, and refreshes the title. Sustained recent work can
+narrow a broad earlier title, while brief asides keep the existing title.
 
 ```
 before:  untitled
 after:   Compact Pi Footer
 ```
+
+## Context and persistence
+
+The title request never receives reasoning, tool calls, tool results, logs, or
+raw diffs. Its 8,000-character context budget contains:
+
+- current user request: up to 2,000 characters
+- final assistant outcome: up to 2,000 characters
+- rolling focus summary: up to 600 characters
+- latest 8 turn summaries: up to 300 characters each
+
+The same model call returns the turn summary, focus summary, and title. Completed
+summary state is stored as hidden session metadata, stays out of agent context,
+and is restored from the active branch after reloads, resumes, forks, and tree
+navigation.
 
 ## Config
 
@@ -26,4 +41,4 @@ configured in `models.json` works):
 ## Commands
 
 - `/title-refresh` — regenerate the title now
-- `/title-status` — show current title, last attempt, and skip reason
+- `/title-status` — show current title, summaries, last attempt, and skip reason
