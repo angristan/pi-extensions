@@ -7,11 +7,13 @@ import { Type, type Static } from "typebox";
 import { fitToolLine, formatElapsed } from "../better-native-pi/core.js";
 import { BOLD, GREEN, MAGENTA, RED, RESET } from "../better-native-pi/render.js";
 import {
+	createSearchToolResult,
 	formatOpenUrlResult,
-	formatSearchResults,
 	openMistralUrl,
+	parseSearchResultText,
 	searchMistralNews,
 	searchMistralWeb,
+	type SearchDisplayItem,
 } from "./client";
 
 const FOUNDRY_OPENAI_PROVIDER = "foundry-openai";
@@ -75,21 +77,6 @@ const LEAD = "";
 const BRANCH = `${LEAD}  └ `;
 const INDENT = `${LEAD}    `;
 
-type SearchDetails = {
-	tool?: string;
-	query?: string;
-	limit?: number;
-	elapsedMs?: number;
-	results?: Array<{
-		title?: string | null;
-		url?: string | null;
-		source?: string;
-		rank?: number;
-		date?: string | null;
-		snippets?: string[];
-	}>;
-};
-
 type OpenDetails = {
 	url?: string;
 	elapsedMs?: number;
@@ -122,12 +109,12 @@ function compactQuery(query: unknown): string {
 	return typeof query === "string" && query.trim() ? truncateToWidth(query.trim(), 96, "…") : "";
 }
 
-function sourceLabel(result: NonNullable<SearchDetails["results"]>[number]): string {
+function sourceLabel(result: SearchDisplayItem): string {
 	const label = result.title || result.url || "untitled";
 	return truncateToWidth(label.replace(/\s+/g, " ").trim(), 110, "…");
 }
 
-function resultUrl(result: NonNullable<SearchDetails["results"]>[number]): string | undefined {
+function resultUrl(result: SearchDisplayItem): string | undefined {
 	return typeof result.url === "string" && /^https?:\/\//.test(result.url) ? result.url : undefined;
 }
 
@@ -177,11 +164,10 @@ function headlineRow(partial: boolean, isError: boolean, verb: string, detail: s
 
 // Colored summary that follows the `└ ` branch, matching tidy tools' shape:
 // `<count> <noun> · <elapsed>` (and a truncation note when content was clipped).
-function searchSummary(results: NonNullable<SearchDetails["results"]>, elapsedMs?: number): string {
-	const count = results.length;
-	const noun = count === 1 ? "result" : "results";
+function searchSummary(resultCount: number, elapsedMs?: number): string {
+	const noun = resultCount === 1 ? "result" : "results";
 	const elapsed = typeof elapsedMs === "number" ? formatElapsed(elapsedMs) : "done";
-	return `${GREEN}${count} ${noun}${RESET} · ${elapsed}`;
+	return `${GREEN}${resultCount} ${noun}${RESET} · ${elapsed}`;
 }
 
 function openSummary(details: OpenDetails | undefined): string {
@@ -207,7 +193,7 @@ function renderSearchCall(args: WebSearchArgs | NewsSearchArgs, _theme: Theme, c
 }
 
 function renderSearchResult(
-	result: { details?: SearchDetails } | undefined,
+	result: { content?: Array<{ type?: string; text?: string }> } | undefined,
 	{ expanded, isPartial }: ToolRenderResultOptions,
 	theme: Theme,
 	context: ToolRenderContext,
@@ -216,8 +202,12 @@ function renderSearchResult(
 	// owns the row; it replaces it once settled to avoid duplicating the verb.
 	if (isPartial) return new Container();
 	const component = reuseOrCreate(context);
-	const details = result?.details;
-	const results = Array.isArray(details?.results) ? details.results : [];
+	const storedText = result?.content
+		?.filter((part) => part.type === "text" && typeof part.text === "string")
+		.map((part) => part.text)
+		.join("\n") ?? "";
+	const details = parseSearchResultText(storedText);
+	const results = details.results;
 	const args = context.args as WebSearchArgs | NewsSearchArgs | undefined;
 	const query = compactQuery(args?.query);
 	const dates = [args?.startDate, args?.endDate].filter(Boolean).join(" → ");
@@ -226,7 +216,7 @@ function renderSearchResult(
 	const max = expanded ? 10 : 5;
 	component.update(() => {
 		const isError = context.isError ?? false;
-		const lines = [headlineRow(false, isError, "Searched", detail), `${BRANCH}${searchSummary(results, details?.elapsedMs)}`];
+		const lines = [headlineRow(false, isError, "Searched", detail), `${BRANCH}${searchSummary(details.resultCount, details.elapsedMs)}`];
 		for (const [index, item] of results.slice(0, max).entries()) {
 			const label = sourceLabel(item);
 			const url = resultUrl(item);
@@ -239,7 +229,7 @@ function renderSearchResult(
 				lines.push(`${INDENT}   ${theme.fg("dim", truncateToWidth(item.snippets[0].replace(/\s+/g, " ").trim(), 140, "…"))}`);
 			}
 		}
-		const remaining = results.length - max;
+		const remaining = details.resultCount - Math.min(max, results.length);
 		if (remaining > 0) lines.push(`${INDENT}${theme.fg("muted", `+${remaining} more`)}`);
 		return lines;
 	});
@@ -297,11 +287,7 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 		parameters: webSearchSchema,
 		renderShell: "self",
 		async execute(_toolCallId, params: WebSearchArgs, signal) {
-			const result = await searchMistralWeb(params, { signal });
-			return {
-				content: [{ type: "text", text: formatSearchResults(result) }],
-				details: result,
-			};
+			return createSearchToolResult(await searchMistralWeb(params, { signal }));
 		},
 		renderCall: (args: WebSearchArgs, theme: Theme, context: ToolRenderContext) => renderSearchCall(args, theme, context),
 		renderResult: renderSearchResult,
@@ -320,11 +306,7 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 		parameters: newsSearchSchema,
 		renderShell: "self",
 		async execute(_toolCallId, params: NewsSearchArgs, signal) {
-			const result = await searchMistralNews(params, { signal });
-			return {
-				content: [{ type: "text", text: formatSearchResults(result) }],
-				details: result,
-			};
+			return createSearchToolResult(await searchMistralNews(params, { signal }));
 		},
 		renderCall: (args: NewsSearchArgs, theme: Theme, context: ToolRenderContext) => renderSearchCall(args, theme, context),
 		renderResult: renderSearchResult,
