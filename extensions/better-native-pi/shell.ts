@@ -108,7 +108,7 @@ function dimAnsiFg(ansi: string, factor: number, lighten: boolean): string {
  * vivid command colors and the dim tool output. `factor≈0.5` is a balanced
  * pastel; higher = softer/whiter, lower = closer to original.
  */
-export function dimTheme(theme: any, factor = 0.5): any {
+export function dimTheme(theme: any, factor = 0.3): any {
 	if (!theme || typeof theme.fg !== "function" || typeof theme.getFgAnsi !== "function") return theme;
 	return {
 		...theme,
