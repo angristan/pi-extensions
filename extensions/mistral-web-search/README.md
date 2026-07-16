@@ -7,7 +7,7 @@ Exposes three agent-facing tools that call Mistral's web-search MCP:
 
 - `web_search` — keyword web search
 - `news_search` — news article search (date-bounded)
-- `open_url` — open a URL / article ID returned by search
+- `open_url` — fallback opener for a URL / article ID when local retrieval fails
 
 Results render as tree-structured rows:
 
