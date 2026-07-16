@@ -3,15 +3,16 @@
 Desktop notifications for agent activity, so you can context-switch away and
 get pinged when there's something to look at.
 
-Two backends, tried in order:
-1. **OSC 9** (`\x1b]9;...\x07`) for terminals that render it natively —
-   Ghostty, iTerm, Kitty, Warp, WezTerm. These show a native notification and
-   the 🔔 unread-tab marker.
-2. **Terminal bell** (`\a`, wrapped in tmux passthrough when inside tmux) as a
-   portable fallback — lets the terminal/OS decide how to surface it.
+Sends a **terminal bell** (`\a`, wrapped in tmux passthrough when inside tmux)
+— a portable signal each terminal decides how to surface:
 
-Deduplicates identical notifications within a 5s window, and suppresses them
-while the terminal is focused (via focus-reporting escape sequences).
+- **Ghostty** — 🔔 unread-tab marker + dock bounce
+- **iTerm / WezTerm / Kitty** — audible bell and/or tab marker per settings
+- Plain terminals — may do nothing
+
+Only fires when the terminal is **unfocused** (detected via focus-reporting
+escape sequences on Ghostty/iTerm/Kitty/Warp/WezTerm). Deduplicates identical
+notifications within a 5s window.
 
 ## Config
 
