@@ -21,6 +21,8 @@ const FOOTER_COLORS = {
 	model: [246, 226, 183], // entity.name.type
 	usage: [242, 181, 144], // constant.numeric
 	timing: [185, 170, 224], // balanced accent for ttft/tps
+	cost: [203, 166, 247], // mauve — matches turn-stats cost accent
+	warning: [249, 226, 175], // yellow — cache-bad / warnings
 } as const;
 
 /** Map a footer segment accent to a theme color token. Token values (↓/↑/ctx)

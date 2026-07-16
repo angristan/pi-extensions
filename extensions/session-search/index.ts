@@ -268,6 +268,10 @@ export default function (pi: ExtensionAPI) {
 			if (!parsed.query) return;
 
 			ctx.ui.setStatus("session-search", ctx.ui.theme.fg("accent", "searching sessions…"));
+			// ctx.switchSession() tears down the current session runtime and
+			// invalidates this ctx (and ctx.ui). Once a switch happens, the
+			// finally block must not touch the stale ctx, so flag it.
+			let switched = false;
 			try {
 				const sessions = await SessionManager.listAll();
 				const candidates = parsed.scope === "current"
@@ -304,10 +308,6 @@ export default function (pi: ExtensionAPI) {
 					"Cancel",
 				]);
 				if (!action || action === "Cancel") return;
-				// ctx.switchSession() tears down the current session runtime and
-				// invalidates this ctx (and ctx.ui). Once a switch happens, the
-				// finally block must not touch the stale ctx, so flag it.
-				let switched = false;
 				if (action === "Resume this session") {
 					await ctx.switchSession(selected.session.path, {
 						withSession: async (replacementCtx: any) => replacementCtx.ui.notify(`Resumed match for “${parsed.query}”.`, "info"),

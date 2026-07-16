@@ -12,7 +12,7 @@
  * activity.
  */
 import type { Component } from "@earendil-works/pi-tui";
-import type { ExtensionAPI, MessageStartEvent } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const ENTRY_TYPE = "turn-separator";
 /** Only label steps longer than this (seconds) — short steps get a bare rule. */
@@ -37,6 +37,7 @@ class RuleLine implements Component {
 		const fill = "─".repeat(Math.max(0, w - labeled.length));
 		return [this.dim(`${labeled}${fill}`)];
 	}
+	invalidate(): void {}
 }
 
 function formatElapsed(seconds: number): string {
@@ -66,7 +67,7 @@ export default function turnSeparator(pi: ExtensionAPI) {
 	let prevStepStartedAt: number | undefined;
 	let currentStepStartedAt: number | undefined;
 
-	pi.on("message_start", (event: MessageStartEvent) => {
+	pi.on("message_start", (event) => {
 		// Only assistant messages trigger a separator (tool results and user
 		// messages are not separator points).
 		if (event.message.role !== "assistant") return;

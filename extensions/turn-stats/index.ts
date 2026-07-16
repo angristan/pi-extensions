@@ -20,6 +20,7 @@ class StatsRow implements Component {
 	render(width: number): string[] {
 		return new Text(this.stats, 1, 0).render(width);
 	}
+	invalidate(): void {}
 }
 
 // Minimum token-window before context-% becomes meaningful. Matches the footer's
