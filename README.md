@@ -38,6 +38,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | [`code-blocks`](extensions/code-blocks/) | Renders fenced code blocks as bordered, syntax-highlighted boxes instead of plain text |
 | [`context-inspector`](extensions/context-inspector/) | Inspect where your context window is being spent |
 | [`doctor`](extensions/doctor/) | Run diagnostics on your pi setup |
+| [`edit-summary`](extensions/edit-summary/) | Show a passive overlay with net file changes for the current or last agent turn |
 | [`accent-color`](extensions/accent-color/) | Pins the editor (input bar) border to a fixed accent color, overriding pi's default |
 | [`footer`](extensions/footer/) | A status line below the transcript showing session, model, context usage, and cost |
 | [`goal`](extensions/goal/) | Track an explicit objective for the session |
