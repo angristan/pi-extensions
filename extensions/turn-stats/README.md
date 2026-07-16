@@ -1,4 +1,4 @@
-# turn-timing
+# turn-stats
 
 Per-turn timing and token-usage entries appended to the transcript after each
 agent run.
