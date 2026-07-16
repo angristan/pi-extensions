@@ -183,16 +183,15 @@ export default function (pi: ExtensionAPI) {
 	pi.registerEntryRenderer<CompletionEntry>(ENTRY_TYPE, (entry: any, _options: any, theme: any) => {
 		const data = entry.data as CompletionEntry;
 
-		// Group-level separator: a thin vertical bar between logical chunks so the
-		// eye can chunk the row (duration · throughput · tokens · cache · cost)
-		// instead of reading a flat wall of `·`-separated parts.
-		const groupSep = theme.fg("dim", " │ ");
+		// Group-level separator: a middle dot between logical chunks
+		// (duration · throughput · tokens · cache · cost).
+		const groupSep = theme.fg("dim", " · ");
 		const groups: string[] = [];
 
-		// ── Duration: ◷ <elapsed>  <clock> ──────────────────────────────────────
-		// ◷ + clock implies "finished at" without spelling it out.
+		// ── Duration: time <elapsed>  <clock> ─────────────────────────────────────
+		// Word label + clock implies "finished at" without spelling it out.
 		groups.push(
-			`${theme.fg("muted", "◷")} ${theme.fg("success", formatDuration(data.elapsedMs))} ${theme.fg("muted", formatClock(data.endedAt))}`,
+			`${theme.fg("dim", "time")} ${formatDuration(data.elapsedMs)} ${theme.fg("dim", formatClock(data.endedAt))}`,
 		);
 
 		// ── Throughput: ttft + tps for the last finalized provider response ────────
@@ -201,29 +200,33 @@ export default function (pi: ExtensionAPI) {
 		const timing = data.timing;
 		if (timing) {
 			const bits: string[] = [];
-			if (timing.ttftMs !== undefined) bits.push(`${theme.fg("muted", "ttft")} ${theme.fg("thinkingText", formatLatency(timing.ttftMs))}`);
-			if (timing.tokensPerSecond !== undefined) bits.push(`${theme.fg("muted", "tps")} ${theme.fg("thinkingText", formatTokensPerSecond(timing.tokensPerSecond))}`);
+			if (timing.ttftMs !== undefined) bits.push(`${theme.fg("dim", "ttft")} ${formatLatency(timing.ttftMs)}`);
+			if (timing.tokensPerSecond !== undefined) bits.push(`${theme.fg("dim", "tps")} ${formatTokensPerSecond(timing.tokensPerSecond)}`);
 			if (bits.length > 0) groups.push(bits.join(theme.fg("dim", "  ")));
 		}
 
 		// ── Tokens: ↓in (cached) ↑out, matching the footer's arrow convention ─────
 		const usage = data.usage;
 		if (usage && (usage.input > 0 || usage.output > 0 || usage.cacheRead > 0 || usage.cacheWrite > 0)) {
-			const cacheColor = (data.cacheHitPercent ?? 0) >= 50 ? "success" : "warning";
 			// Input + cache detail as one group.
 			const inputBits: string[] = [];
-			inputBits.push(`${theme.fg("muted", "↓")} ${theme.fg("text", formatTokensCompact(usage.input))}`);
-			if (usage.cacheRead > 0) inputBits.push(`${theme.fg("muted", "cached")} ${theme.fg(cacheColor, formatTokensCompact(usage.cacheRead))}`);
-			if (usage.cacheWrite > 0) inputBits.push(`${theme.fg("muted", "written")} ${theme.fg(cacheColor, formatTokensCompact(usage.cacheWrite))}`);
-			if (data.cacheHitPercent !== undefined) inputBits.push(`${theme.fg("muted", "hit")} ${theme.fg(cacheColor, `${data.cacheHitPercent.toFixed(0)}%`)}`);
+			inputBits.push(`${theme.fg("dim", "↓")} ${formatTokensCompact(usage.input)}`);
+			if (usage.cacheRead > 0) inputBits.push(`${theme.fg("dim", "cached")} ${formatTokensCompact(usage.cacheRead)}`);
+			if (usage.cacheWrite > 0) inputBits.push(`${theme.fg("dim", "written")} ${formatTokensCompact(usage.cacheWrite)}`);
+			if (data.cacheHitPercent !== undefined) inputBits.push(`${theme.fg("dim", "hit")} ${data.cacheHitPercent.toFixed(0)}%`);
 			if (inputBits.length > 0) groups.push(inputBits.join(theme.fg("dim", "  ")));
-			// Output as its own group so the │ separator separates it from cache.
-			if (usage.output > 0) groups.push(`${theme.fg("muted", "↑")} ${theme.fg("text", formatTokensCompact(usage.output))}`);
+			// Output as its own group so the · separator separates it from cache.
+			if (usage.output > 0) groups.push(`${theme.fg("dim", "↑")} ${formatTokensCompact(usage.output)}`);
 		}
 
-		// ── Cost: run's marginal cost in accent (the interesting per-turn metric) ──
+		// ── Cost: run's marginal cost (the interesting per-turn metric) ───────────
+		// Dollar sign dimmed, amount plain, to match the label/value pattern.
 		if (usage && usage.cost > 0) {
-			groups.push(`${theme.fg("accent", formatCostCents(usage.cost))}`);
+			const costStr = formatCostCents(usage.cost);
+			const dollarIdx = costStr.indexOf("$");
+			const prefix = costStr.slice(0, dollarIdx + 1);
+			const amount = costStr.slice(dollarIdx + 1);
+			groups.push(`${theme.fg("dim", prefix)}${amount}`);
 		}
 
 		return new Text(groups.join(groupSep), 1, 0);
