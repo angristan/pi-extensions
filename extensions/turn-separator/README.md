@@ -27,3 +27,4 @@ assistant: done, the module is refactored.
 ```
 
 No config, always on. No rule before the very first assistant message.
+
