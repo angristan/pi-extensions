@@ -250,7 +250,11 @@ export default function (pi: ExtensionAPI) {
 			groups.push(`${theme.fg("dim", prefix)}${amount}`);
 		}
 
-		return new StatsBlock(groups.join(groupSep), (s: string) => theme.fg("dim", s));
+		return new StatsBlock(
+			groups.join(groupSep),
+			// Faint + dim keeps the rule visible but less prominent than the stats text.
+			(s: string) => `\x1b[2m${theme.fg("dim", s)}\x1b[22m`,
+		);
 	});
 
 	const resetResponseTiming = () => {
