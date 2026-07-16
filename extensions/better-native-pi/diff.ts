@@ -8,7 +8,7 @@
  */
 
 import { getLanguageFromPath, highlightCode } from "@earendil-works/pi-coding-agent";
-import { sliceByColumn, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { sliceByColumn, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { CYAN, GREEN, RED, RESET } from "./render.js";
 import { fitToolLine } from "./core.js";
 
@@ -161,26 +161,29 @@ export function wrapBranchLine(line: string, width: number, branchPrefix = "  â”
 	const contentWidth = Math.max(1, max - branchPrefix.length);
 	// Word-wrap the detail on spaces (ANSI-aware via visibleWidth) rather than
 	// wrapTextWithAnsi, which splits mid-token on long path segments and cuts
-	// words like `~/.pi/agent/...angr` + `ions`. Then cap to MAX_BRANCH_LINES.
+	// words like `~/.pi/agent/...angr` + `ions`. A single space-free token
+	// longer than the line (e.g. `json.load(open('/â€¦/dark.json'))['colors']`)
+	// is hard-split mid-token into width-bounded pieces â€” otherwise it survives
+	// as an overlong chunk and overflows the gutter, crashing the TUI. Then cap
+	// to MAX_BRANCH_LINES.
 	const detailWords = detail.split(" ");
 	let chunks: string[] = [];
 	let current = "";
 	for (const word of detailWords) {
+		if (visibleWidth(word) > contentWidth) {
+			if (current) { chunks.push(current); current = ""; }
+			chunks.push(...wrapTextWithAnsi(word, contentWidth));
+			continue;
+		}
 		const candidate = current ? `${current} ${word}` : word;
 		if (visibleWidth(candidate) <= contentWidth) {
 			current = candidate;
 		} else {
 			if (current) chunks.push(current);
-			// A single word longer than the line still wraps hard.
 			current = word;
 		}
 	}
 	if (current) chunks.push(current);
-	// Cap total detail rows so the block stays compact. budget = detail lines
-	// kept before the tail (tail sits on the last detail line). When the detail
-	// overflows, keep budget-1 head lines as-is and wrap the remainder onto the
-	// final detail line so the 3rd line is actually used instead of collapsing
-	// the remainder into one truncated line.
 	// Cap total detail rows so the block stays compact. We keep up to
 	// MAX_BRANCH_LINES detail lines, with the tail appended to the last one â€”
 	// so a maxed-out block is MAX_BRANCH_LINES rows total (tail shares the last
@@ -199,14 +202,19 @@ export function wrapBranchLine(line: string, width: number, branchPrefix = "  â”
 		chunks = [...head, lastLine];
 	}
 
-	const rows = chunks.map((chunk, index) => index === 0 ? `${branchPrefix}${chunk}` : `${" ".repeat(branchPrefix.length)}${chunk}`);
+	const branchIndent = " ".repeat(branchPrefix.length);
+	const rows = chunks.map((chunk, index) => index === 0 ? `${branchPrefix}${chunk}` : `${branchIndent}${chunk}`);
 	if (hasTail) {
 		const lastIndex = rows.length - 1;
 		const last = rows[lastIndex];
 		const fitted = fitToolLine(`${last}${tail}`, max);
 		rows[lastIndex] = fitted;
 	}
-	return rows;
+	// Defensive final guarantee: no row from this function may exceed `max`, or
+	// the TUI throws and exits. The wrap above should already bound every row,
+	// but a stray overlong chunk (e.g. an edge case in wrapTextWithAnsi) would
+	// crash pi outright, so hard-truncate anything that slipped through.
+	return rows.map((row) => visibleWidth(row) <= max ? row : truncateToWidth(row, max, ""));
 }
 
 function applyAnsiRegion(text: string, width: number, background: string, foreground = ""): string {
