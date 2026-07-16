@@ -168,6 +168,17 @@ function summarize(
 	elapsedMs = 0,
 ): string {
 	const text = textFromResult(result);
+	if (name === "bash") {
+		const m = text.match(/(?:command exited with code|exit code:?)\s*(\d+)/i);
+		const exit = m ? Number(m[1]) : null;
+		// The error result contains the command's complete output. Keep that output
+		// below the command instead of promoting its first line into the headline.
+		const failed = isError || (exit !== null && exit !== 0);
+		const status = failed
+			? `${RED}✗${exit === null ? "" : ` exit ${exit}`}${RESET}`
+			: `${GREEN}✓${RESET}`;
+		return `${DIM}in${RESET} ${formatElapsed(elapsedMs)} ${status}`;
+	}
 	if (isError) return `${RED}${text.split("\n")[0] || "error"}${RESET}`;
 	if (name === "read") return `${GREEN}${text.split("\n").length} lines${RESET}`;
 	if (name === "write") {
@@ -190,15 +201,6 @@ function summarize(
 			if (l.startsWith("-") && !l.startsWith("---")) del++;
 		}
 		return `(${GREEN}+${add}${RESET} ${RED}-${del}${RESET})`;
-	}
-	if (name === "bash") {
-		const m = text.match(/exit code: (\d+)/);
-		const exit = m ? Number(m[1]) : null;
-		// Keep timing conversational (`in 2s`) and finish with the pass/fail glyph.
-		// Failed runs retain `exit N` after the glyph so the code stays visible.
-		const ok = !exit || exit === 0;
-		const status = ok ? `${GREEN}✓${RESET}` : `${RED}✗ exit ${exit}${RESET}`;
-		return `${DIM}in${RESET} ${formatElapsed(elapsedMs)} ${status}`;
 	}
 	if (name === "grep") {
 		if (/^No matches found/.test(text.trim())) return "0 matches in 0 files";
