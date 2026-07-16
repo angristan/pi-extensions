@@ -18,6 +18,14 @@ const OUTPUT_ROWS = 5;
 const INDENT = "    ";
 const DIM = "\x1b[2m";
 const RESET = "\x1b[0m";
+// Left bar prefix for bash output: the `│` sits directly under the `└` branch
+// char above it (both at column 3), framing the output as one blockquote-style
+// group instead of a bare indented blob. Same 4-col visual budget as INDENT,
+// so wrap width is unchanged.
+const BAR = "│";
+function barLine(text: string): string {
+	return `${DIM}  ${BAR} ${text}${RESET}`;
+}
 const RENDER_STATS_KEY = Symbol.for("pi.renderer-cache.stats");
 
 interface RendererCacheStats {
@@ -62,7 +70,7 @@ function wrappedOutput(text: string, width: number): string[] {
 	const bodyWidth = Math.max(1, width - INDENT.length);
 	const rows = text.replace(/\t/g, "   ").replace(/\s+$/, "").split("\n")
 		.flatMap((line) => wrapTextWithAnsi(line, bodyWidth));
-	return rows.map((row) => `${INDENT}${DIM}${row}${RESET}`);
+	return rows.map((row) => barLine(row));
 }
 
 function boundedRows(rows: string[]): string[] {
@@ -72,7 +80,7 @@ function boundedRows(rows: string[]): string[] {
 	const omitted = rows.length - head - tail;
 	return [
 		...rows.slice(0, head),
-		`${INDENT}${DIM}… +${omitted} lines (Ctrl+O for full output)${RESET}`,
+		barLine(`… +${omitted} lines (Ctrl+O for full output)`),
 		...rows.slice(-tail),
 	];
 }
@@ -115,7 +123,7 @@ class CommandComponent {
 		}
 
 		const text = resultText(this.result);
-		let output = text.trim() ? wrappedOutput(text, max) : [`${INDENT}${DIM}(no output)${RESET}`];
+		let output = text.trim() ? wrappedOutput(text, max) : [barLine("(no output)")];
 		if (!this.options.expanded) output = boundedRows(output);
 		// Branch rows (└ <command> · <summary>) wrap to ≤3 lines so long commands
 		// stay readable; every other block line truncates to fit.
