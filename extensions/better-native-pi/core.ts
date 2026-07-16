@@ -21,11 +21,11 @@ import {
 	nonEmptyLineCount,
 	shortPath,
 } from "./render.js";
-import { dimTheme, highlightShellCommand, highlightedShellLine } from "./shell.js";
+import { highlightShellCommand, highlightedShellLine } from "./shell.js";
 import { colorizeDiff, diffPalette, WidthAwareLines } from "./diff.js";
 
 // Re-export so restylers import everything from one place (./core.js).
-export { Container, dimTheme, diffPalette, WidthAwareLines, colorizeDiff, highlightShellCommand, highlightedShellLine };
+export { Container, diffPalette, WidthAwareLines, colorizeDiff, highlightShellCommand, highlightedShellLine };
 export type { WidthAwareLines as WidthAwareLinesType } from "./diff.js";
 
 // Match the transcript hierarchy directly at the transcript margin.
@@ -55,7 +55,7 @@ export function fitToolLine(line: string, width: number): string {
 
 /** Human-readable, one-line call detail; paths use `~` like display paths. */
 function argDetail(name: string, args: Record<string, unknown>, theme?: any): string {
-	if (name === "bash" && typeof args.command === "string") return highlightShellCommand(args.command, dimTheme(theme));
+	if (name === "bash" && typeof args.command === "string") return highlightShellCommand(args.command, theme);
 	if ((name === "grep" || name === "find") && typeof args.pattern === "string") {
 		const path = typeof args.path === "string"
 			? hyperlinkPath(shortPath(args.path), args.path, cwd)
