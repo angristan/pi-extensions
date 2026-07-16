@@ -267,7 +267,7 @@ function renderSearchResult(
 			lines.push(`${INDENT}${theme.fg("syntaxNumber", `${index + 1}.`)} ${rendered}${meta ? ` ${theme.fg("dim", "—")} ${meta}` : ""}`);
 			const evidence = item.snippets?.[0] ?? item.description;
 			if (evidence) {
-				lines.push(`${INDENT}   ${theme.fg("toolOutput", truncateToWidth(evidence.replace(/\s+/g, " ").trim(), 140, "…"))}`);
+				lines.push(`${INDENT}   ${theme.fg("dim", truncateToWidth(evidence.replace(/\s+/g, " ").trim(), 140, "…"))}`);
 			}
 		}
 		const shown = shownResults.length;
