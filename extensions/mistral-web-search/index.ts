@@ -281,7 +281,7 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 		promptSnippet: "Search the web through Mistral's direct MCP connector and return raw results",
 		promptGuidelines: [
 			"Use web_search to discover current or potentially changed web information; it returns raw results, not a final answer.",
-			"Prefer official or primary-source results from web_search. Inspect important pages with local content tools; use open_url only when local retrieval is unavailable or fails.",
+			"Prefer official or primary-source results from web_search. Inspect important pages with local content tools like `ax`; use open_url only when local retrieval is unavailable or fails.",
 			"Do not use web_search for local codebase search; use grep/read/ls/find for local files.",
 		],
 		parameters: webSearchSchema,
@@ -301,7 +301,7 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 		promptSnippet: "Search recent news through Mistral's direct MCP connector and return raw results",
 		promptGuidelines: [
 			"Use news_search for recent events, journalism, or date-bounded news queries; it returns raw news results, not a final answer.",
-			"When news_search returns a URL or article ID that matters, inspect it with local content tools; use open_url only when local retrieval is unavailable or fails.",
+			"When news_search returns a URL or article ID that matters, inspect it with local content tools like `ax`; use open_url only when local retrieval is unavailable or fails.",
 		],
 		parameters: newsSearchSchema,
 		renderShell: "self",
@@ -316,10 +316,10 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 		name: "open_url",
 		label: "Open URL",
 		description:
-			"Fallback for opening a URL or news article ID through Mistral's direct open_url MCP connector when local content retrieval is unavailable or fails. Returns readable page text.",
-		promptSnippet: "Fallback opener for a URL or news article ID when local content retrieval fails",
+			"Fallback for opening a URL or news article ID through Mistral's direct open_url MCP connector when local content retrieval with tools like `ax` is unavailable or fails. Returns readable page text.",
+		promptSnippet: "Fallback opener for a URL or news article ID when local content retrieval with tools like `ax` fails",
 		promptGuidelines: [
-			"Use open_url only as a fallback when local content retrieval is unavailable, blocked, or fails.",
+			"Use open_url only as a fallback when local content retrieval with tools like `ax` is unavailable, blocked, or fails.",
 			"Cite URLs from open_url or search results when making claims based on web content.",
 		],
 		parameters: openUrlSchema,
