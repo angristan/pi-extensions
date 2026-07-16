@@ -1,19 +1,21 @@
 /**
- * turn-separator — dim full-width rule between turns, optionally labeled with
- * how long the assistant worked.
+ * turn-separator — dim full-width rule between assistant messages that follow
+ * tool work, so each step of a multi-step turn is visually separated.
  *
- * After each agent run settles, appends a custom (non-LLM) entry rendered as a
- * single full-width `─` line, dimmed via the theme's `dim`/`mdHr` token. When
- * the turn took longer than 60s, a centered `─ Worked for Xm ──────` label is
- * shown — mirroring the transcript separator in other terminal agents. Only
- * turns that performed concrete work (ran at least one tool) get a separator;
- * purely conversational turns do not.
+ * Emits a custom (non-LLM) entry rendered as a single full-width dim `─` line
+ * (theme's `dim` token), with a centered `─ Worked for Xm ─` label for steps
+ * longer than 60s. The separator is appended when a new assistant message
+ * starts AND the preceding step performed concrete work (ran a tool) — so
+ * conversational-only steps don't accumulate empty rules. This mirrors the
+ * transcript separator pattern used by other terminal agents, where the rule
+ * is drawn before a streamed assistant message that follows exec/patch/MCP
+ * activity.
  */
 import type { Component } from "@earendil-works/pi-tui";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, MessageStartEvent } from "@earendil-works/pi-coding-agent";
 
 const ENTRY_TYPE = "turn-separator";
-/** Only label turns longer than this (seconds) — short turns get a bare rule. */
+/** Only label steps longer than this (seconds) — short steps get a bare rule. */
 const LABEL_THRESHOLD_SECONDS = 60;
 
 interface SeparatorData {
@@ -29,11 +31,10 @@ class RuleLine implements Component {
 	render(width: number): string[] {
 		const w = Math.max(0, width);
 		if (!this.label) return [this.dim("─".repeat(w))];
-		// `─ <label> ─` centered: label sits at the left with a trailing rule
-		// filling the remaining width, matching the reference rendering.
+		// `─ <label> ─` left-aligned with a trailing rule filling the rest,
+		// matching the reference rendering.
 		const labeled = `─ ${this.label} ─`;
-		const labeledWidth = labeled.length;
-		const fill = "─".repeat(Math.max(0, w - labeledWidth));
+		const fill = "─".repeat(Math.max(0, w - labeled.length));
 		return [this.dim(`${labeled}${fill}`)];
 	}
 }
@@ -53,34 +54,40 @@ export default function turnSeparator(pi: ExtensionAPI) {
 			typeof theme?.fg === "function" ? theme.fg("dim", s) : s;
 		const data = (entry.data ?? {}) as SeparatorData;
 		const elapsed = data.elapsedSeconds ?? 0;
-		// Centered label only for long turns, matching the reference behavior.
 		const label = elapsed > LABEL_THRESHOLD_SECONDS
 			? `Worked for ${formatElapsed(elapsed)}`
 			: undefined;
 		return new RuleLine(dim, label);
 	});
 
-	let runStartedAt: number | undefined;
-	let didToolWork = false;
+	// Track the previous step's work + timing so we can emit a separator before
+	// a new assistant message only when the prior step did concrete work.
+	let prevStepDidWork = false;
+	let prevStepStartedAt: number | undefined;
+	let currentStepStartedAt: number | undefined;
 
-	pi.on("agent_start", () => {
-		runStartedAt = Date.now();
-		didToolWork = false;
+	pi.on("message_start", (event: MessageStartEvent) => {
+		// Only assistant messages trigger a separator (tool results and user
+		// messages are not separator points).
+		if (event.message.role !== "assistant") return;
+		// Promote the current step to "previous" before resetting for this new
+		// assistant message.
+		prevStepStartedAt = currentStepStartedAt;
+		// Emit before this assistant message starts, if the prior step did work.
+		if (prevStepDidWork && prevStepStartedAt !== undefined) {
+			const elapsedSeconds = (Date.now() - prevStepStartedAt) / 1000;
+			pi.appendEntry(ENTRY_TYPE, { elapsedSeconds });
+		}
+		// Reset for this new step.
+		prevStepDidWork = false;
+		currentStepStartedAt = Date.now();
 	});
-	// Any tool execution marks the turn as having done concrete work.
+	// Any tool execution marks the current step as having done concrete work,
+	// so the next assistant message gets a separator before it.
 	pi.on("tool_execution_start", () => {
-		didToolWork = true;
-	});
-	// turn_end fires exactly once per turn (covering all retries/tool loops),
-	// unlike agent_settled which fires per provider response and stacks rules
-	// mid-turn.
-	pi.on("turn_end", () => {
-		// Only separate turns that performed work; conversational turns skip the
-		// divider so the transcript doesn't accumulate empty rules.
-		if (!didToolWork) return;
-		const elapsedSeconds = runStartedAt
-			? (Date.now() - runStartedAt) / 1000
-			: undefined;
-		pi.appendEntry(ENTRY_TYPE, { elapsedSeconds });
+		prevStepDidWork = true;
+		// Anchor the step's start to the first tool call if we never saw a
+		// message_start (defensive: should not normally happen).
+		prevStepStartedAt ??= Date.now();
 	});
 }

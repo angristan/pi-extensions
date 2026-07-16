@@ -51,7 +51,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | [`session-search`](extensions/session-search/) | Full-text search across all your saved sessions, with ranked results |
 | [`side-chat`](extensions/side-chat/) | An ephemeral, read-only side question about the current conversation, without changing the main transcript |
 | [`transcript`](extensions/transcript/) | Open a full, scrollable view of the entire session transcript |
-| [`turn-separator`](extensions/turn-separator/) | Dim full-width rule between turns that did work, labeled with elapsed time for long turns |
+| [`turn-separator`](extensions/turn-separator/) | Dim full-width rule between assistant messages that follow tool work, labeling long steps |
 | [`turn-stats`](extensions/turn-stats/) | Per-turn timing and token-usage entries appended to the transcript after each settled response |
 
 Each extension has its own `README.md` with commands, config, and sample output.
