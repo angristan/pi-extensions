@@ -1,5 +1,4 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -88,13 +87,19 @@ function notify(title: string, body: string) {
 			process.stdout.write(buildOsc9Sequence(preview(body, 220)));
 			return;
 		} catch {
-			// Fall through to the macOS notification backend.
+			// Fall through to the terminal bell.
 		}
 	}
 
-	if (process.platform !== "darwin") return;
-	const script = 'on run argv\ndisplay notification (item 2 of argv) with title (item 1 of argv)\nend run';
-	execFile("osascript", ["-e", script, title, body], { timeout: 5_000 }, () => {});
+	// Fallback: terminal bell. Portable across macOS/Linux and lets the
+	// terminal (or tmux) decide how to surface it — a native macOS alert, a
+	// 🔔 tab marker, an audible bell, or nothing, per the user's terminal
+	// settings. Wrap in tmux passthrough when inside tmux so it reaches the
+	// outer terminal rather than being consumed by tmux itself.
+	const tmux = Boolean(process.env.TMUX);
+	const bell = "\x07";
+	const seq = tmux ? `\u001bPtmux;${bell.replace(/\u001b/g, "\u001b\u001b")}\u001b\\` : bell;
+	try { process.stdout.write(seq); } catch { /* terminal not writable */ }
 }
 
 export default function (pi: ExtensionAPI) {
