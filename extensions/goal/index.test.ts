@@ -147,6 +147,15 @@ function isContinuation(message: any) {
 	return message?.customType === "goal-continuation";
 }
 
+test("reserves goal_set for long-running autonomous work", () => {
+	const h = makeHarness();
+	const description = h.tools.goal_set.description;
+
+	expect(description).toContain("including multi-step work; use update_plan instead");
+	expect(description).toContain("long-running, multi-turn work");
+	expect(description).toContain("Most tasks should not create a goal");
+});
+
 test("renders the goal overlay as a compact summary", () => {
 	const theme = { bold: (text: string) => text, fg: (_color: string, text: string) => text };
 	const lines = renderGoalOverlayBody({

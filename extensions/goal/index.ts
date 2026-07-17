@@ -1253,7 +1253,8 @@ export default function (pi: ExtensionAPI) {
 			"Set (or replace) the durable session goal and start the auto-continuation loop. " +
 			"Use this to commit to a concrete, verifiable objective with explicit validation criteria, then work toward it until goal_complete or goal_block. " +
 			"If a goal is already active, paused, or blocked, call again with replace: true to overwrite it — do not silently redefine an in-progress goal around an easier task. " +
-			"Do not call this for ordinary single-step tasks; only for objectives worth a persistent self-driving loop.",
+			"Do not call this for ordinary coding or research tasks, including multi-step work; use update_plan instead. " +
+			"Reserve goal_set for explicit user requests or long-running, multi-turn work—potentially hours—that genuinely needs automatic continuation. Most tasks should not create a goal.",
 		parameters: Type.Object({
 			objective: Type.String({ description: "The outcome that must become true. Concrete and verifiable, not a broad category of work." }),
 			validation: Type.Optional(Type.Array(Type.String(), { description: "Optional acceptance criteria that prove the objective is met." })),

@@ -7,6 +7,12 @@ the agent keeps working toward it until it's done or blocked.
 Blocked status uses three-turn auditing: the same blocker must repeat across at
 least three consecutive goal turns before the goal is marked blocked.
 
+A goal is a control mode, not the default planning primitive. Ordinary coding or
+research tasks—including multi-step work—should use `update_plan` instead.
+Reserve goals for explicit user requests or long-running, multi-turn work that
+genuinely needs automatic continuation, potentially across hours. Most tasks
+should not create a goal.
+
 The goal is a short statement plus optional **validation criteria**. A compact
 summary is surfaced in its own overlay card, while the full goal is available via
 `/goal-status` and injected into the system prompt on every turn. Objective and
@@ -97,7 +103,9 @@ All sections except `# Goal` are optional.
 
 - **`goal_set`** — always available; lets the agent set (or replace) the
   durable session goal itself and start the auto-continuation loop, without a
-  user running `/goal`. Accepts an `objective`, optional `validation`
+  user running `/goal`. It is reserved for explicit user requests or
+  long-running work that needs automatic continuation; ordinary multi-step work
+  should use `update_plan`. Accepts an `objective`, optional `validation`
   criteria, and `replace: true` to overwrite an existing in-progress goal. A
   completed goal can be overwritten freely. The tool refuses to silently
   overwrite an active/paused/blocked goal and asks the caller to re-call with
