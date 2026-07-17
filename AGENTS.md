@@ -6,3 +6,4 @@
 - Run the relevant focused tests while iterating, then run the full test suite before pushing.
 - Update the relevant extension README whenever behavior, commands, configuration, output, or user-facing UX changes.
 - Do not commit generated artifacts, dependency directories, logs, or local machine state.
+- Push directly to `main`. Do not open pull requests. Commit with `git commit -S` and `git push origin main`. For noisy/unrelated changes, prefer a separate commit over bundling; squash only if a branch's history is unwieldy. Never bundle unrelated changes into the same commit.
