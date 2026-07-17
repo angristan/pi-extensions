@@ -104,7 +104,22 @@ All sections except `# Goal` are optional.
 
 When no goal is active, these tools are removed from the active tool set. If a
 stale in-flight model request still calls one, the call is ignored silently so it
-does not add noisy "no active goal" output to the transcript.
+does not add noisy "no active goal" output to the transcript — the rendered
+block is hidden too.
+
+Both tools render as the same compact 2-line transcript blocks as the native
+and web tools (`renderShell: "self"`): a `• verb` headline whose bullet color
+tracks the outcome (magenta while running, green on success, red for a real
+blocker) over a dim `└ summary` branch. Example settled blocks:
+
+```
+• Completed goal
+  └ Reduce p95 checkout latency below 120ms
+• Goal blocked
+  └ flaky CI on macOS · next: re-run after runner image bumped
+• Blocker recorded
+  └ flaky CI on macOS · goal remains active · 1/3
+```
 
 ## How it renders
 
