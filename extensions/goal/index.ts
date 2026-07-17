@@ -10,14 +10,26 @@ import { registerOverlayCard } from "../overlay-stack/index.js";
 const ENTRY_TYPE = "goal-state";
 const EVENT_NAME = "goal:changed";
 const CONTINUATION_CUSTOM_TYPE = "goal-continuation";
+const BLOCKED_AUDIT_THRESHOLD = 3;
 
 /**
  * Status lifecycle mirrors a persistent-objective goal system:
  * active → (pause) → paused → (resume) → active
+ * active → (blocked audit threshold) → blocked → (resume) → active
  * active → (complete, evidence-backed) → complete
  * active → (interrupted by user) → paused
  */
-type GoalStatus = "active" | "paused" | "complete";
+type GoalStatus = "active" | "paused" | "blocked" | "complete";
+
+interface BlockedAudit {
+	fingerprint: string;
+	count: number;
+	blocker: string;
+	attempted: string;
+	evidence: string;
+	nextInput: string;
+	lastReportedAt: number;
+}
 
 export interface GoalState {
 	objective: string;
@@ -29,6 +41,8 @@ export interface GoalState {
 	updatedAt: number;
 	activeSince?: number;
 	accumulatedActiveMs: number;
+	blockedAt?: number;
+	blockedAudit?: BlockedAudit;
 	completedAt?: number;
 	/** Continuation accounting for the auto-loop. */
 	continuations: number;
@@ -108,8 +122,16 @@ function displayState(state: GoalState, now = Date.now()): GoalDisplayState {
 }
 
 function normalizeStatus(status: unknown): GoalStatus {
-	if (status === "active" || status === "complete") return status;
+	if (status === "active" || status === "blocked" || status === "complete") return status;
 	return "paused";
+}
+
+function normalizeBlockerText(value: string): string {
+	return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function blockerFingerprint(blocker: string, nextInput: string): string {
+	return `${normalizeBlockerText(blocker)}\n${normalizeBlockerText(nextInput)}`;
 }
 
 // ============================================================================
@@ -123,7 +145,7 @@ export function buildGoalContext(state: GoalState): string {
 	const verify = state.verify
 		? `\nA verification command is configured and MUST exit 0 before this goal can be marked complete:\n  $ ${state.verify}`
 		: "";
-	return `## Active session goal\nThe durable outcome for this session is:\n${state.objective}${validation}${verify}\n\nUse the execution plan for intermediate steps. Do not mark the goal complete until its validation criteria are satisfied AND verified against concrete evidence (files changed, commands run, tests passed, artifacts produced). If no valid path remains, stop and report the blocker instead of declaring success.`;
+	return `## Active session goal\nThe durable outcome for this session is:\n${state.objective}${validation}${verify}\n\nUse the execution plan for intermediate steps. Do not mark the goal complete until its validation criteria are satisfied AND verified against concrete evidence (files changed, commands run, tests passed, artifacts produced). If no valid path remains, use goal_block only after the same blocking condition has recurred across the blocked audit threshold; do not declare the goal blocked merely because the work is hard, slow, uncertain, or would benefit from clarification.`;
 }
 
 /**
@@ -136,15 +158,15 @@ function continuationPrompt(state: GoalState): string {
 	const validationList = state.validation.length
 		? state.validation.map((v, i) => `  ${i + 1}. ${v}`).join("\n")
 		: "  - (no explicit criteria — judge against the objective)";
-	return `[Goal continuation — turn ${state.continuations + 1}]\nThe active goal is:\n${state.objective}\n\nValidation criteria:\n${validationList}${verifyLine}\n\nContinue working toward this goal. Before declaring it complete, audit it against concrete evidence (files changed, commands run, tests passed, build/benchmark output, generated artifacts). If it is complete and verified, call the \`goal_complete\` tool with per-criterion evidence. If you are blocked or no valid path remains, call \`goal_block\` instead. Do not just summarize — either make progress or report a blocker.`;
+	return `[Goal continuation — turn ${state.continuations + 1}]\nThe active goal is:\n${state.objective}\n\nValidation criteria:\n${validationList}${verifyLine}\n\nContinuation behavior:\n- Keep the full objective intact; do not redefine success around a smaller or easier task.\n- Use the current worktree and external state as authoritative; inspect current state before relying on memory.\n- If update_plan is available and the next work is meaningfully multi-step, keep the plan tied to the real objective.\n\nCompletion audit:\nBefore declaring the goal complete, audit it against concrete evidence (files changed, commands run, tests passed, build/benchmark output, generated artifacts). If it is complete and verified, call \`goal_complete\` with per-criterion evidence.\n\nBlocked audit:\n- Do not call \`goal_block\` the first time a blocker appears.\n- Call \`goal_block\` only when the same blocking condition has repeated for at least ${BLOCKED_AUDIT_THRESHOLD} consecutive goal turns and no meaningful progress is possible without user input or an external-state change.\n- Never use blocked merely because the work is hard, slow, uncertain, incomplete, or would benefit from clarification.\n\nDo not just summarize — either make progress, complete with evidence, or report a repeated blocker.`;
 }
 
 // ============================================================================
 // Overlay rendering (kept compatible with plan-progress subscriber)
 // ============================================================================
 
-function statusColor(status: GoalStatus): "success" | "warning" | "muted" {
-	return status === "active" ? "success" : status === "paused" ? "warning" : "muted";
+function statusColor(status: GoalStatus): "success" | "warning" | "muted" | "error" {
+	return status === "active" ? "success" : status === "paused" ? "warning" : status === "blocked" ? "error" : "muted";
 }
 
 function goalLines(state: GoalDisplayState, theme: any): string[] {
@@ -154,12 +176,16 @@ function goalLines(state: GoalDisplayState, theme: any): string[] {
 		`${theme.fg("dim", "Active time")}  ${formatDuration(state.elapsedMs)}`,
 	];
 	lines.push(`${theme.fg("dim", "Continuations")}  ${state.continuations}`);
+	if (state.status === "blocked" && state.blockedAudit) {
+		lines.push(`${theme.fg("dim", "Blocked")}  ${state.blockedAudit.blocker}`);
+		lines.push(`${theme.fg("dim", "Next")}     ${state.blockedAudit.nextInput}`);
+	}
 	if (state.verify) lines.push(`${theme.fg("dim", "Verify")}  $ ${state.verify}`);
 	if (state.validation.length) {
 		lines.push("", theme.fg("accent", theme.bold("Validation")));
 		for (const item of state.validation) lines.push(`  ○ ${item}`);
 	}
-	lines.push("", theme.fg("dim", "/goal [<objective>|clear|edit|pause|resume]"));
+	lines.push("", theme.fg("dim", "/goal [<objective>|clear|edit|pause|resume|block]"));
 	return lines;
 }
 
@@ -173,13 +199,14 @@ function goalLines(state: GoalDisplayState, theme: any): string[] {
 export default function (pi: ExtensionAPI) {
 	let state: GoalState | undefined;
 	let activeCtx: any;
-	// Did the most recent assistant turn (that we observed via message_end)
-	// make at least one tool call? Anti-spin rule: if a continuation turn made
-	// no tool call, suppress the next auto-continuation.
-	let lastTurnHadToolCall = false;
-	// Was the most recent assistant turn the result of a goal continuation
-	// prompt we injected? Used by the anti-spin guard.
+	let nextTurnIsContinuation = false;
+	let currentTurnIsContinuation = false;
+	let currentTurnHadToolCall = false;
+	let currentTurnCalledGoalBlock = false;
 	let lastTurnWasContinuation = false;
+	let lastTurnHadToolCall = false;
+	let lastTurnCalledGoalBlock = false;
+	let noToolContinuationStreak = 0;
 
 	// Dedicated overlay card so the goal renders as its own box, separate from
 	// the plan-progress card. order 5 places it above the plan card (order 10).
@@ -234,9 +261,26 @@ export default function (pi: ExtensionAPI) {
 		if (!state) return false;
 		const now = Date.now();
 		if (state.status === "active" && next !== "active") pauseClock(now);
-		if (next === "active" && state.status !== "active") state.activeSince = now;
+		if (next === "active" && state.status !== "active") {
+			state.activeSince = now;
+			state.blockedAt = undefined;
+			state.blockedAudit = undefined;
+			noToolContinuationStreak = 0;
+		}
+		if (next === "blocked" && !state.blockedAudit) {
+			state.blockedAudit = {
+				fingerprint: "manual-block",
+				count: BLOCKED_AUDIT_THRESHOLD,
+				blocker: "Marked blocked manually.",
+				attempted: "The user ran /goal block.",
+				evidence: "/goal block",
+				nextInput: "Resume the goal when there is actionable work again.",
+				lastReportedAt: now,
+			};
+		}
 		state.status = next;
 		state.updatedAt = now;
+		state.blockedAt = next === "blocked" ? now : state.blockedAt;
 		state.completedAt = next === "complete" ? now : undefined;
 		saveAndEmit(ctx);
 		return true;
@@ -272,7 +316,7 @@ export default function (pi: ExtensionAPI) {
 
 	const showGoal = async (ctx: any) => {
 		if (!state) {
-			ctx.ui.notify("Usage: /goal [<objective>|clear|edit|pause|resume]\nNo goal is currently set.", "info");
+			ctx.ui.notify("Usage: /goal [<objective>|clear|edit|pause|resume|block]\nNo goal is currently set.", "info");
 			return;
 		}
 		// The always-on overlay card already shows full goal state; /goal just
@@ -287,7 +331,7 @@ export default function (pi: ExtensionAPI) {
 
 	/** Send a silent continuation prompt that triggers a new turn. */
 	const sendContinuation = (ctx: any, prompt: string) => {
-		lastTurnWasContinuation = true;
+		nextTurnIsContinuation = true;
 		pi.sendMessage(
 			{ customType: CONTINUATION_CUSTOM_TYPE, content: prompt, display: false, details: { continuation: true } },
 			{ triggerTurn: true },
@@ -300,7 +344,7 @@ export default function (pi: ExtensionAPI) {
 	 *  - goal must be active
 	 *  - thread must be idle (not streaming)
 	 *  - no pending user input queued
-	 *  - anti-spin: the last continuation turn must have made a tool call
+	 *  - anti-spin: repeated no-tool continuations mark the goal blocked
 	 *  - the previous turn must not have been aborted (interruption → pause)
 	 */
 	const maybeContinue = (ctx: any): boolean => {
@@ -308,18 +352,30 @@ export default function (pi: ExtensionAPI) {
 		if (typeof ctx.isIdle === "function" && !ctx.isIdle()) return false;
 		if (typeof ctx.hasPendingMessages === "function" && ctx.hasPendingMessages()) return false;
 
-		// Interruption → pause: if the last assistant turn was aborted, the user
-		// interrupted us. Pause the goal so it doesn't immediately resume.
-		// (agent_settled already implies the run is over; this catches Esc-aborts.)
-		// The abort detection is done in message_end below; if we got here with
-		// lastTurnWasContinuation true but lastTurnHadToolCall false, it's a spin.
-
-		// Anti-spin: a continuation turn that produced no tool call means the
-		// model has nothing actionable to do — stop the loop.
-		if (lastTurnWasContinuation && !lastTurnHadToolCall) {
-			ctx.ui.notify("Goal: last continuation made no tool call — pausing auto-continuation. Use /goal resume to continue.", "warning");
-			setStatus("paused", ctx);
-			return false;
+		// Interruption → pause is detected in message_end below.
+		if (lastTurnHadToolCall) {
+			noToolContinuationStreak = 0;
+			// A successful tool-using turn that did not report a blocker breaks the
+			// consecutive blocked audit for the same blocking condition.
+			if (!lastTurnCalledGoalBlock && state.blockedAudit) state.blockedAudit = undefined;
+		} else if (lastTurnWasContinuation) {
+			noToolContinuationStreak += 1;
+			if (noToolContinuationStreak >= BLOCKED_AUDIT_THRESHOLD) {
+				state.blockedAudit = {
+					fingerprint: "no-tool-continuation",
+					count: noToolContinuationStreak,
+					blocker: `The last ${noToolContinuationStreak} goal continuation turns made no tool calls.`,
+					attempted: "Automatic goal continuation prompts were sent at safe idle boundaries.",
+					evidence: "No tool execution was observed during those continuation turns.",
+					nextInput: "Give a more specific next step, adjust the goal, or resume if there is actionable work to perform.",
+					lastReportedAt: Date.now(),
+				};
+				ctx.ui.notify("Goal blocked: repeated continuations made no tool calls.", "warning");
+				setStatus("blocked", ctx);
+				return false;
+			}
+		} else {
+			noToolContinuationStreak = 0;
 		}
 
 		state.continuations += 1;
@@ -334,7 +390,7 @@ export default function (pi: ExtensionAPI) {
 	// ------------------------------------------------------------------------
 
 	pi.registerCommand("goal", {
-		description: "Set, inspect, pause, resume, complete, or clear the durable session goal. Usage: /goal [<objective>|clear|edit|pause|resume|complete]",
+		description: "Set, inspect, pause, resume, block, complete, or clear the durable session goal. Usage: /goal [<objective>|clear|edit|pause|resume|block|complete]",
 		handler: async (args, ctx) => {
 			const input = args.trim();
 			if (!input) { await showGoal(ctx); return; }
@@ -348,12 +404,18 @@ export default function (pi: ExtensionAPI) {
 				case "resume":
 					if (!setStatus("active", ctx)) ctx.ui.notify("No session goal to resume.", "warning");
 					else {
-						// Reset anti-spin flags so a fresh resume isn't immediately
-						// re-paused by the stale "last turn had no tool call" state.
+						// Reset loop-audit flags so a fresh resume starts a new
+						// blocked audit.
 						lastTurnWasContinuation = false;
 						lastTurnHadToolCall = false;
+						lastTurnCalledGoalBlock = false;
+						noToolContinuationStreak = 0;
 						maybeContinue(ctx);
 					}
+					return;
+				case "block":
+				case "blocked":
+					if (!setStatus("blocked", ctx)) ctx.ui.notify("No session goal to block.", "warning");
 					return;
 				case "complete":
 					if (!setStatus("complete", ctx)) ctx.ui.notify("No session goal to complete.", "warning");
@@ -406,8 +468,20 @@ export default function (pi: ExtensionAPI) {
 	// Loop event wiring
 	// ------------------------------------------------------------------------
 
-	// Track tool-call activity per turn for the anti-spin rule.
-	pi.on("tool_execution_end", () => { lastTurnHadToolCall = true; });
+	// Track per-turn activity for the loop guard. A continuation that repeatedly
+	// produces no tool calls is treated as a blocker instead of spinning forever.
+	pi.on("turn_start", () => {
+		currentTurnIsContinuation = nextTurnIsContinuation;
+		nextTurnIsContinuation = false;
+		currentTurnHadToolCall = false;
+		currentTurnCalledGoalBlock = false;
+	});
+	pi.on("tool_execution_end", () => { currentTurnHadToolCall = true; });
+	pi.on("turn_end", (event: any) => {
+		lastTurnWasContinuation = currentTurnIsContinuation;
+		lastTurnHadToolCall = currentTurnHadToolCall || (Array.isArray(event.toolResults) && event.toolResults.length > 0);
+		lastTurnCalledGoalBlock = currentTurnCalledGoalBlock;
+	});
 
 	pi.on("message_end", (event, _ctx) => {
 		const msg = event.message;
@@ -440,8 +514,14 @@ export default function (pi: ExtensionAPI) {
 	const restoreState = (ctx: any) => {
 		activeCtx = ctx;
 		state = undefined;
+		nextTurnIsContinuation = false;
+		currentTurnIsContinuation = false;
+		currentTurnHadToolCall = false;
+		currentTurnCalledGoalBlock = false;
 		lastTurnHadToolCall = false;
 		lastTurnWasContinuation = false;
+		lastTurnCalledGoalBlock = false;
+		noToolContinuationStreak = 0;
 		for (const entry of branchEntries(ctx)) {
 			if (entry.type !== "custom" || entry.customType !== ENTRY_TYPE) continue;
 			const data = entry.data as PersistedGoalEntry | undefined;
@@ -450,6 +530,18 @@ export default function (pi: ExtensionAPI) {
 				continue;
 			}
 			const restored = data.state as GoalState & Record<string, unknown>;
+			const audit = restored.blockedAudit as Partial<BlockedAudit> | undefined;
+			const blockedAudit = audit && typeof audit.fingerprint === "string"
+				? {
+					fingerprint: audit.fingerprint,
+					count: typeof audit.count === "number" ? audit.count : 1,
+					blocker: typeof audit.blocker === "string" ? audit.blocker : "Goal is blocked.",
+					attempted: typeof audit.attempted === "string" ? audit.attempted : "",
+					evidence: typeof audit.evidence === "string" ? audit.evidence : "",
+					nextInput: typeof audit.nextInput === "string" ? audit.nextInput : "Provide input to unblock the goal.",
+					lastReportedAt: typeof audit.lastReportedAt === "number" ? audit.lastReportedAt : Date.now(),
+				}
+				: undefined;
 			state = {
 				objective: typeof restored.objective === "string" ? restored.objective : "",
 				validation: Array.isArray(restored.validation) ? [...restored.validation] : [],
@@ -459,6 +551,8 @@ export default function (pi: ExtensionAPI) {
 				updatedAt: typeof restored.updatedAt === "number" ? restored.updatedAt : Date.now(),
 				activeSince: typeof restored.activeSince === "number" ? restored.activeSince : undefined,
 				accumulatedActiveMs: typeof restored.accumulatedActiveMs === "number" ? restored.accumulatedActiveMs : 0,
+				blockedAt: typeof restored.blockedAt === "number" ? restored.blockedAt : undefined,
+				blockedAudit,
 				completedAt: typeof restored.completedAt === "number" ? restored.completedAt : undefined,
 				continuations: typeof restored.continuations === "number" ? restored.continuations : 0,
 				lastContinuationAt: typeof restored.lastContinuationAt === "number" ? restored.lastContinuationAt : undefined,
@@ -557,9 +651,9 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerTool({
 		name: "goal_block",
-		label: "Report Goal Blocked",
+		label: "Report Goal Blocker",
 		description:
-			"Report that the active goal cannot be completed and no valid path remains under current limits. Stops the auto-continuation loop and pauses the goal. Use when blocked by missing data, failing dependencies, or unreachable conditions.",
+			`Record a blocker for the active goal. Only marks the goal blocked after the same blocking condition has recurred for at least ${BLOCKED_AUDIT_THRESHOLD} consecutive goal turns and no meaningful progress is possible without user input or an external-state change. Do not call merely because work is hard, slow, uncertain, incomplete, or would benefit from clarification.`,
 		parameters: Type.Object({
 			blocker: Type.String({ description: "What is preventing completion." }),
 			attempted: Type.String({ description: "What was attempted." }),
@@ -567,14 +661,43 @@ export default function (pi: ExtensionAPI) {
 			next_input: Type.String({ description: "What input or change would unlock progress." }),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const alreadyReportedThisTurn = currentTurnCalledGoalBlock;
+			currentTurnCalledGoalBlock = true;
 			if (!state) {
 				return { content: [{ type: "text", text: "No active session goal." }], details: { ok: false } };
 			}
-			setStatus("paused", ctx);
-			ctx.ui.notify("Goal paused: blocked. See tool result for details.", "warning");
+			if (state.status !== "active") {
+				return { content: [{ type: "text", text: `Goal is ${state.status}, not active. Resume it before reporting blockers.` }], details: { ok: false } };
+			}
+			if (alreadyReportedThisTurn) {
+				return { content: [{ type: "text", text: "A blocker has already been recorded for this goal turn. Wait for the next goal turn before counting the same blocker again." }], details: { ok: true, blocked: false, duplicateTurn: true } };
+			}
+			const fingerprint = blockerFingerprint(params.blocker, params.next_input);
+			const previous = state.blockedAudit;
+			const count = previous?.fingerprint === fingerprint ? previous.count + 1 : 1;
+			state.blockedAudit = {
+				fingerprint,
+				count,
+				blocker: params.blocker,
+				attempted: params.attempted,
+				evidence: params.evidence,
+				nextInput: params.next_input,
+				lastReportedAt: Date.now(),
+			};
+
+			if (count < BLOCKED_AUDIT_THRESHOLD) {
+				saveAndEmit(ctx);
+				return {
+					content: [{ type: "text", text: `Blocker recorded (${count}/${BLOCKED_AUDIT_THRESHOLD}); goal remains active. Continue if any meaningful progress is possible. If the same blocker recurs on later goal turns, call goal_block again with the same blocker and next input.\n\nBlocker: ${params.blocker}\nAttempted: ${params.attempted}\nEvidence: ${params.evidence}\nNext input needed: ${params.next_input}` }],
+					details: { ok: true, blocked: false, count, threshold: BLOCKED_AUDIT_THRESHOLD },
+				};
+			}
+
+			ctx.ui.notify("Goal blocked: blocker repeated across goal turns.", "warning");
+			setStatus("blocked", ctx);
 			return {
-				content: [{ type: "text", text: `Goal blocked and paused.\n\nBlocker: ${params.blocker}\nAttempted: ${params.attempted}\nEvidence: ${params.evidence}\nNext input needed: ${params.next_input}\n\nResume with /goal resume once unblocked.` }],
-				details: { ok: true, blocked: true },
+				content: [{ type: "text", text: `Goal marked blocked after ${count} consecutive reports of the same blocker.\n\nBlocker: ${params.blocker}\nAttempted: ${params.attempted}\nEvidence: ${params.evidence}\nNext input needed: ${params.next_input}\n\nResume with /goal resume once unblocked.` }],
+				details: { ok: true, blocked: true, count, threshold: BLOCKED_AUDIT_THRESHOLD },
 			};
 		},
 	});

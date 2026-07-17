@@ -5,6 +5,9 @@ loop**: the objective stays in view, and after each turn
 the agent keeps working toward it until the evidence says it's done or it gets
 blocked.
 
+Blocked status uses three-turn auditing: the same blocker must repeat across at
+least three consecutive goal turns before the goal is marked blocked.
+
 The goal is a short statement plus optional **validation criteria** and an
 optional **verify command** (a shell command that must exit 0 before
 completion). The goal is surfaced in its own overlay card and injected into the
@@ -28,31 +31,34 @@ the objective and requires an evidence audit before completion.
                      ▼
         ┌── maybeContinue ──┐
         │ active + idle?     │── no ──► stop (wait for user)
-        │ last turn had     │
-        │  a tool call?     │── no ──► pause (anti-spin)
+        │ no-tool streak    │
+        │  reached 3?       │── yes ─► blocked (anti-spin)
         └──────┬─────────────┘
                │ yes
                ▼
    send silent continuation prompt ──► new agent turn ──► …
                │
                │ model calls goal_complete (evidence-backed) ──► complete
-               │ model calls goal_block ──► pause
-               │ user presses Esc ──► pause (interruption)
+               │ repeated goal_block reports ──────────────────► blocked
+               │ user presses Esc ─────────────────────────────► pause
 ```
 
 ### Safety boundaries
 
 - **Safe-boundary continuation only** — never continues mid-turn, while
   streaming, while user input is queued, or while other work is pending.
-- **Anti-spin** — if a continuation turn makes **no tool call**, the next
-  auto-continuation is suppressed and the goal is paused. The agent won't
-  spin on summarizing turns.
+- **Anti-spin** — no-tool continuation turns are allowed briefly, but after
+  three consecutive no-tool continuations the goal is marked `blocked` instead
+  of spinning forever.
 - **Interruption → pause** — if you abort a turn (Esc), the goal auto-pauses
   so it doesn't immediately resume on the next boundary.
 - **Evidence-based completion** — the model marks the goal complete only by
   calling the `goal_complete` tool, which requires one evidence entry per
   validation criterion. If a `verify` command is configured, it runs and must
   exit 0 before completion is allowed.
+- **Blocked audit** — `goal_block` records blockers while leaving the goal
+  active until the same blocker has recurred three times. Resuming a blocked
+  goal starts a fresh audit.
 
 ## Commands
 
@@ -60,10 +66,11 @@ the objective and requires an evidence audit before completion.
 - `/goal <objective>` — set or update the objective (auto-kicks the loop)
 - `/goal edit` — edit the goal document interactively
 - `/goal pause` / `/goal resume` — pause/resume the loop
+- `/goal block` — manually mark the goal blocked
 - `/goal complete` — manually mark the goal done
 - `/goal clear` — drop the goal
 
-Usage: `/goal [<objective>|clear|edit|pause|resume|complete]`
+Usage: `/goal [<objective>|clear|edit|pause|resume|block|complete]`
 
 ## Goal document format
 
@@ -87,8 +94,9 @@ line.
 
 - **`goal_complete`** — mark the goal complete. Requires `evidence` (one entry
   per validation criterion) and a `summary`. Runs the `verify` command if set.
-- **`goal_block`** — report the goal is blocked and pause the loop. Requires
-  `blocker`, `attempted`, `evidence`, and `next_input`.
+- **`goal_block`** — record a blocker. Requires `blocker`, `attempted`,
+  `evidence`, and `next_input`; marks the goal `blocked` only after the same
+  blocker repeats three times.
 
 ## How it renders
 
@@ -109,7 +117,8 @@ Validation
 ╰──────────────────────────────────────────╯
 ```
 
-Status colors: `● active` (green), `◐ paused` (yellow), `complete` (dim).
+Status colors: `● active` (green), `◐ paused` (yellow), `blocked` (red),
+`complete` (dim).
 
 ## Dependencies
 
