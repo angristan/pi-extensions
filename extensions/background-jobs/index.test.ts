@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import registerBetterNativeBash from "../better-native-pi/bash";
 import registerBackgroundJobs, { BoundedOutput, CursorOutput } from "./index";
+import { sanitizeTerminalOutput } from "./output";
 import { isPtySupported } from "./terminal-process";
 
 interface Harness {
@@ -128,6 +129,32 @@ describe("bounded terminal output", () => {
 		expect(first.text).toBe("first\n");
 		expect(second.text).toBe("second\n");
 		expect(second.cursor).toBe(output.cursor);
+	});
+
+	test("strips unsafe terminal controls but keeps SGR styling", () => {
+		const raw = [
+			"before",
+			"\x1b[?2004h", // bracketed paste mode
+			"\x1b[20A\x1b[3G", // cursor movement
+			"\x1b[?25l", // hide cursor
+			"\x1b]8;;file:///tmp/example\x07link\x1b]8;;\x07", // OSC hyperlink wrapper
+			"\x07", // bell
+			"\x1b[31mred\x1b[0m",
+			"\rnext",
+		].join("");
+
+		expect(sanitizeTerminalOutput(raw)).toBe("beforelink\x1b[31mred\x1b[0m\nnext");
+	});
+
+	test("sanitizes returned cursor and bounded output", () => {
+		const cursor = new CursorOutput();
+		cursor.append("before\x1b[20A\x1b[?25lafter\n");
+		expect(cursor.read(0, 1024).text).toBe("beforeafter\n");
+		expect(cursor.latestLine()).toBe("beforeafter");
+
+		const bounded = new BoundedOutput();
+		bounded.append("start\x1b]0;title\x07\x1b[2Kend");
+		expect(bounded.text()).toBe("startend");
 	});
 });
 
