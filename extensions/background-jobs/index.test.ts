@@ -13,6 +13,8 @@ interface Harness {
 	handlers: Map<string, (...args: any[]) => any>;
 	statuses: Map<string, string | undefined>;
 	selectCalls: Array<{ title: string; options: string[] }>;
+	notifications: Array<{ message: string; level: string | undefined }>;
+	events: Array<{ name: string; payload: any }>;
 	ctx: any;
 }
 
@@ -32,13 +34,15 @@ function createHarness(options: { killGraceMs?: number; betterNative?: boolean }
 	const handlers = new Map<string, (...args: any[]) => any>();
 	const statuses = new Map<string, string | undefined>();
 	const selectCalls: Array<{ title: string; options: string[] }> = [];
+	const notifications: Array<{ message: string; level: string | undefined }> = [];
+	const events: Array<{ name: string; payload: any }> = [];
 	const ctx = {
 		cwd: process.cwd(),
 		mode: "tui",
 		hasUI: true,
 		ui: {
 			confirm: async () => true,
-			notify() {},
+			notify(message: string, level?: string) { notifications.push({ message, level }); },
 			setStatus(key: string, value: string | undefined) { statuses.set(key, value); },
 			select: async (title: string, options: string[]) => {
 				selectCalls.push({ title, options });
@@ -55,11 +59,11 @@ function createHarness(options: { killGraceMs?: number; betterNative?: boolean }
 		registerEntryRenderer() {},
 		on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
 		appendEntry() {},
-		events: { emit() {} },
+		events: { emit(name: string, payload: any) { events.push({ name, payload }); } },
 	};
 	registerBackgroundJobs(pi as any, options);
 	if (options.betterNative !== false) registerBetterNativeBash(pi as any);
-	return { tools, activeTools, commands, handlers, statuses, selectCalls, ctx };
+	return { tools, activeTools, commands, handlers, statuses, selectCalls, notifications, events, ctx };
 }
 
 async function startHarness(harness: Harness): Promise<void> {
@@ -189,6 +193,8 @@ describe("terminal tools", () => {
 		expect(result.details.status).toBe("completed");
 		expect(result.content[0].text).toContain("quick-output");
 		expect(harness.statuses.get("background-jobs")).toBeUndefined();
+		expect(harness.events).toHaveLength(0);
+		expect(harness.notifications).toHaveLength(0);
 	});
 
 	test("yields long commands and returns only unseen output", async () => {
@@ -211,6 +217,9 @@ describe("terminal tools", () => {
 		expect(finished.details.status).toBe("completed");
 		expect(finished.content[0].text).toContain("second");
 		expect(finished.content[0].text).not.toContain("\nfirst");
+		expect(harness.events).toHaveLength(1);
+		expect(harness.events[0]?.payload.title).toContain("background job completed");
+		expect(harness.notifications).toHaveLength(1);
 
 		const empty = await harness.tools.get("job_output").execute("output", {
 			job_id: started.details.id,

@@ -84,6 +84,7 @@ interface ManagedJob {
 	completion: Promise<void>;
 	resolveCompletion: () => void;
 	finalized: boolean;
+	backgrounded: boolean;
 	killReason?: "user" | "timeout" | "shutdown";
 	suppressPersistence: boolean;
 	sessionGeneration: number;
@@ -189,6 +190,7 @@ function restoredJob(data: JobSnapshot, generation: number): ManagedJob {
 		completion,
 		resolveCompletion,
 		finalized: true,
+		backgrounded: false,
 		suppressPersistence: true,
 		sessionGeneration: generation,
 		activityListeners: new Set(),
@@ -474,15 +476,17 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 
 		if (!job.suppressPersistence && job.sessionGeneration === sessionGeneration) {
 			pi.appendEntry(ENTRY_TYPE, snapshot(job, PERSISTED_OUTPUT_BYTES));
-			const project = job.cwd.split("/").filter(Boolean).pop() || "pi";
-			pi.events.emit(NOTIFICATION_EVENT, {
-				title: `${project}: background job ${job.status}`,
-				body: `${job.id}: ${compactCommand(job.command, 150)}`,
-			});
-			activeCtx?.ui.notify?.(`${job.id} ${job.status}${job.exitCode !== undefined ? ` (exit ${job.exitCode})` : ""}.`, job.status === "completed" ? "info" : "warning");
+			if (job.backgrounded) {
+				const project = job.cwd.split("/").filter(Boolean).pop() || "pi";
+				pi.events.emit(NOTIFICATION_EVENT, {
+					title: `${project}: background job ${job.status}`,
+					body: `${job.id}: ${compactCommand(job.command, 150)}`,
+				});
+				activeCtx?.ui.notify?.(`${job.id} ${job.status}${job.exitCode !== undefined ? ` (exit ${job.exitCode})` : ""}.`, job.status === "completed" ? "info" : "warning");
+			}
 		}
 	};
-	const startJob = (params: { command: string; description?: string; cwd?: string; timeoutSeconds?: number; tty?: boolean }, ctx: any): ManagedJob => {
+	const startJob = (params: { command: string; description?: string; cwd?: string; timeoutSeconds?: number; tty?: boolean; backgrounded?: boolean }, ctx: any): ManagedJob => {
 		if (activeJobs().length >= MAX_CONCURRENT_JOBS) throw new Error(`At most ${MAX_CONCURRENT_JOBS} background jobs may run at once`);
 		const command = params.command.trim();
 		if (!command) throw new Error("Background command must not be empty");
@@ -515,6 +519,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			completion,
 			resolveCompletion,
 			finalized: false,
+			backgrounded: Boolean(params.backgrounded),
 			suppressPersistence: false,
 			sessionGeneration,
 			activityListeners: new Set(),
@@ -691,8 +696,10 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		};
 		job.activityListeners.add(update);
 		try { await waitForYield(job, yieldMs, signal); } finally { job.activityListeners.delete(update); }
+		const yielded = isActive(job);
+		if (yielded) job.backgrounded = true;
 		const { read, details } = readDelta(job, initialCursor, true);
-		const prefix = isActive(job) ? `Terminal ${job.id} is still running. Use terminal_write or job_output with job_id=${job.id}.\n` : "";
+		const prefix = yielded ? `Terminal ${job.id} is still running. Use terminal_write or job_output with job_id=${job.id}.\n` : "";
 		return { content: [{ type: "text", text: `${prefix}${formatDeltaText(job, read)}` }], details };
 	};
 	const terminalService: BackgroundTerminalService = {
@@ -764,7 +771,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		promptGuidelines: ["Use background_bash only when immediate backgrounding is explicitly desired; otherwise prefer terminal_exec."],
 		executionMode: "sequential",
 		async execute(_id: string, params: any, _signal: AbortSignal, _update: any, ctx: any) {
-			const job = startJob(params, ctx);
+			const job = startJob({ ...params, backgrounded: true }, ctx);
 			return {
 				content: [{ type: "text", text: `Background terminal ${job.id} started in ${job.cwd}. Use terminal_write or job_output to inspect it.` }],
 				details: { managedTerminal: true, ...snapshot(job, PERSISTED_OUTPUT_BYTES) },
