@@ -349,7 +349,7 @@ export default function bash(pi: ExtensionAPI) {
 			// Returning empty here avoids a one-frame double-card: renderCall runs
 			// before renderResult in the same frame, so the state check alone can't
 			// close the gap.
-			if (terminalEnabled) return new Container();
+			if (getBackgroundTerminalService()) return new Container();
 			context.state.startedAt ??= Date.now();
 			return new CommandComponent(args, {}, {
 				partial: true,
