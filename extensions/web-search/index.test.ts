@@ -200,6 +200,24 @@ describe("web search renderer", () => {
 		}
 	});
 
+	test("open summaries format byte counts for humans", () => {
+		const toolResult = {
+			content: [{ type: "text", text: "stored content" }],
+			details: {
+				url: "https://example.com/article",
+				provider: "exa",
+				elapsedMs: 271,
+				truncated: false,
+				originalBytes: 15_309,
+				originalLines: 112,
+				content: "Readable content",
+			},
+		};
+		const lines = render(openUrl, toolResult, { url: "https://example.com/article" });
+		expect(lines.join("\n")).toContain("112 lines · 15.3 KB");
+		expect(lines.join("\n")).not.toContain("15309b");
+	});
+
 	test("expanded open content strips terminal controls", () => {
 		const toolResult = {
 			content: [{ type: "text", text: "stored content" }],

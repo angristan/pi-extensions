@@ -199,6 +199,20 @@ function routeLabel(provider: WebProvider | undefined, attempts: ProviderAttempt
 	return route ? `${route}/${searchEngine}` : searchEngine;
 }
 
+function formatBytes(bytes: number): string {
+	if (!Number.isFinite(bytes) || bytes < 0) return "0 B";
+	if (bytes < 1_000) return `${Math.round(bytes)} B`;
+	const units = ["KB", "MB", "GB", "TB"];
+	let value = bytes / 1_000;
+	let unitIndex = 0;
+	while (value >= 1_000 && unitIndex < units.length - 1) {
+		value /= 1_000;
+		unitIndex += 1;
+	}
+	const rounded = value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2);
+	return `${rounded.replace(/\.0+$/, "").replace(/(\.\d*[1-9])0+$/, "$1")} ${units[unitIndex]}`;
+}
+
 function searchSummary(details: SearchDisplayDetails, searchEngine: string | undefined, theme: Theme): string {
 	const count = details.resultCount === 0 ? "No results" : `${details.resultCount} ${details.resultCount === 1 ? "result" : "results"}`;
 	const elapsed = typeof details.elapsedMs === "number" ? formatElapsed(details.elapsedMs) : "done";
@@ -214,7 +228,7 @@ function searchSummary(details: SearchDisplayDetails, searchEngine: string | und
 
 function openSummary(details: OpenDetails | undefined): string {
 	const lines = typeof details?.originalLines === "number" ? `${details.originalLines} line${details.originalLines === 1 ? "" : "s"}` : undefined;
-	const bytes = typeof details?.originalBytes === "number" ? `${details.originalBytes}b` : undefined;
+	const bytes = typeof details?.originalBytes === "number" ? formatBytes(details.originalBytes) : undefined;
 	const note = details?.truncated ? "truncated" : undefined;
 	const route = routeLabel(details?.provider, details?.attempts);
 	const credits = details?.creditsUsed ? `${details.creditsUsed} credit${details.creditsUsed === 1 ? "" : "s"}` : undefined;
