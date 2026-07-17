@@ -213,6 +213,13 @@ class ManagedCommandComponent {
 	private timer?: ReturnType<typeof setInterval>;
 	private fallback: any;
 	private expanded: boolean;
+	// Width-keyed render cache, mirroring CommandComponent above. Without this,
+	// every render tick re-runs sanitizeTerminalOutput (regex), wrapTextWithAnsi
+	// (ICU grapheme segmentation), and visibleWidth across every line — for
+	// every background-job card in the transcript. A long session with many
+	// such cards then burns CPU in the render path even when idle.
+	private cachedWidth?: number;
+	private cachedLines?: string[];
 
 	constructor(
 		private readonly args: any,
@@ -230,6 +237,9 @@ class ManagedCommandComponent {
 
 	update(result: any, expanded: boolean): void {
 		this.fallback = result?.details ?? this.fallback;
+		// Expansion changes which output bytes are fetched and how rows are
+		// bounded, so the cache must not survive a toggle.
+		if (this.expanded !== expanded) this.invalidate();
 		this.expanded = expanded;
 		this.syncTimer();
 	}
@@ -258,6 +268,10 @@ class ManagedCommandComponent {
 		const status = details.status ?? "failed";
 		const active = status === "running" || status === "stopping";
 		if (!active) this.dispose();
+		// Terminal-state jobs have immutable output, so a width-keyed cache is
+		// always correct. Active jobs stream new output on the 500ms timer, so
+		// they must recompute to show fresh rows.
+		if (!active && this.cachedLines && this.cachedWidth === max) return this.cachedLines;
 		const elapsedMs = Math.max(0, (details.endedAt ?? Date.now()) - (details.startedAt ?? Date.now()));
 		const failed = status === "failed" || status === "killed" || status === "timed_out";
 		const summaryText = details.exitCode === undefined ? status : `Command exited with code ${details.exitCode}`;
@@ -275,14 +289,23 @@ class ManagedCommandComponent {
 		const text = view.output.replace(/\s+$/, "");
 		let output = text ? wrappedOutput(text, max) : [barLine(active ? "(waiting for output)" : "(no output)")];
 		if (!this.expanded) output = boundedRows(output);
-		if (!details.backgrounded) return [...block, ...command, ...output];
+		if (!details.backgrounded) {
+			const result = [...block, ...command, ...output];
+			if (!active) { this.cachedLines = result; this.cachedWidth = max; }
+			return result;
+		}
 		const color = terminalStatusColor(status);
 		const metadata = [details.id, status, details.tty ? "tty" : undefined, active ? "/ps" : undefined].filter(Boolean).join(" · ");
 		const footer = fitToolLine(`  └ ${this.theme.fg(color, terminalStatusSymbol(status))} ${this.theme.fg("dim", metadata)}`, max);
-		return [...block, ...command, ...output, footer];
+		const result = [...block, ...command, ...output, footer];
+		if (!active) { this.cachedLines = result; this.cachedWidth = max; }
+		return result;
 	}
 
-	invalidate(): void {}
+	invalidate(): void {
+		this.cachedWidth = undefined;
+		this.cachedLines = undefined;
+	}
 
 	dispose(): void {
 		if (this.timer) clearInterval(this.timer);
