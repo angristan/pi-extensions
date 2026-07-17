@@ -113,7 +113,7 @@ All sections except `# Goal` are optional.
   an easier task.
 - **`goal_complete`** — active only while a `/goal` is active; marks the goal
   complete and accepts an optional `summary`. The completion block also shows
-  the goal's lifetime stats (active time, continuations, criteria, and token
+  the goal's lifetime stats (active time, cycles, criteria, and token
   usage), since the overlay card hides once the goal is complete. This block is
   the sole completion feedback for tool-driven completion; manual `/goal
   complete` surfaces the same stats once via a notification.
@@ -142,7 +142,7 @@ blocker) over a dim `└ summary` branch. Example settled blocks:
   └ make all tests pass
 • Completed goal
   └ Reduce p95 checkout latency below 120ms
-  └ 2m 14s active · 4 continuations · 2 criteria · Usage ↓42K  ↑3K
+  └ 2m 14s active · 4 cycles · 2 criteria · Usage ↓42K  ↑3K
 • Goal blocked
   └ flaky CI on macOS · next: re-run after runner image bumped
 • Blocker recorded
@@ -159,13 +159,14 @@ compact overlay card so it does not crowd out live plan/edit widgets:
 Reduce p95 checkout latency below 120ms
 +4 lines · /goal-status
 
-2m 14s active · 4 continuations · 2 criteria
+2m 14s active · 4 cycles · 2 criteria
 Usage  ↓42K  ↑3K · cached 310K
 ╰──────────────────────────────────────────╯
 ```
 
 Run `/goal-status` for the full objective, timing, blocker, and validation
-view. Usage uses `↓` for input and `↑` for output; cache reads and writes are
+view. A cycle is one automatic pass through the goal loop, including the initial
+kickoff. Usage uses `↓` for input and `↑` for output; cache reads and writes are
 shown as `cached` and `written` when present.
 
 Status colors: `● active` (green), `● paused` (yellow), `● blocked` (red), and

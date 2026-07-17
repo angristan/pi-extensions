@@ -279,7 +279,7 @@ export interface GoalCompletionStats {
 
 /**
  * Snapshot the goal's lifetime stats at completion: accumulated active time,
- * continuation count, validation-criteria count, and token usage while the goal
+ * cycle count, validation-criteria count, and token usage while the goal
  * was active. Computed at execute time (the render slots are pure and cannot
  * reach the extension closure) and stashed in the tool result `details` so the
  * completion block can render the same numbers the overlay card was showing.
@@ -295,12 +295,12 @@ function completionStats(ctx: any, state: GoalState): GoalCompletionStats {
 
 /**
  * Compact one-line summary of goal completion stats, mirroring the overlay
- * card's active-time / continuation / token breakdown so the transcript record
+ * card's active-time / cycle / token breakdown so the transcript record
  * matches the card that just hid itself on completion.
  */
 function formatCompletionStats(stats: GoalCompletionStats, theme: any): string {
 	const parts: string[] = [`${formatDuration(stats.activeTimeMs)} active`];
-	parts.push(`${stats.continuations} ${pluralize(stats.continuations, "continuation")}`);
+	parts.push(`${stats.continuations} ${pluralize(stats.continuations, "cycle")}`);
 	parts.push(`${stats.validationCount} ${pluralize(stats.validationCount, "criterion", "criteria")}`);
 	const usageGroups = goalUsageGroups(stats.tokens);
 	if (usageGroups.length > 0) parts.push(`Usage ${usageGroups.join(" · ")}`);
@@ -313,7 +313,7 @@ function fullGoalLines(state: GoalDisplayState, theme: any): string[] {
 		"",
 		`${theme.fg("dim", "Active time")}  ${formatDuration(state.elapsedMs)}`,
 	];
-	lines.push(`${theme.fg("dim", "Continuations")}  ${state.continuations}`);
+	lines.push(`${theme.fg("dim", "Cycles")}  ${state.continuations}`);
 	if (state.status === "blocked" && state.blockedAudit) {
 		lines.push(`${theme.fg("dim", "Blocked")}  ${state.blockedAudit.blocker}`);
 		if (state.blockedAudit.nextInput) lines.push(`${theme.fg("dim", "Next")}     ${state.blockedAudit.nextInput}`);
@@ -358,7 +358,7 @@ export function renderGoalOverlayBody(
 
 	const meta = [
 		`${formatDuration(state.elapsedMs)} active`,
-		`${state.continuations} ${pluralize(state.continuations, "continuation")}`,
+		`${state.continuations} ${pluralize(state.continuations, "cycle")}`,
 		`${state.validation.length} ${pluralize(state.validation.length, "criterion", "criteria")}`,
 	];
 	if (rows.length < rowBudget - 1) rows.push("");
@@ -532,7 +532,7 @@ function renderGoalCompleteResult(
 			toolBranch(branch ? theme.fg("dim", branch) : ""),
 		];
 		// The overlay card hides on completion, so the completion block carries
-		// the final stats (active time, continuations, criteria, and usage) as the
+		// the final stats (active time, cycles, criteria, and usage) as the
 		// persistent transcript record of the goal's lifetime.
 		if (completion) lines.push(toolBranch(formatCompletionStats(completion, theme)));
 		return lines;

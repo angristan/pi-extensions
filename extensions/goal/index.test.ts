@@ -173,13 +173,13 @@ test("renders the goal overlay as a compact summary", () => {
 	expect(lines.every((line) => line.length <= 52)).toBe(true);
 	expect(lines[2]).toMatch(/^\+\d+ lines? · \/goal-status$/);
 	expect(lines[3]).toBe("");
-	expect(lines.slice(4).join("\n")).toContain("2m 5s active · 3 continuations · 2 criteria");
+	expect(lines.slice(4).join("\n")).toContain("2m 5s active · 3 cycles · 2 criteria");
 	expect(lines.slice(4).join("\n")).toContain("Usage  ↓42K  ↑3K · cached 62M · written 1.5M");
 	expect(lines.join("\n")).not.toContain("tokens spent");
 	expect(lines.join("\n")).not.toContain("R62M");
 });
 
-test("keeps continuation and criteria counters visible at zero", () => {
+test("keeps cycle and criteria counters visible at zero", () => {
 	const theme = { bold: (text: string) => text, fg: (_color: string, text: string) => text };
 	const lines = renderGoalOverlayBody({
 		objective: "Ship the feature",
@@ -192,7 +192,7 @@ test("keeps continuation and criteria counters visible at zero", () => {
 		elapsedMs: 1_000,
 	}, 52, 40, theme);
 
-	expect(lines.join("\n")).toContain("1s active · 0 continuations · 0 criteria");
+	expect(lines.join("\n")).toContain("1s active · 0 cycles · 0 criteria");
 });
 
 test("renders a semantic goal status indicator", async () => {
@@ -201,6 +201,16 @@ test("renders a semantic goal status indicator", async () => {
 	const card = registeredOverlayCards.at(-1)!;
 	const title = card.title(h.ctx.ui.theme);
 	expect(title).toContain("Goal ● active");
+});
+
+test("labels the initial goal-loop kickoff as cycle one", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("ship the feature", h.ctx);
+	await h.commands["goal-status"].handler("", h.ctx);
+
+	const status = h.notifications.at(-1)!.message;
+	expect(status).toContain("Cycles  1");
+	expect(status).not.toContain("Continuations");
 });
 
 test("wraps goal data as escaped untrusted context", () => {
@@ -346,7 +356,7 @@ test("goal_complete renders one compact completed block and hides stale calls", 
 	// The completion block surfaces lifetime stats since the overlay card hid.
 	expect(lines.length).toBeGreaterThanOrEqual(3);
 	expect(lines[2]).toContain("└");
-	expect(lines[2]).toMatch(/active.*continuation.*0 criteria/i);
+	expect(lines[2]).toMatch(/active.*cycle.*0 criteria/i);
 
 	// A stale call against no active goal renders nothing.
 	const stale = { ...result, details: { ok: false, ignored: true, reason: "no-goal" } };
@@ -362,7 +372,7 @@ test("/goal complete surfaces lifetime stats in the notification", async () => {
 	expect(latestGoalState(h).status).toBe("complete");
 	const note = h.notifications.at(-1)!;
 	expect(note.message).toContain("Goal complete:");
-	expect(note.message).toMatch(/active.*continuation/i);
+	expect(note.message).toMatch(/active.*cycle/i);
 });
 
 test("goal_block renders recorded, blocked, and duplicate outcomes", async () => {
