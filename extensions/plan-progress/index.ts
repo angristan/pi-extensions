@@ -8,6 +8,7 @@ const LEGACY_OVERLAY_HOST_KEY = "plan-overlay-host";
 const LEGACY_WIDGET_KEY = "plan";
 const OVERLAY_WIDTH = 58;
 const MAX_EXPLANATION_ROWS = 3;
+const ANSI_RESET = "\x1b[0m";
 
 import { registerOverlayCard } from "../overlay-stack/index.js";
 
@@ -226,11 +227,18 @@ function renderedPlanLines(state: PlanState, theme: any, width: number): string[
 	return lines;
 }
 
+function sealAnsiLine(line: string, width: number): string {
+	if (!line.includes("\x1b") || visibleWidth(line) >= width) return line;
+	// Pi's overlay compositor drops trailing ANSI-only resets when extracting a
+	// short base line. A neutral cell forces the reset to land before its padding.
+	return `${line}${ANSI_RESET} `;
+}
+
 class PlanResult implements Component {
 	constructor(private readonly state: PlanState, private readonly theme: any) {}
 
 	render(width: number): string[] {
-		return renderedPlanLines(this.state, this.theme, width);
+		return renderedPlanLines(this.state, this.theme, width).map((line) => sealAnsiLine(line, width));
 	}
 
 	invalidate(): void {}
