@@ -367,6 +367,29 @@ describe("terminal tools", () => {
 		expect(result.content[0].text).toContain("bytes omitted");
 	});
 
+	test("max_output_tokens raises the returned output budget", async () => {
+		const harness = createHarness();
+		await startHarness(harness);
+		// Default budget (~24KB) truncates 80KB of output. Requesting a larger
+		// max_output_tokens budget returns more of it (capped at 1 MiB).
+		const small = await harness.tools.get("bash").execute("exec", {
+			command: "yes y | head -c 80000",
+			reasoning: "default budget",
+		}, undefined, undefined, harness.ctx);
+		const large = await harness.tools.get("bash").execute("exec", {
+			command: "yes y | head -c 80000",
+			reasoning: "raised budget",
+			max_output_tokens: 25_000, // ~100KB budget
+		}, undefined, undefined, harness.ctx);
+		const smallBytes = Buffer.byteLength(small.content[0].text);
+		const largeBytes = Buffer.byteLength(large.content[0].text);
+		expect(smallBytes).toBeLessThan(30 * 1024);
+		expect(small.content[0].text).toContain("bytes omitted");
+		expect(largeBytes).toBeGreaterThan(smallBytes);
+		// Raised budget should fit all 80KB (no omission marker).
+		expect(large.content[0].text).not.toContain("bytes omitted");
+	});
+
 	test("getView coerces a stale running fallback to a terminal status", async () => {
 		// Regression: session_start intentionally skips restoring jobs whose
 		// persisted status is still `running`/`stopping` (their process died with

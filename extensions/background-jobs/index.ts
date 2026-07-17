@@ -27,6 +27,17 @@ const MAX_RETAINED_JOBS = 50;
 const TOOL_OUTPUT_BYTES = 24 * 1024;
 const PARTIAL_OUTPUT_BYTES = 4 * 1024;
 const PERSISTED_OUTPUT_BYTES = 8 * 1024;
+// Model-controllable output budget, mirroring codex's `max_output_tokens`.
+// Default 10000 tokens; pi doesn't tokenize, so we map tokens -> bytes at
+// ~4 bytes/token (matching codex's UNIFIED_EXEC_OUTPUT_MAX_BYTES / 4) and cap
+// the byte budget at MAX_OUTPUT_BYTES to bound memory.
+const DEFAULT_OUTPUT_TOKENS = 10_000;
+const MAX_OUTPUT_BYTES = 1_024 * 1_024; // 1 MiB hard cap
+const BYTES_PER_TOKEN = 4;
+function outputBytesForTokens(tokens?: number): number {
+	if (!Number.isInteger(tokens) || tokens < 1) return TOOL_OUTPUT_BYTES;
+	return Math.min(tokens * BYTES_PER_TOKEN, MAX_OUTPUT_BYTES);
+}
 const KILL_GRACE_MS = 5_000;
 const MAX_TIMEOUT_SECONDS = 24 * 60 * 60;
 // A 10s hard kill is applied when the model omits `timeout`, so a stuck
@@ -584,8 +595,8 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			else signal?.addEventListener("abort", finish, { once: true });
 		});
 	};
-	const readDelta = (job: ManagedJob, cursor: number, advanceAgentCursor: boolean): { read: CursorRead; details: JobToolDetails } => {
-		const read = job.output.read(cursor, TOOL_OUTPUT_BYTES);
+	const readDelta = (job: ManagedJob, cursor: number, advanceAgentCursor: boolean, outputBytes: number = TOOL_OUTPUT_BYTES): { read: CursorRead; details: JobToolDetails } => {
+		const read = job.output.read(cursor, outputBytes);
 		if (advanceAgentCursor) job.agentCursor = read.cursor;
 		return {
 			read,
@@ -656,7 +667,8 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			job.backgrounded = true;
 			updateStatus();
 		}
-		const { read, details } = readDelta(job, initialCursor, true);
+		const outputBytes = outputBytesForTokens(params.max_output_tokens);
+		const { read, details } = readDelta(job, initialCursor, true, outputBytes);
 		const prefix = yielded ? `Terminal ${job.id} is still running. Use terminal_write or job_output with job_id=${job.id}.\n` : "";
 		return { content: [{ type: "text", text: `${prefix}${formatDeltaText(job, read)}` }], details };
 	};
@@ -708,6 +720,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 				cursor: { type: "integer", minimum: 0, description: "Optional output cursor; defaults to this tool's last read position" },
 				waitMs: { type: "integer", minimum: 0, maximum: MAX_POLL_MS, description: `Wait this many milliseconds for new output. Also caps wait:true. Defaults to 0 (instant) for read polls, ${DEFAULT_WAIT_COMPLETION_MS} ms for wait:true.` },
 				wait: { type: "boolean", description: "Wait for the terminal to finish, bounded by waitMs (no kill; returns 'still running' if not done).", default: false },
+				max_output_tokens: { type: "integer", minimum: 1, description: `Output byte budget, expressed in tokens (~${BYTES_PER_TOKEN} bytes/token). Defaults to ${DEFAULT_OUTPUT_TOKENS}; larger requests cap at ${MAX_OUTPUT_BYTES} bytes.` },
 			},
 			required: ["reasoning", "job_id"],
 		} as any,
@@ -723,7 +736,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			if (!Number.isInteger(waitMs) || waitMs < 0 || waitMs > MAX_POLL_MS) throw new Error(`waitMs must be an integer between 0 and ${MAX_POLL_MS}`);
 			if (params.wait) await waitForCompletion(job, signal, params.waitMs ?? DEFAULT_WAIT_COMPLETION_MS);
 			else await waitForActivity(job, cursor, waitMs, signal);
-			const { read, details } = readDelta(job, cursor, !explicitCursor);
+			const { read, details } = readDelta(job, cursor, !explicitCursor, outputBytesForTokens(params.max_output_tokens));
 			return { content: [{ type: "text", text: formatDeltaText(job, read) }], details };
 		},
 		renderCall: () => new Container(),
@@ -744,6 +757,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 				chars: { type: "string", description: "Characters to write; empty polls without writing", default: "" },
 				"yield-time_ms": { type: "integer", minimum: 0, maximum: MAX_POLL_MS, description: `Wait for output after writing (default ${DEFAULT_POLL_MS} ms)` },
 				close_stdin: { type: "boolean", description: "Close stdin after writing", default: false },
+				max_output_tokens: { type: "integer", minimum: 1, description: `Output byte budget, expressed in tokens (~${BYTES_PER_TOKEN} bytes/token). Defaults to ${DEFAULT_OUTPUT_TOKENS}; larger requests cap at ${MAX_OUTPUT_BYTES} bytes.` },
 			},
 			required: ["reasoning", "job_id"],
 		} as any,
@@ -758,7 +772,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			const cursor = job.agentCursor;
 			if (chars || params.close_stdin) await writeInput(job, chars, Boolean(params.close_stdin));
 			await waitForActivity(job, cursor, yieldMs, signal);
-			const { read, details } = readDelta(job, cursor, true);
+			const { read, details } = readDelta(job, cursor, true, outputBytesForTokens(params.max_output_tokens));
 			return { content: [{ type: "text", text: formatDeltaText(job, read) }], details };
 		},
 		renderCall: () => new Container(),
