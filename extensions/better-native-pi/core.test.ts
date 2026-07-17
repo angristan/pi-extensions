@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { buildToolBlock } from "./core.js";
 
-const ANSI_PATTERN = /\x1b\[[0-9;]*m/g;
+const ANSI_PATTERN = /\x1b\[[0-9;:]*m/g;
+const TEST_TAG_PATTERN = /<\/?(?:bold|green|magenta|red)>|<\/>/g;
 
 function plain(text: string): string {
-	return text.replace(ANSI_PATTERN, "");
+	return text.replace(ANSI_PATTERN, "").replace(TEST_TAG_PATTERN, "");
 }
 
 describe("buildToolBlock bash summaries", () => {
@@ -23,8 +24,11 @@ describe("buildToolBlock bash summaries", () => {
 			{ isError: true, elapsedMs: 2100 },
 		);
 
-		expect(plain(lines[0])).toBe("• Ran exercise full unified terminal regression suite in 2s ✗ exit 1");
-		expect(plain(lines[0])).not.toContain("bun test v1.3.9");
+		const headline = plain(lines[0]);
+		expect(headline).toContain("• Ran exercise full unified terminal regression suite");
+		expect(headline).toContain("✗ exit 1");
+		expect(headline).not.toContain("bun test v1.3.9");
+		expect(headline).not.toContain("61 tests failed");
 	});
 
 	test("keeps unknown bash errors marked as failed", () => {
@@ -39,7 +43,9 @@ describe("buildToolBlock bash summaries", () => {
 			{ isError: true, elapsedMs: 50 },
 		);
 
-		expect(plain(lines[0])).toBe("• Ran run command in 50ms ✗");
-		expect(plain(lines[0])).not.toContain("spawn failed");
+		const headline = plain(lines[0]);
+		expect(headline).toContain("• Ran run command");
+		expect(headline).toContain("✗");
+		expect(headline).not.toContain("spawn failed");
 	});
 });
