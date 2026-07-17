@@ -1,3 +1,9 @@
+/**
+ * Dependency graph:
+ * Direct: `./render.js`, `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`,
+ *   `node:path`.
+ * Used by: `extensions/better-native-pi/file-tools.ts`, `extensions/better-native-pi/index.ts`.
+ */
 import { basename, dirname } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Container, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";

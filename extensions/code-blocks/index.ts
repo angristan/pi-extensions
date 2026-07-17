@@ -1,3 +1,8 @@
+/**
+ * Dependency graph:
+ * Direct: `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`.
+ * Used by: `extensions/better-native-pi/bash.ts`, `Pi extension loader`.
+ */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	Markdown,

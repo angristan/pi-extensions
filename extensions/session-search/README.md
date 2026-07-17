@@ -1,5 +1,11 @@
 # session-search
 
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.
+
 Full-text search across all your saved sessions, with ranked results.
 
 `/session-search <query>` streams through every session JSONL on disk

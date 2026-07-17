@@ -1,5 +1,11 @@
 # openai-codex-fast
 
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.
+
 Adds a persistent Fast mode toggle for supported models using the `openai-codex`
 provider. Fast mode requests OpenAI's priority service tier without changing the
 selected model or reasoning level.

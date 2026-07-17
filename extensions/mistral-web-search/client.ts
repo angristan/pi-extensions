@@ -1,3 +1,9 @@
+/**
+ * Dependency graph:
+ * Direct: `node:buffer`, `node:fs`, `node:os`, `node:path`.
+ * Used by: `extensions/mistral-web-search/client.test.ts`,
+ *   `extensions/mistral-web-search/index.test.ts`, `extensions/mistral-web-search/index.ts`.
+ */
 import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";

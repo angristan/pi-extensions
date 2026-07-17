@@ -1,5 +1,11 @@
 # turn-separator
 
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.
+
 A dim `─` rule between assistant messages that follow tool work, so each step
 of a multi-step turn is visually separated in the transcript.
 

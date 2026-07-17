@@ -1,4 +1,10 @@
 /**
+ * Dependency graph:
+ * Direct: `./core.js`, `./render.js`, `@earendil-works/pi-coding-agent`,
+ *   `@earendil-works/pi-tui`.
+ * Used by: `extensions/better-native-pi/core.ts`.
+ */
+/**
  * diff — theme-aware palettes, syntax-highlighted line-numbered diff rendering,
  * and the width-aware WidthAwareLines component that truncates/wraps any rendered
  * lines to the live viewport width (used by every restyler, not just diffs).

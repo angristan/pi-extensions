@@ -1,5 +1,11 @@
 # footer
 
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.
+
 A status line below the transcript showing session, model, context usage, and
 cumulative cost.
 

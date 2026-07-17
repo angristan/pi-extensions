@@ -1,3 +1,9 @@
+/**
+ * Dependency graph:
+ * Direct: `../overlay-stack/index.js`, `@earendil-works/pi-coding-agent`,
+ *   `@earendil-works/pi-tui`.
+ * Used by: `extensions/plan-progress/index.test.ts`, `Pi extension loader`.
+ */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 

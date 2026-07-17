@@ -1,3 +1,9 @@
+/**
+ * Dependency graph:
+ * Direct: `@earendil-works/pi-coding-agent`, `node:child_process`, `node:fs`,
+ *   `node:fs/promises`, `node:readline`.
+ * Used by: `Pi extension loader`.
+ */
 import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { unlink } from "node:fs/promises";

@@ -1,5 +1,12 @@
 # background-jobs
 
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** [`better-native-pi`](../better-native-pi/).
+- **Used by extensions:** [`better-native-pi`](../better-native-pi/).
+- **System/service:** `expect` on macOS or util-linux `script` on Linux for PTY sessions.
+
 Run quick, long-lived, and interactive shell commands through managed terminal
 sessions without blocking the agent or losing track of child processes.
 

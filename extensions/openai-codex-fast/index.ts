@@ -1,3 +1,9 @@
+/**
+ * Dependency graph:
+ * Direct: `@earendil-works/pi-coding-agent`, `node:fs`, `node:fs/promises`, `node:os`,
+ *   `node:path`.
+ * Used by: `Pi extension loader`.
+ */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";

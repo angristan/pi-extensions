@@ -1,4 +1,11 @@
 /**
+ * Dependency graph:
+ * Direct: `node:os`.
+ * Used by: `extensions/better-native-pi/core.ts`, `extensions/better-native-pi/diff.ts`,
+ *   `extensions/better-native-pi/exploration.ts`, `extensions/better-native-pi/shell.ts`,
+ *   `extensions/mistral-web-search/index.ts`.
+ */
+/**
  * Shared palette + path helpers for better-native-pi. Raw ANSI is intentional
  * so the look is identical across terminal themes.
  */

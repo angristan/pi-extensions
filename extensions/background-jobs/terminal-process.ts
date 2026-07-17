@@ -1,3 +1,8 @@
+/**
+ * Dependency graph:
+ * Direct: `@earendil-works/pi-coding-agent`, `node:child_process`, `node:fs`.
+ * Used by: `extensions/background-jobs/index.test.ts`, `extensions/background-jobs/index.ts`.
+ */
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { getShellConfig } from "@earendil-works/pi-coding-agent";

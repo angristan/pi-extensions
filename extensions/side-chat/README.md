@@ -1,5 +1,11 @@
 # side-chat
 
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.
+
 An ephemeral, read-only side question about the current conversation, without
 changing the main transcript.
 

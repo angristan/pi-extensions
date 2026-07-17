@@ -1,5 +1,11 @@
 # questions
 
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.
+
 A tool the agent can call to ask you structured questions and preserve the
 answers in the transcript.
 

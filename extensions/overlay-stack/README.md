@@ -1,5 +1,11 @@
 # overlay-stack
 
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** [`accent-color`](../accent-color/).
+- **Used by extensions:** [`edit-summary`](../edit-summary/), [`plan-progress`](../plan-progress/).
+
 Internal UI infrastructure for composing independent top-right overlay cards in
 a single non-capturing Pi overlay.
 

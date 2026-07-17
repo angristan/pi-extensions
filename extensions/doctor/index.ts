@@ -1,3 +1,9 @@
+/**
+ * Dependency graph:
+ * Direct: `../accent-color/index.js`, `@earendil-works/pi-coding-agent`,
+ *   `@earendil-works/pi-tui`, `node:fs`, `node:fs/promises`, `node:os`, `node:path`.
+ * Used by: `Pi extension loader`.
+ */
 import { createReadStream } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";

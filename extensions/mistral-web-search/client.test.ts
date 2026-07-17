@@ -1,3 +1,8 @@
+/**
+ * Dependency graph:
+ * Direct: `./client`, `bun:test`.
+ * Used by: `Bun test runner`.
+ */
 import { describe, expect, test } from "bun:test";
 import {
 	createSearchToolResult,

@@ -1,4 +1,10 @@
 /**
+ * Dependency graph:
+ * Direct: `./core.js`, `./exploration.js`, `@earendil-works/pi-coding-agent`,
+ *   `node:fs/promises`, `node:path`.
+ * Used by: `extensions/better-native-pi/index.ts`.
+ */
+/**
  * file-tools — restyles pi's 6 built-in file tools (read/write/edit/grep/find/ls)
  * into compact 2-line transcript blocks. Re-registers each under its native name
  * with `renderShell: "self"`, injects a required `reasoning` param, and delegates
