@@ -6,23 +6,18 @@ tool the agent can call to maintain it.
 The agent maintains the plan via the `update_plan` tool; this extension owns the
 tool logic, validation, persistence, prompt guard, and plan-section rendering.
 The package's generic `overlay-stack` only supplies consistent card framing and
-places that section on screen. When a goal
-(from the `goal` extension) is active, it's shown above the plan with its token
-budget.
+places that section on screen. If the `goal` extension is active, its separate
+card can appear above the plan.
 
 ```
-╭ Goal · Plan 1/3 ─────────────────────────╮
-● Goal Refactor the auth middleware
-  budget 18% · 18,000/100,000 tokens
-
-  └ ✓ Map the call sites
-  └ ● Patch the middleware
-  └ ○ Add tests
-╰──────────────────────────────────────────╯
+╭ Plan 1/3 ─────────────────────────────────╮
+✓ Map the call sites
+● Patch the middleware
+○ Add tests
+╰───────────────────────────────────────────╯
 ```
 
 - `✓` completed (strikethrough), `●` in progress (accent), `○` pending
-- Goal marker is `●` (active) or `◐` (paused)
 
 ## Commands
 
