@@ -15,10 +15,10 @@ Requests use sequential fallbacks. Providers are never raced, avoiding duplicate
 requests and unnecessary Firecrawl credits.
 
 ```text
-web_search   Exa → Mistral (when configured) → Firecrawl
-news_search  Exa → Firecrawl
-open_url     Exa → Firecrawl → Mistral (when configured)
-PDFs         Exa → Mistral (Firecrawl disabled by default)
+web_search   Exa → Mistral (when configured) → Firecrawl (when configured)
+news_search  Exa → Firecrawl (when configured)
+open_url     Exa → Firecrawl (when configured) → Mistral (when configured)
+PDFs         Exa → Mistral (when configured; Firecrawl disabled by default)
 ```
 
 Mistral news search is disabled by default because its topical matching is not
@@ -31,14 +31,13 @@ paused for one minute in the current process.
 
 ## Access
 
-Exa and Firecrawl support anonymous access. Optional keys raise their service
-limits:
-
-- `EXA_API_KEY`
-- `FIRECRAWL_API_KEY`
+Exa supports anonymous access, with `EXA_API_KEY` available for higher service
+limits. Firecrawl is credential-gated to avoid flaky shared-IP keyless limits;
+set `FIRECRAWL_API_KEY` before it appears in routes.
 
 Mistral continues to read its API key and base URL from the `mistral` provider in
-`models.json`, with `MISTRAL_API_KEY` as the environment fallback.
+`models.json`, with `MISTRAL_API_KEY` as the environment fallback. Without a
+resolvable key, Mistral is omitted from every route.
 
 Optional routing overrides:
 
@@ -52,9 +51,8 @@ Firecrawl charges per processed page. A long PDF can consume hundreds of
 credits, so Firecrawl PDF opening is opt-in even when Firecrawl is the configured
 primary opener.
 
-Use `/web-status` to inspect effective routes, anonymous/keyed availability, and
-providers temporarily paused after rate limiting. Credential values are never
-shown.
+Use `/web-status` to inspect effective routes, keyed availability, and providers
+temporarily paused after rate limiting. Credential values are never shown.
 
 ## Results
 
@@ -78,4 +76,4 @@ details. Fallbacks render explicitly:
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
 - **Depends on extensions:** [`better-native-pi`](../better-native-pi/).
-- **System/services:** Exa and Firecrawl; Mistral is optional.
+- **System/services:** Exa; Firecrawl and Mistral are optional keyed providers.

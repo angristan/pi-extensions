@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { WebProviderError } from "./provider-error";
 import {
@@ -5,8 +8,15 @@ import {
 	openProviderOrder,
 	resetRouterStateForTests,
 	routeSearch,
+	webProviderOrder,
+	webStatus,
 } from "./router";
 import type { WebProvider, WebSearchResult } from "./types";
+
+function restoreEnv(name: string, value: string | undefined): void {
+	if (value === undefined) delete process.env[name];
+	else process.env[name] = value;
+}
 
 function result(provider: WebProvider, count = 1): WebSearchResult {
 	return {
@@ -80,8 +90,50 @@ describe("provider router", () => {
 		expect(routed.attempts?.[0]).toMatchObject({ provider: "exa", status: "skipped" });
 	});
 
+	test("omits Firecrawl and Mistral when credentials are missing", () => {
+		const agentDir = mkdtempSync(join(tmpdir(), "pi-web-search-test-"));
+		const previous = {
+			agentDir: process.env.PI_CODING_AGENT_DIR,
+			firecrawlKey: process.env.FIRECRAWL_API_KEY,
+			mistralKey: process.env.MISTRAL_API_KEY,
+			searchProvider: process.env.PI_WEB_SEARCH_PROVIDER,
+			newsProvider: process.env.PI_WEB_NEWS_PROVIDER,
+			openProvider: process.env.PI_WEB_OPEN_PROVIDER,
+			mistralNews: process.env.PI_WEB_SEARCH_ENABLE_MISTRAL_NEWS,
+			pdf: process.env.PI_WEB_ALLOW_FIRECRAWL_PDF,
+		};
+		try {
+			process.env.PI_CODING_AGENT_DIR = agentDir;
+			delete process.env.FIRECRAWL_API_KEY;
+			delete process.env.MISTRAL_API_KEY;
+			delete process.env.PI_WEB_SEARCH_PROVIDER;
+			delete process.env.PI_WEB_NEWS_PROVIDER;
+			delete process.env.PI_WEB_OPEN_PROVIDER;
+			delete process.env.PI_WEB_SEARCH_ENABLE_MISTRAL_NEWS;
+			delete process.env.PI_WEB_ALLOW_FIRECRAWL_PDF;
+
+			expect(webProviderOrder()).toEqual(["exa"]);
+			expect(newsProviderOrder()).toEqual(["exa"]);
+			expect(openProviderOrder("https://example.com/docs")).toEqual(["exa"]);
+			expect(openProviderOrder("mistral-news-article-id")).toEqual([]);
+			expect(webStatus().providers.firecrawl).toEqual({ available: false, keyed: false });
+			expect(webStatus().providers.mistral).toEqual({ available: false, keyed: false });
+		} finally {
+			restoreEnv("PI_CODING_AGENT_DIR", previous.agentDir);
+			restoreEnv("FIRECRAWL_API_KEY", previous.firecrawlKey);
+			restoreEnv("MISTRAL_API_KEY", previous.mistralKey);
+			restoreEnv("PI_WEB_SEARCH_PROVIDER", previous.searchProvider);
+			restoreEnv("PI_WEB_NEWS_PROVIDER", previous.newsProvider);
+			restoreEnv("PI_WEB_OPEN_PROVIDER", previous.openProvider);
+			restoreEnv("PI_WEB_SEARCH_ENABLE_MISTRAL_NEWS", previous.mistralNews);
+			restoreEnv("PI_WEB_ALLOW_FIRECRAWL_PDF", previous.pdf);
+			rmSync(agentDir, { recursive: true, force: true });
+		}
+	});
+
 	test("keeps Mistral news opt-in and Firecrawl PDF fallback opt-in", () => {
 		const previous = {
+			firecrawlKey: process.env.FIRECRAWL_API_KEY,
 			mistralKey: process.env.MISTRAL_API_KEY,
 			news: process.env.PI_WEB_SEARCH_ENABLE_MISTRAL_NEWS,
 			newsProvider: process.env.PI_WEB_NEWS_PROVIDER,
@@ -89,7 +141,8 @@ describe("provider router", () => {
 			open: process.env.PI_WEB_OPEN_PROVIDER,
 		};
 		try {
-			process.env.MISTRAL_API_KEY = "test";
+			process.env.FIRECRAWL_API_KEY = "test-firecrawl";
+			process.env.MISTRAL_API_KEY = "test-mistral";
 			delete process.env.PI_WEB_SEARCH_ENABLE_MISTRAL_NEWS;
 			delete process.env.PI_WEB_NEWS_PROVIDER;
 			delete process.env.PI_WEB_ALLOW_FIRECRAWL_PDF;
@@ -99,11 +152,12 @@ describe("provider router", () => {
 			process.env.PI_WEB_ALLOW_FIRECRAWL_PDF = "1";
 			expect(openProviderOrder("https://example.com/manual.pdf")[0]).toBe("firecrawl");
 		} finally {
-			if (previous.mistralKey === undefined) delete process.env.MISTRAL_API_KEY; else process.env.MISTRAL_API_KEY = previous.mistralKey;
-			if (previous.news === undefined) delete process.env.PI_WEB_SEARCH_ENABLE_MISTRAL_NEWS; else process.env.PI_WEB_SEARCH_ENABLE_MISTRAL_NEWS = previous.news;
-			if (previous.newsProvider === undefined) delete process.env.PI_WEB_NEWS_PROVIDER; else process.env.PI_WEB_NEWS_PROVIDER = previous.newsProvider;
-			if (previous.pdf === undefined) delete process.env.PI_WEB_ALLOW_FIRECRAWL_PDF; else process.env.PI_WEB_ALLOW_FIRECRAWL_PDF = previous.pdf;
-			if (previous.open === undefined) delete process.env.PI_WEB_OPEN_PROVIDER; else process.env.PI_WEB_OPEN_PROVIDER = previous.open;
+			restoreEnv("FIRECRAWL_API_KEY", previous.firecrawlKey);
+			restoreEnv("MISTRAL_API_KEY", previous.mistralKey);
+			restoreEnv("PI_WEB_SEARCH_ENABLE_MISTRAL_NEWS", previous.news);
+			restoreEnv("PI_WEB_NEWS_PROVIDER", previous.newsProvider);
+			restoreEnv("PI_WEB_ALLOW_FIRECRAWL_PDF", previous.pdf);
+			restoreEnv("PI_WEB_OPEN_PROVIDER", previous.open);
 		}
 	});
 });
