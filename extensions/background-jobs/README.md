@@ -77,6 +77,7 @@ duplicate transcript entry.
 - Full UI output retains bounded head and tail sections for diagnostics.
 - Session shutdown waits for SIGTERM/SIGKILL escalation.
 - PTY wrapper and child process groups are both terminated to prevent orphans.
+- Completion notifications fire only after a command yields or starts explicitly in the background.
 
 ## Dependencies
 
