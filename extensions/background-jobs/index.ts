@@ -334,6 +334,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	const killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
 	let activeCtx: any;
 	let sessionGeneration = 0;
+	let agentRunning = false;
 
 	const activeJobs = () => [...jobs.values()].filter(isActive);
 	const updateStatus = () => {
@@ -419,7 +420,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 
 		if (!job.suppressPersistence && job.sessionGeneration === sessionGeneration) {
 			pi.appendEntry(ENTRY_TYPE, snapshot(job, PERSISTED_OUTPUT_BYTES));
-			if (job.backgrounded) {
+			if (job.backgrounded && !agentRunning) {
 				const project = job.cwd.split("/").filter(Boolean).pop() || "pi";
 				pi.events.emit(NOTIFICATION_EVENT, {
 					title: `${project}: background job ${job.status}`,
@@ -808,6 +809,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 
 	pi.on("session_start", (_event, ctx) => {
 		sessionGeneration += 1;
+		agentRunning = false;
 		activeCtx = ctx;
 		jobs.clear();
 		for (const entry of ctx.sessionManager.getEntries()) {
@@ -820,8 +822,12 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		updateStatus();
 	});
 
+	pi.on("agent_start", () => { agentRunning = true; });
+	pi.on("agent_settled", () => { agentRunning = false; });
+
 	pi.on("session_shutdown", async () => {
 		sessionGeneration += 1;
+		agentRunning = false;
 		const stopping = activeJobs();
 		for (const job of stopping) {
 			job.suppressPersistence = true;

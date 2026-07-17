@@ -185,9 +185,10 @@ describe("terminal tools", () => {
 		expect(harness.notifications).toHaveLength(0);
 	});
 
-	test("yields long commands and returns only unseen output", async () => {
+	test("yields long commands without notifying before the turn settles", async () => {
 		const harness = createHarness();
 		await startHarness(harness);
+		await harness.handlers.get("agent_start")?.({});
 		const started = await harness.tools.get("bash").execute("exec", {
 			command: "printf 'first\\n'; sleep 0.4; printf 'second\\n'",
 			reasoning: "test unified yielding",
@@ -205,14 +206,36 @@ describe("terminal tools", () => {
 		expect(finished.details.status).toBe("completed");
 		expect(finished.content[0].text).toContain("second");
 		expect(finished.content[0].text).not.toContain("\nfirst");
-		expect(harness.events).toHaveLength(1);
-		expect(harness.events[0]?.payload.title).toContain("background job completed");
-		expect(harness.notifications).toHaveLength(1);
+		expect(harness.events).toHaveLength(0);
+		expect(harness.notifications).toHaveLength(0);
 
 		const empty = await harness.tools.get("job_output").execute("output", {
 			job_id: started.details.id,
 		});
 		expect(empty.content[0].text).toContain("no new output");
+	});
+
+	test("notifies when a yielded command finishes after the turn settles", async () => {
+		const harness = createHarness();
+		await startHarness(harness);
+		await harness.handlers.get("agent_start")?.({});
+		const started = await harness.tools.get("bash").execute("exec", {
+			command: "sleep 0.4; printf 'late completion\\n'",
+			reasoning: "test post-turn notification",
+			"yield-time_ms": 250,
+		}, undefined, undefined, harness.ctx);
+		expect(started.details.status).toBe("running");
+
+		await harness.handlers.get("agent_settled")?.({});
+		const finished = await harness.tools.get("job_output").execute("wait", {
+			reasoning: "wait for post-turn completion",
+			job_id: started.details.id,
+			wait: true,
+		});
+		expect(finished.details.status).toBe("completed");
+		expect(harness.events).toHaveLength(1);
+		expect(harness.events[0]?.payload.title).toContain("background job completed");
+		expect(harness.notifications).toHaveLength(1);
 	});
 
 	test("writes stdin to a running non-PTY command", async () => {
