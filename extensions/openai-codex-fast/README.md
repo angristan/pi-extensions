@@ -1,11 +1,5 @@
 # openai-codex-fast
 
-## Dependencies
-
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** None.
-- **Used by extensions:** None.
-
 Adds a persistent Fast mode toggle for supported models using the `openai-codex`
 provider. Fast mode requests OpenAI's priority service tier without changing the
 selected model or reasoning level.
@@ -34,3 +28,9 @@ The setting persists globally in `~/.pi/agent/openai-codex-fast.json`.
 - `openai-codex/gpt-5.6-luna`
 
 Other providers and models are left unchanged.
+
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.

@@ -1,11 +1,5 @@
 # better-native-pi
 
-## Dependencies
-
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** [`background-jobs`](../background-jobs/), [`code-blocks`](../code-blocks/), [`hyperlinks`](../hyperlinks/).
-- **Used by extensions:** [`background-jobs`](../background-jobs/), [`mistral-web-search`](../mistral-web-search/).
-
 Restyles pi's native tools into compact, reason-first transcript blocks and
 groups consecutive read/list/search calls into a single "exploring" block.
 
@@ -64,3 +58,9 @@ better-native-pi/
 Render-cache stats publish to `Symbol.for("pi.renderer-cache.stats")` under
 `better-native-pi` and `better-native-pi:bash`; `/doctor` reports hit-rate and
 volatile-render churn for both.
+
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** [`background-jobs`](../background-jobs/), [`code-blocks`](../code-blocks/), [`hyperlinks`](../hyperlinks/).
+- **Used by extensions:** [`background-jobs`](../background-jobs/), [`mistral-web-search`](../mistral-web-search/).

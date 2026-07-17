@@ -1,9 +1,3 @@
-/**
- * Dependency graph:
- * Direct: `./cli.js`, `./heartbeat.js`, `./state.js`, `./tracker.js`,
- *   `@earendil-works/pi-coding-agent`.
- * Used by: `Pi extension loader`.
- */
 import {
 	type ExtensionAPI,
 	isEditToolResult,

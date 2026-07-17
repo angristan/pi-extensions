@@ -1,11 +1,5 @@
 # doctor
 
-## Dependencies
-
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** [`accent-color`](../accent-color/).
-- **Used by extensions:** None.
-
 Run diagnostics on your pi setup.
 
 `/doctor` inspects your configuration, installed extensions, model registry,
@@ -40,3 +34,9 @@ item with a glyph:
 Checks include: settings.json/models.json validity, model auth availability,
 code-blocks + cached-line-resets patch status, renderer-cache hit rates, and
 recent `pi-debug.log` startup failures.
+
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** [`accent-color`](../accent-color/).
+- **Used by extensions:** None.

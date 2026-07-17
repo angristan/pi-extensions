@@ -1,11 +1,5 @@
 # code-blocks
 
-## Dependencies
-
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** None.
-- **Used by extensions:** [`better-native-pi`](../better-native-pi/).
-
 Renders fenced code blocks as bordered, syntax-highlighted boxes instead of
 pi's default plain code.
 
@@ -24,3 +18,9 @@ pi's default plain code.
 
 Patches `Markdown.prototype.renderToken` (reference-counted, restored cleanly
 on session end).
+
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** [`better-native-pi`](../better-native-pi/).

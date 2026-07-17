@@ -1,10 +1,4 @@
 /**
- * Dependency graph:
- * Direct: `./bash.js`, `./exploration.js`, `./file-tools.js`,
- *   `@earendil-works/pi-coding-agent`.
- * Used by: `Pi extension loader`.
- */
-/**
  * better-native-pi — restyles pi's native tools (read/write/edit/grep/find/ls/bash)
  * into compact, reason-first 2-line transcript blocks, and groups consecutive
  * read/list/search calls into a single "exploring" block.

@@ -1,8 +1,3 @@
-/**
- * Dependency graph:
- * Direct: `./paths.js`, `node:crypto`, `node:fs`, `node:path`.
- * Used by: `extensions/wakatime/index.ts`, `extensions/wakatime/state.test.ts`.
- */
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";

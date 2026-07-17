@@ -1,11 +1,5 @@
 # history-search
 
-## Dependencies
-
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** None.
-- **Used by extensions:** None.
-
 Incremental search across your previous user prompts, inline in the editor.
 
 `Ctrl+R` begins a reverse-i-search; typing filters all past user messages in
@@ -21,3 +15,9 @@ reverse-i-search: grep_  3/5  Enter accept · Esc cancel
 
 Composes with `accent-color`: the wrapped editor forwards `borderColor` so the
 accent stays fixed while searching.
+
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.

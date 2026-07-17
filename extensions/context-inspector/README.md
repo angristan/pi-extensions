@@ -1,11 +1,5 @@
 # context-inspector
 
-## Dependencies
-
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** None.
-- **Used by extensions:** None.
-
 Inspect where your context window is being spent.
 
 `/context` opens a breakdown of every token category in the current session so
@@ -34,3 +28,9 @@ Categories are sorted by token count (descending). Estimates use pi's tokenizer;
 per-entry estimates degrade gracefully if a message can't be tokenized directly.
 Also reports the provider's own token count when available, plus the largest
 individual entries.
+
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.

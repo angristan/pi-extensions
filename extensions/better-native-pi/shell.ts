@@ -1,9 +1,4 @@
 /**
- * Dependency graph:
- * Direct: `./render.js`, `@earendil-works/pi-tui`.
- * Used by: `extensions/better-native-pi/core.ts`, `extensions/better-native-pi/shell.test.ts`.
- */
-/**
  * shell — bash/sh syntax highlighting. A small tokenizer that colors keywords,
  * commands, operators, variables, strings, comments, and numbers, theme-aware
  * with raw-ANSI fallbacks so it renders even without a pi theme.

@@ -1,11 +1,5 @@
 # working-timer
 
-## Dependencies
-
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** None.
-- **Used by extensions:** None.
-
 Adds a live elapsed timer to pi's built-in working row:
 
 ```
@@ -21,3 +15,9 @@ Pi's dedicated retry and compaction loaders keep their native messages. The
 elapsed timer resumes when the normal working row returns.
 
 No config, always on.
+
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.

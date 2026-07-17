@@ -1,8 +1,3 @@
-/**
- * Dependency graph:
- * Direct: `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, `node:path`, `node:url`.
- * Used by: `extensions/better-native-pi/core.ts`, `Pi extension loader`.
- */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { hyperlink } from "@earendil-works/pi-tui";
 import { isAbsolute, resolve } from "node:path";

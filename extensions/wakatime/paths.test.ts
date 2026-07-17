@@ -1,8 +1,3 @@
-/**
- * Dependency graph:
- * Direct: `./paths`, `bun:test`, `node:os`, `node:path`.
- * Used by: `Bun test runner`.
- */
 import { afterEach, describe, expect, test } from "bun:test";
 import { homedir } from "node:os";
 import { join } from "node:path";

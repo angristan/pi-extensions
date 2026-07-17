@@ -1,8 +1,3 @@
-/**
- * Dependency graph:
- * Direct: None.
- * Used by: `extensions/background-jobs/index.ts`.
- */
 const OUTPUT_HEAD_BYTES = 16 * 1024;
 const OUTPUT_TAIL_BYTES = 240 * 1024;
 const CURSOR_TAIL_BYTES = 256 * 1024;

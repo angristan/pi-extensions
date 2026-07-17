@@ -1,11 +1,5 @@
 # goal
 
-## Dependencies
-
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** None.
-- **Used by extensions:** None.
-
 Track an explicit objective for the session.
 
 The goal is a short statement (plus optional validation criteria and token
@@ -35,3 +29,9 @@ goal at the top of the plan overlay:
 ```
 
 `●` = active, `◐` = paused.
+
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.

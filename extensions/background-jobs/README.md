@@ -1,12 +1,5 @@
 # background-jobs
 
-## Dependencies
-
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** [`better-native-pi`](../better-native-pi/).
-- **Used by extensions:** [`better-native-pi`](../better-native-pi/).
-- **System/service:** `expect` on macOS or util-linux `script` on Linux for PTY sessions.
-
 Run quick, long-lived, and interactive shell commands through managed terminal
 sessions without blocking the agent or losing track of child processes.
 
@@ -84,3 +77,10 @@ duplicate transcript entry.
 - Full UI output retains bounded head and tail sections for diagnostics.
 - Session shutdown waits for SIGTERM/SIGKILL escalation.
 - PTY wrapper and child process groups are both terminated to prevent orphans.
+
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** [`better-native-pi`](../better-native-pi/).
+- **Used by extensions:** [`better-native-pi`](../better-native-pi/).
+- **System/service:** `expect` on macOS or util-linux `script` on Linux for PTY sessions.
