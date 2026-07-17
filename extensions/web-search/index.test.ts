@@ -98,6 +98,24 @@ describe("web search renderer", () => {
 		expect(render(webSearch, toolResult, { query: "Kimi pricing", startDate: "2026-04-01", endDate: "2026-04-30" })).toMatchSnapshot();
 	});
 
+	test("compacts timestamps and omits unavailable dates", () => {
+		const toolResult = {
+			content: [{ type: "text", text: "stored" }],
+			details: {
+				provider: "exa",
+				resultCount: 2,
+				results: [
+					{ title: "Dated", url: "https://example.com/dated", date: "2026-07-06T13:00:00.000Z", snippets: [] },
+					{ title: "Undated", url: "https://example.com/undated", date: "N/A", snippets: [] },
+				],
+			},
+		};
+		const lines = render(webSearch, toolResult, { query: "dates" }, { expanded: true });
+		expect(lines.join("\n")).toContain("2026-07-06");
+		expect(lines.join("\n")).not.toContain("T13:00:00.000Z");
+		expect(lines.join("\n")).not.toContain("N/A");
+	});
+
 	test("shows fallback provider trails and credits", () => {
 		const toolResult = createSearchToolResult({
 			provider: "firecrawl",

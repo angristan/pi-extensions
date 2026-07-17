@@ -9,6 +9,7 @@ import { BOLD, GREEN, MAGENTA, RED, RESET } from "../better-native-pi/render.js"
 import {
 	createSearchToolResult,
 	detectOpenUrlFailure,
+	formatDisplayDate,
 	formatOpenUrlResult,
 	normalizeHttpUrl,
 	parseSearchResultText,
@@ -278,11 +279,12 @@ function renderSearchResult(
 			const rendered = url ? hyperlink(theme.fg("mdLink", label), url) : theme.fg("toolOutput", label);
 			const website = resultWebsite(item);
 			const itemSearchEngine = resultSearchEngine(item);
+			const itemDate = formatDisplayDate(item.date);
 			const via = !searchEngine && itemSearchEngine && itemSearchEngine.toLowerCase() !== website?.toLowerCase() ? `via ${itemSearchEngine}` : undefined;
 			const meta = [
 				website ? theme.fg("accent", website) : undefined,
 				via ? theme.fg("muted", via) : undefined,
-				item.date ? theme.fg("syntaxNumber", item.date) : undefined,
+				itemDate ? theme.fg("syntaxNumber", itemDate) : undefined,
 			].filter(Boolean).join(theme.fg("dim", " · "));
 			lines.push(`${INDENT}${theme.fg("syntaxNumber", `${index + 1}.`)} ${rendered}${meta ? ` ${theme.fg("dim", "—")} ${meta}` : ""}`);
 			const evidence = item.snippets?.[0] ?? item.description;

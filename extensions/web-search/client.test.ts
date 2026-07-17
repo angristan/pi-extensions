@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	createSearchToolResult,
 	detectOpenUrlFailure,
+	formatDisplayDate,
 	normalizeHttpUrl,
 	parseSearchResultText,
 	truncateText,
@@ -173,6 +174,14 @@ describe("search tool persistence", () => {
 			message: "Website denied automated access.",
 		});
 		expect(detectOpenUrlFailure("Page content loaded normally.")).toBeUndefined();
+	});
+
+	test("renders ISO timestamps as dates and suppresses missing values", () => {
+		expect(formatDisplayDate("2026-07-06T13:00:00.000Z")).toBe("2026-07-06");
+		expect(formatDisplayDate("2026-07-06 14:00:00+01:00")).toBe("2026-07-06");
+		expect(formatDisplayDate("1 week ago")).toBe("1 week ago");
+		expect(formatDisplayDate("N/A")).toBeUndefined();
+		expect(formatDisplayDate("unknown")).toBeUndefined();
 	});
 
 	test("strips terminal controls before page content reaches the model", () => {
