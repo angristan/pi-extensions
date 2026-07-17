@@ -173,16 +173,24 @@ describe("terminal tools", () => {
 	test("returns quick commands normally and clears persistent status", async () => {
 		const harness = createHarness();
 		await startHarness(harness);
-		const result = await harness.tools.get("bash").execute("exec", {
+		const tool = harness.tools.get("bash");
+		const args = {
 			command: "printf 'quick-output'",
 			reasoning: "test quick execution",
-		}, undefined, undefined, harness.ctx);
+		};
+		const result = await tool.execute("exec", args, undefined, undefined, harness.ctx);
 
 		expect(result.details.status).toBe("completed");
 		expect(result.content[0].text).toContain("quick-output");
 		expect(harness.statuses.get("background-jobs")).toBeUndefined();
 		expect(harness.events).toHaveLength(0);
 		expect(harness.notifications).toHaveLength(0);
+		const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+		const rendered = tool.renderResult(result, { expanded: false }, theme, {
+			state: {}, args, cwd: harness.ctx.cwd, invalidate() {},
+		}).render(120).join("\n");
+		expect(rendered).toContain("quick-output");
+		expect(rendered).not.toContain(result.details.id);
 	});
 
 	test("yields long commands without notifying before the turn settles", async () => {
@@ -296,7 +304,7 @@ describe("terminal tools", () => {
 		});
 		const completed = component.render(120).join("\n");
 		expect(completed).toContain("Ran test live card");
-		expect(completed).toContain("completed");
+		expect(completed).toContain(`✓ ${started.details.id} · completed`);
 		expect(completed).not.toContain("/ps");
 		component.dispose?.();
 	});

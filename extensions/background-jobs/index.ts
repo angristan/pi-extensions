@@ -43,6 +43,7 @@ export interface JobSnapshot {
 	cwd: string;
 	status: JobStatus;
 	tty?: boolean;
+	backgrounded?: boolean;
 	startedAt: number;
 	endedAt?: number;
 	exitCode?: number;
@@ -158,6 +159,7 @@ function snapshot(job: ManagedJob, outputLimit?: number): JobSnapshot {
 		cwd: job.cwd,
 		status: job.status,
 		tty: job.tty,
+		backgrounded: job.backgrounded,
 		startedAt: job.startedAt,
 		endedAt: job.endedAt,
 		exitCode: job.exitCode,
@@ -190,7 +192,7 @@ function restoredJob(data: JobSnapshot, generation: number): ManagedJob {
 		completion,
 		resolveCompletion,
 		finalized: true,
-		backgrounded: false,
+		backgrounded: Boolean(data.backgrounded),
 		suppressPersistence: true,
 		sessionGeneration: generation,
 		activityListeners: new Set(),

@@ -22,8 +22,9 @@ dependency.
 ## User experience
 
 Managed commands keep the same reason-first headline, bordered command, and
-`│` output gutter as `better-native-pi`. The final muted row carries terminal
-metadata without mixing it into command output:
+`│` output gutter as `better-native-pi`. Foreground completions omit terminal
+metadata; once a command yields, a final muted row identifies the terminal
+without mixing metadata into command output:
 
 ```text
 • Running exercise live terminal updates 10s
