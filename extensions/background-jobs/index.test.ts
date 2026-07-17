@@ -299,6 +299,7 @@ describe("terminal tools", () => {
 		const started = await harness.tools.get("bash").execute("exec", {
 			command: "read -r value; printf 'got:%s\\n' \"$value\"",
 			reasoning: "test terminal input",
+			interactive: true, // keep stdin writable so terminal_write can feed the prompt
 			"yield-time_ms": 250,
 		}, undefined, undefined, harness.ctx);
 		expect(started.details.status).toBe("running");
@@ -323,6 +324,35 @@ describe("terminal tools", () => {
 		expect(rendered).toContain("│ </dim>got:hello");
 		expect(rendered).not.toContain("↪");
 		expect(rendered).not.toContain("↳");
+	});
+
+	test("non-interactive command that reads stdin exits on EOF instead of hanging", async () => {
+		// Regression: a command that reads stdin with no input (e.g. `rg PATTERN`
+		// with no path) used to block on read(stdin) forever. With the default
+		// interactive=false, stdin is closed (ignore) so the command gets EOF and
+		// exits immediately — no hang, no 10s timeout needed.
+		const harness = createHarness();
+		await startHarness(harness);
+		const started = await harness.tools.get("bash").execute("exec", {
+			command: "head -c 1", // reads stdin, exits on EOF
+			reasoning: "stdin reader must EOF fast",
+			"yield-time_ms": 1_000,
+		}, undefined, undefined, harness.ctx);
+		expect(started.details.status).toBe("completed");
+		expect(started.details.exitCode).toBe(0);
+		// terminal_write on a non-interactive job must error clearly. Use a
+		// still-running command so writeInput reaches the interactive guard.
+		const stuck = await harness.tools.get("bash").execute("exec", {
+			command: "sleep 5",
+			reasoning: "non-interactive job that stays running",
+			"yield-time_ms": 250,
+		}, undefined, undefined, harness.ctx);
+		await expect(harness.tools.get("terminal_write").execute("write", {
+			reasoning: "should fail on non-interactive job",
+			job_id: stuck.details.id,
+			chars: "x\n",
+		})).rejects.toThrow("does not accept input");
+		await shutdownHarness(harness);
 	});
 
 	test("updates the original running card when the command completes", async () => {
