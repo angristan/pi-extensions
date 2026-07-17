@@ -2,23 +2,21 @@
 
 Track an explicit objective for the session as a **persistent, self-driving
 loop**: the objective stays in view, and after each turn
-the agent keeps working toward it until the evidence says it's done or it gets
-blocked.
+the agent keeps working toward it until it's done or blocked.
 
 Blocked status uses three-turn auditing: the same blocker must repeat across at
 least three consecutive goal turns before the goal is marked blocked.
 
-The goal is a short statement plus optional **validation criteria** and an
-optional **verify command** (a shell command that must exit 0 before
-completion). The goal is surfaced in its own overlay card and injected into the
-system prompt on every turn.
+The goal is a short statement plus optional **validation criteria**. The goal is
+surfaced in its own overlay card and injected into the system prompt on every
+turn.
 
 ## How the loop works
 
 When a goal is **active**, after each `agent_settled` (turn done, no retry,
 no compaction, no queued user input), the extension sends a silent continuation
 prompt that triggers a new turn. The continuation re-orients the agent around
-the objective and requires an evidence audit before completion.
+the objective and asks for a completion audit before completion.
 
 ```
 /goal set <objective>
@@ -38,7 +36,7 @@ the objective and requires an evidence audit before completion.
                ▼
    send silent continuation prompt ──► new agent turn ──► …
                │
-               │ model calls goal_complete (evidence-backed) ──► complete
+               │ model calls goal_complete ────────────────────► complete
                │ repeated goal_block reports ──────────────────► blocked
                │ user presses Esc ─────────────────────────────► pause
 ```
@@ -52,10 +50,8 @@ the objective and requires an evidence audit before completion.
   of spinning forever.
 - **Interruption → pause** — if you abort a turn (Esc), the goal auto-pauses
   so it doesn't immediately resume on the next boundary.
-- **Evidence-based completion** — the model marks the goal complete only by
-  calling the `goal_complete` tool, which requires one evidence entry per
-  validation criterion. If a `verify` command is configured, it runs and must
-  exit 0 before completion is allowed.
+- **Completion status** — the model marks the goal complete by calling
+  `goal_complete` when the objective is achieved and no required work remains.
 - **Blocked audit** — `goal_block` records blockers while leaving the goal
   active until the same blocker has recurred three times. Resuming a blocked
   goal starts a fresh audit.
@@ -78,25 +74,20 @@ Usage: `/goal [<objective>|clear|edit|pause|resume|block|complete]`
 # Goal
 Reduce p95 checkout latency below 120ms
 
-## Verify
-npm test
-
 ## Validation
 - checkout benchmark p95 < 120ms
 - correctness suite stays green
 - no public API changes
 ```
 
-All sections except `# Goal` are optional. `Verify` is a single shell command
-line.
+All sections except `# Goal` are optional.
 
 ## Tools exposed to the agent
 
-- **`goal_complete`** — mark the goal complete. Requires `evidence` (one entry
-  per validation criterion) and a `summary`. Runs the `verify` command if set.
-- **`goal_block`** — record a blocker. Requires `blocker`, `attempted`,
-  `evidence`, and `next_input`; marks the goal `blocked` only after the same
-  blocker repeats three times.
+- **`goal_complete`** — mark the goal complete. Accepts an optional `summary`.
+- **`goal_block`** — record a blocker. Optional fields can describe the blocker,
+  attempted work, supporting detail, and next input; marks the goal `blocked`
+  only after the same blocker repeats three times.
 
 ## How it renders
 
@@ -109,7 +100,6 @@ Reduce p95 checkout latency below 120ms
 
 Active time    2m 14s
 Continuations  4
-Verify         $ npm test
 
 Validation
   ○ checkout benchmark p95 < 120ms

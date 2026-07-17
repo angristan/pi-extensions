@@ -16,7 +16,7 @@ const BLOCKED_AUDIT_THRESHOLD = 3;
  * Status lifecycle mirrors a persistent-objective goal system:
  * active → (pause) → paused → (resume) → active
  * active → (blocked audit threshold) → blocked → (resume) → active
- * active → (complete, evidence-backed) → complete
+ * active → (complete) → complete
  * active → (interrupted by user) → paused
  */
 type GoalStatus = "active" | "paused" | "blocked" | "complete";
@@ -25,17 +25,15 @@ interface BlockedAudit {
 	fingerprint: string;
 	count: number;
 	blocker: string;
-	attempted: string;
-	evidence: string;
-	nextInput: string;
+	attempted?: string;
+	evidence?: string;
+	nextInput?: string;
 	lastReportedAt: number;
 }
 
 export interface GoalState {
 	objective: string;
 	validation: string[];
-	/** Optional shell command that must exit 0 before the goal can be completed. */
-	verify?: string;
 	status: GoalStatus;
 	createdAt: number;
 	updatedAt: number;
@@ -72,21 +70,19 @@ function formatDuration(milliseconds: number): string {
 }
 
 // ============================================================================
-// Goal document (markdown) — schema extended with `## Verify`
+// Goal document (markdown)
 // ============================================================================
 
 export function goalDocument(state?: Partial<GoalState>): string {
 	const objective = state?.objective?.trim() || "Describe the outcome that must become true.";
-	const verify = state?.verify?.trim() || "off";
 	const validation = state?.validation?.length
 		? state.validation.map((item) => `- ${item}`).join("\n")
 		: "- Add a concrete acceptance criterion.";
-	return `# Goal\n${objective}\n\n## Verify\n${verify}\n\n## Validation\n${validation}\n`;
+	return `# Goal\n${objective}\n\n## Validation\n${validation}\n`;
 }
 
 export interface ParsedGoalDocument {
 	objective: string;
-	verify?: string;
 	validation: string[];
 }
 
@@ -101,13 +97,11 @@ export function parseGoalDocument(document: string): ParsedGoalDocument {
 	if (!objective) throw new Error("Goal objective must not be empty");
 	const section = (header: string) =>
 		source.match(new RegExp(`^##\\s+${header}\\s*\\n([\\s\\S]*?)(?=^##\\s+|(?![\\s\\S]))`, "im"))?.[1] ?? "";
-	const verifyRaw = section("Verify").trim().split("\n", 1)[0];
-	const verify = verifyRaw && !/^off$/i.test(verifyRaw) ? verifyRaw : undefined;
 	const validation = (section("Validation"))
 		.split("\n")
 		.map((line) => line.replace(/^\s*[-*]\s*/, "").trim())
 		.filter((line) => line && !/^add a concrete acceptance criterion\.?$/i.test(line));
-	return { objective, verify, validation };
+	return { objective, validation };
 }
 
 function elapsedMs(state: GoalState, now = Date.now()): number {
@@ -130,8 +124,8 @@ function normalizeBlockerText(value: string): string {
 	return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-function blockerFingerprint(blocker: string, nextInput: string): string {
-	return `${normalizeBlockerText(blocker)}\n${normalizeBlockerText(nextInput)}`;
+function blockerFingerprint(blocker: string, nextInput?: string): string {
+	return `${normalizeBlockerText(blocker)}\n${normalizeBlockerText(nextInput ?? "")}`;
 }
 
 // ============================================================================
@@ -142,23 +136,18 @@ export function buildGoalContext(state: GoalState): string {
 	const validation = state.validation.length
 		? `\nValidation criteria:\n${state.validation.map((item) => `- ${item}`).join("\n")}`
 		: "";
-	const verify = state.verify
-		? `\nA verification command is configured and MUST exit 0 before this goal can be marked complete:\n  $ ${state.verify}`
-		: "";
-	return `## Active session goal\nThe durable outcome for this session is:\n${state.objective}${validation}${verify}\n\nUse the execution plan for intermediate steps. Do not mark the goal complete until its validation criteria are satisfied AND verified against concrete evidence (files changed, commands run, tests passed, artifacts produced). If no valid path remains, use goal_block only after the same blocking condition has recurred across the blocked audit threshold; do not declare the goal blocked merely because the work is hard, slow, uncertain, or would benefit from clarification.`;
+	return `## Active session goal\nThe durable outcome for this session is:\n${state.objective}${validation}\n\nUse the execution plan for intermediate steps. Do not mark the goal complete until the objective has actually been achieved and no required work remains. If no valid path remains, use goal_block only after the same blocking condition has recurred across the blocked audit threshold; do not declare the goal blocked merely because the work is hard, slow, uncertain, or would benefit from clarification.`;
 }
 
 /**
  * The silent continuation prompt sent at each safe boundary (agent_settled).
- * Re-orients the agent around the objective and requires an evidence audit
- * before completion.
+ * Re-orients the agent around the objective and asks for a completion audit.
  */
 function continuationPrompt(state: GoalState): string {
-	const verifyLine = state.verify ? `\nRemember: the verify command \`${state.verify}\` must exit 0 before completion.` : "";
 	const validationList = state.validation.length
 		? state.validation.map((v, i) => `  ${i + 1}. ${v}`).join("\n")
 		: "  - (no explicit criteria — judge against the objective)";
-	return `[Goal continuation — turn ${state.continuations + 1}]\nThe active goal is:\n${state.objective}\n\nValidation criteria:\n${validationList}${verifyLine}\n\nContinuation behavior:\n- Keep the full objective intact; do not redefine success around a smaller or easier task.\n- Use the current worktree and external state as authoritative; inspect current state before relying on memory.\n- If update_plan is available and the next work is meaningfully multi-step, keep the plan tied to the real objective.\n\nCompletion audit:\nBefore declaring the goal complete, audit it against concrete evidence (files changed, commands run, tests passed, build/benchmark output, generated artifacts). If it is complete and verified, call \`goal_complete\` with per-criterion evidence.\n\nBlocked audit:\n- Do not call \`goal_block\` the first time a blocker appears.\n- Call \`goal_block\` only when the same blocking condition has repeated for at least ${BLOCKED_AUDIT_THRESHOLD} consecutive goal turns and no meaningful progress is possible without user input or an external-state change.\n- Never use blocked merely because the work is hard, slow, uncertain, incomplete, or would benefit from clarification.\n\nDo not just summarize — either make progress, complete with evidence, or report a repeated blocker.`;
+	return `[Goal continuation — turn ${state.continuations + 1}]\nThe active goal is:\n${state.objective}\n\nValidation criteria:\n${validationList}\n\nContinuation behavior:\n- Keep the full objective intact; do not redefine success around a smaller or easier task.\n- Use the current worktree and external state as authoritative; inspect current state before relying on memory.\n- If update_plan is available and the next work is meaningfully multi-step, keep the plan tied to the real objective.\n\nCompletion audit:\nBefore declaring the goal complete, audit it against the actual current state. If the objective has actually been achieved and no required work remains, call \`goal_complete\`.\n\nBlocked audit:\n- Do not call \`goal_block\` the first time a blocker appears.\n- Call \`goal_block\` only when the same blocking condition has repeated for at least ${BLOCKED_AUDIT_THRESHOLD} consecutive goal turns and no meaningful progress is possible without user input or an external-state change.\n- Never use blocked merely because the work is hard, slow, uncertain, incomplete, or would benefit from clarification.\n\nDo not just summarize — either make progress, complete the goal, or report a repeated blocker.`;
 }
 
 // ============================================================================
@@ -178,9 +167,8 @@ function goalLines(state: GoalDisplayState, theme: any): string[] {
 	lines.push(`${theme.fg("dim", "Continuations")}  ${state.continuations}`);
 	if (state.status === "blocked" && state.blockedAudit) {
 		lines.push(`${theme.fg("dim", "Blocked")}  ${state.blockedAudit.blocker}`);
-		lines.push(`${theme.fg("dim", "Next")}     ${state.blockedAudit.nextInput}`);
+		if (state.blockedAudit.nextInput) lines.push(`${theme.fg("dim", "Next")}     ${state.blockedAudit.nextInput}`);
 	}
-	if (state.verify) lines.push(`${theme.fg("dim", "Verify")}  $ ${state.verify}`);
 	if (state.validation.length) {
 		lines.push("", theme.fg("accent", theme.bold("Validation")));
 		for (const item of state.validation) lines.push(`  ○ ${item}`);
@@ -273,7 +261,6 @@ export default function (pi: ExtensionAPI) {
 				count: BLOCKED_AUDIT_THRESHOLD,
 				blocker: "Marked blocked manually.",
 				attempted: "The user ran /goal block.",
-				evidence: "/goal block",
 				nextInput: "Resume the goal when there is actionable work again.",
 				lastReportedAt: now,
 			};
@@ -368,7 +355,6 @@ export default function (pi: ExtensionAPI) {
 					count: noToolContinuationStreak,
 					blocker: `The last ${noToolContinuationStreak} goal continuation turns made no tool calls.`,
 					attempted: "Automatic goal continuation prompts were sent at safe idle boundaries.",
-					evidence: "No tool execution was observed during those continuation turns.",
 					nextInput: "Give a more specific next step, adjust the goal, or resume if there is actionable work to perform.",
 					lastReportedAt: Date.now(),
 				};
@@ -538,16 +524,15 @@ export default function (pi: ExtensionAPI) {
 					fingerprint: audit.fingerprint,
 					count: typeof audit.count === "number" ? audit.count : 1,
 					blocker: typeof audit.blocker === "string" ? audit.blocker : "Goal is blocked.",
-					attempted: typeof audit.attempted === "string" ? audit.attempted : "",
-					evidence: typeof audit.evidence === "string" ? audit.evidence : "",
-					nextInput: typeof audit.nextInput === "string" ? audit.nextInput : "Provide input to unblock the goal.",
+					attempted: typeof audit.attempted === "string" ? audit.attempted : undefined,
+					evidence: typeof audit.evidence === "string" ? audit.evidence : undefined,
+					nextInput: typeof audit.nextInput === "string" ? audit.nextInput : undefined,
 					lastReportedAt: typeof audit.lastReportedAt === "number" ? audit.lastReportedAt : Date.now(),
 				}
 				: undefined;
 			state = {
 				objective: typeof restored.objective === "string" ? restored.objective : "",
 				validation: Array.isArray(restored.validation) ? [...restored.validation] : [],
-				verify: typeof restored.verify === "string" ? restored.verify : undefined,
 				status: normalizeStatus(restored.status),
 				createdAt: typeof restored.createdAt === "number" ? restored.createdAt : Date.now(),
 				updatedAt: typeof restored.updatedAt === "number" ? restored.updatedAt : Date.now(),
@@ -585,24 +570,16 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	// ------------------------------------------------------------------------
-	// goal_complete / goal_block tools (evidence-based completion)
+	// goal_complete / goal_block tools
 	// ------------------------------------------------------------------------
-
-	const evidenceSchema = Type.Object({
-		criterion: Type.String({ description: "The validation criterion being evidenced (copy the exact text)." }),
-		evidence: Type.String({ description: "Concrete evidence: files changed, commands run, test/benchmark output, artifact path. Be specific." }),
-	});
 
 	pi.registerTool({
 		name: "goal_complete",
 		label: "Complete Goal",
 		description:
-			"Mark the active session goal as complete. Only call this when the objective is fully satisfied AND every validation criterion has concrete evidence. If a verify command is configured, it will be run and MUST exit 0. Do not call this speculatively.",
+			"Mark the active session goal as complete. Only call this when the objective is achieved and no required work remains. Do not call this speculatively.",
 		parameters: Type.Object({
-			evidence: Type.Array(evidenceSchema, {
-				description: "One evidence entry per validation criterion. If there are no validation criteria, provide one entry summarizing the evidence for the objective.",
-			}),
-			summary: Type.String({ description: "One-line summary of what was accomplished." }),
+			summary: Type.Optional(Type.String({ description: "Optional concise summary of what was accomplished." })),
 		}),
 		renderCall: () => new Text("", 0, 0),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -612,40 +589,10 @@ export default function (pi: ExtensionAPI) {
 			if (state.status !== "active") {
 				return { content: [{ type: "text", text: `Goal is ${state.status}, not active. Resume it before completing.` }], details: { ok: false } };
 			}
-			// Evidence audit: require one entry per validation criterion.
-			const criteria = state.validation.length ? state.validation : ["(objective)"];
-			const provided = Array.isArray(params.evidence) ? params.evidence : [];
-			const missing = criteria.filter((c) => !provided.some((p: any) => p.criterion && c.trim().toLowerCase().includes(p.criterion.trim().toLowerCase()) || p.criterion?.trim().toLowerCase() === c.trim().toLowerCase()));
-			if (missing.length) {
-				return {
-					content: [{ type: "text", text: `Evidence audit failed. Missing evidence for:\n${missing.map((m) => `- ${m}`).join("\n")}\n\nProvide one evidence entry per validation criterion (copy the exact criterion text).` }],
-					details: { ok: false, missing },
-				};
-			}
-			// Hard gate: run the verify command if configured.
-			if (state.verify) {
-				ctx.ui.notify(`Goal: running verify command: $ ${state.verify}`, "info");
-				try {
-					const result = await pi.exec("sh", ["-c", state.verify], { cwd: ctx.cwd, timeout: 5 * 60_000 });
-					if (result.code !== 0) {
-						setStatus("paused", ctx);
-						return {
-							content: [{ type: "text", text: `Verify command FAILED (exit ${result.code}):\n$ ${state.verify}\n\n--- stdout ---\n${result.stdout.slice(-2000)}\n--- stderr ---\n${result.stderr.slice(-2000)}\n\nGoal NOT completed. Fix the failure and call goal_complete again, or call goal_block if blocked.` }],
-							details: { ok: false, verifyCode: result.code },
-						};
-					}
-				} catch (err) {
-					setStatus("paused", ctx);
-					return {
-						content: [{ type: "text", text: `Verify command failed to run: ${err instanceof Error ? err.message : String(err)}\n\nGoal NOT completed.` }],
-						details: { ok: false, error: String(err) },
-					};
-				}
-			}
 			setStatus("complete", ctx);
 			ctx.ui.notify(`Goal complete: ${params.summary ?? state.objective}`, "info");
 			return {
-				content: [{ type: "text", text: `Goal marked complete.\nObjective: ${state.objective}\nSummary: ${params.summary ?? "(none)"}\nEvidence:\n${provided.map((p: any) => `- ${p.criterion}: ${p.evidence}`).join("\n")}` }],
+				content: [{ type: "text", text: `Goal marked complete.\nObjective: ${state.objective}${params.summary ? `\nSummary: ${params.summary}` : ""}` }],
 				details: { ok: true },
 			};
 		},
@@ -655,12 +602,12 @@ export default function (pi: ExtensionAPI) {
 		name: "goal_block",
 		label: "Report Goal Blocker",
 		description:
-			`Record a blocker for the active goal. Only marks the goal blocked after the same blocking condition has recurred for at least ${BLOCKED_AUDIT_THRESHOLD} consecutive goal turns and no meaningful progress is possible without user input or an external-state change. Do not call merely because work is hard, slow, uncertain, incomplete, or would benefit from clarification.`,
+			`Mark the active goal blocked after the same blocking condition has recurred for at least ${BLOCKED_AUDIT_THRESHOLD} consecutive goal turns and no meaningful progress is possible without user input or an external-state change. Do not call merely because work is hard, slow, uncertain, incomplete, or would benefit from clarification.`,
 		parameters: Type.Object({
-			blocker: Type.String({ description: "What is preventing completion." }),
-			attempted: Type.String({ description: "What was attempted." }),
-			evidence: Type.String({ description: "Concrete evidence of the blocker (error output, missing file, failing test, etc.)." }),
-			next_input: Type.String({ description: "What input or change would unlock progress." }),
+			blocker: Type.Optional(Type.String({ description: "Optional short description of the blocking condition." })),
+			attempted: Type.Optional(Type.String({ description: "Optional note about what was attempted." })),
+			evidence: Type.Optional(Type.String({ description: "Optional supporting detail for the blocker." })),
+			next_input: Type.Optional(Type.String({ description: "Optional input or external change that would unlock progress." })),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const alreadyReportedThisTurn = currentTurnCalledGoalBlock;
@@ -674,23 +621,33 @@ export default function (pi: ExtensionAPI) {
 			if (alreadyReportedThisTurn) {
 				return { content: [{ type: "text", text: "A blocker has already been recorded for this goal turn. Wait for the next goal turn before counting the same blocker again." }], details: { ok: true, blocked: false, duplicateTurn: true } };
 			}
-			const fingerprint = blockerFingerprint(params.blocker, params.next_input);
+			const blocker = params.blocker?.trim() || "Unspecified repeated blocker";
+			const attempted = params.attempted?.trim() || undefined;
+			const evidence = params.evidence?.trim() || undefined;
+			const nextInput = params.next_input?.trim() || undefined;
+			const fingerprint = blockerFingerprint(blocker, nextInput);
 			const previous = state.blockedAudit;
 			const count = previous?.fingerprint === fingerprint ? previous.count + 1 : 1;
 			state.blockedAudit = {
 				fingerprint,
 				count,
-				blocker: params.blocker,
-				attempted: params.attempted,
-				evidence: params.evidence,
-				nextInput: params.next_input,
+				blocker,
+				attempted,
+				evidence,
+				nextInput,
 				lastReportedAt: Date.now(),
 			};
+			const details = [
+				`Blocker: ${blocker}`,
+				attempted ? `Attempted: ${attempted}` : undefined,
+				evidence ? `Detail: ${evidence}` : undefined,
+				nextInput ? `Next input needed: ${nextInput}` : undefined,
+			].filter(Boolean).join("\n");
 
 			if (count < BLOCKED_AUDIT_THRESHOLD) {
 				saveAndEmit(ctx);
 				return {
-					content: [{ type: "text", text: `Blocker recorded (${count}/${BLOCKED_AUDIT_THRESHOLD}); goal remains active. Continue if any meaningful progress is possible. If the same blocker recurs on later goal turns, call goal_block again with the same blocker and next input.\n\nBlocker: ${params.blocker}\nAttempted: ${params.attempted}\nEvidence: ${params.evidence}\nNext input needed: ${params.next_input}` }],
+					content: [{ type: "text", text: `Blocker recorded (${count}/${BLOCKED_AUDIT_THRESHOLD}); goal remains active. Continue if any meaningful progress is possible. If the same blocker recurs on later goal turns, call goal_block again.\n\n${details}` }],
 					details: { ok: true, blocked: false, count, threshold: BLOCKED_AUDIT_THRESHOLD },
 				};
 			}
@@ -698,7 +655,7 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.notify("Goal blocked: blocker repeated across goal turns.", "warning");
 			setStatus("blocked", ctx);
 			return {
-				content: [{ type: "text", text: `Goal marked blocked after ${count} consecutive reports of the same blocker.\n\nBlocker: ${params.blocker}\nAttempted: ${params.attempted}\nEvidence: ${params.evidence}\nNext input needed: ${params.next_input}\n\nResume with /goal resume once unblocked.` }],
+				content: [{ type: "text", text: `Goal marked blocked after ${count} consecutive reports of the same blocker.\n\n${details}\n\nResume with /goal resume once unblocked.` }],
 				details: { ok: true, blocked: true, count, threshold: BLOCKED_AUDIT_THRESHOLD },
 			};
 		},
