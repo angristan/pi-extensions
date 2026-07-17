@@ -179,8 +179,13 @@ function statusColor(status: GoalStatus): "success" | "warning" | "muted" | "err
 	return status === "active" ? "success" : status === "paused" ? "warning" : status === "blocked" ? "error" : "muted";
 }
 
-const GOAL_OVERLAY_MAX_ROWS = 6;
+const GOAL_OVERLAY_MAX_ROWS = 7;
 const GOAL_OVERLAY_OBJECTIVE_ROWS = 2;
+
+export interface GoalOverlayStats {
+	contextTokens?: number;
+	contextWindow?: number;
+}
 
 function pluralize(count: number, singular: string, plural = `${singular}s`): string {
 	return count === 1 ? singular : plural;
@@ -188,6 +193,37 @@ function pluralize(count: number, singular: string, plural = `${singular}s`): st
 
 function compactWhitespace(text: string): string {
 	return text.trim().replace(/\s+/g, " ");
+}
+
+function compactNumber(value: number): string {
+	const safe = Math.max(0, Math.round(value));
+	if (safe < 1_000) return String(safe);
+	if (safe < 1_000_000) return `${(safe / 1_000).toFixed(safe < 10_000 ? 1 : 0)}K`;
+	if (safe < 1_000_000_000) return `${(safe / 1_000_000).toFixed(safe < 10_000_000 ? 1 : 0)}M`;
+	return `${(safe / 1_000_000_000).toFixed(1)}B`;
+}
+
+function contextUsageLine(stats: GoalOverlayStats | undefined, theme: any): string | undefined {
+	if (typeof stats?.contextTokens !== "number") return undefined;
+	const used = compactNumber(stats.contextTokens);
+	if (typeof stats.contextWindow !== "number" || stats.contextWindow <= 0) {
+		return theme.fg("dim", `ctx ${used} tokens`);
+	}
+	const window = compactNumber(stats.contextWindow);
+	const percent = Math.min(100, Math.max(0, (stats.contextTokens / stats.contextWindow) * 100));
+	return theme.fg("dim", `ctx ${used}/${window} (${percent.toFixed(0)}%)`);
+}
+
+function goalOverlayStats(ctx: any): GoalOverlayStats | undefined {
+	const usage = ctx?.getContextUsage?.();
+	const contextTokens = typeof usage?.tokens === "number" ? usage.tokens : undefined;
+	const contextWindow = typeof usage?.contextWindow === "number"
+		? usage.contextWindow
+		: typeof ctx?.model?.contextWindow === "number"
+			? ctx.model.contextWindow
+			: undefined;
+	if (contextTokens === undefined && contextWindow === undefined) return undefined;
+	return { contextTokens, contextWindow };
 }
 
 function fullGoalLines(state: GoalDisplayState, theme: any): string[] {
@@ -214,13 +250,14 @@ export function renderGoalOverlayBody(
 	width: number,
 	maxHeight: number,
 	theme: any,
+	stats?: GoalOverlayStats,
 ): string[] {
 	const contentWidth = Math.max(1, width);
 	const rowBudget = Math.max(0, Math.min(maxHeight, GOAL_OVERLAY_MAX_ROWS));
 	if (rowBudget === 0) return [];
 
 	const objectiveRows = wrapTextWithAnsi(compactWhitespace(state.objective) || "(no objective)", contentWidth);
-	const reserveRows = state.status === "blocked" && state.blockedAudit ? 3 : 2;
+	const reserveRows = state.status === "blocked" && state.blockedAudit ? 5 : 4;
 	const objectiveBudget = Math.max(1, Math.min(GOAL_OVERLAY_OBJECTIVE_ROWS, rowBudget - reserveRows));
 	const rows = objectiveRows.slice(0, objectiveBudget);
 
@@ -245,7 +282,10 @@ export function renderGoalOverlayBody(
 	if (state.validation.length) {
 		meta.push(`${state.validation.length} validation ${pluralize(state.validation.length, "check")}`);
 	}
+	if (rows.length < rowBudget - 1) rows.push("");
 	if (rows.length < rowBudget) rows.push(theme.fg("dim", meta.join(" · ")));
+	const contextLine = contextUsageLine(stats, theme);
+	if (contextLine && rows.length < rowBudget) rows.push(contextLine);
 
 	if (state.status === "blocked" && state.blockedAudit && rows.length < rowBudget) {
 		const blockerRows = wrapTextWithAnsi(`${theme.fg("dim", "Blocked")}  ${state.blockedAudit.blocker}`, contentWidth);
@@ -295,7 +335,7 @@ export default function (pi: ExtensionAPI) {
 			if (!state) return [];
 			// Keep the always-on card compact: it is a mission badge, not the
 			// full objective document. `/goal-status` remains the detailed view.
-			return renderGoalOverlayBody(displayState(state), width, maxHeight, theme);
+			return renderGoalOverlayBody(displayState(state), width, maxHeight, theme, goalOverlayStats(activeCtx));
 		},
 	});
 
