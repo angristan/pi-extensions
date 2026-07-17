@@ -94,10 +94,7 @@ export default function fileTools(pi: ExtensionAPI) {
 			promptSnippet: tool.promptSnippet,
 			parameters: withReasoning(tool.parameters),
 			prepareArguments: tool.prepareArguments,
-			promptGuidelines: [
-				...(tool.promptGuidelines ?? []),
-				`Always pass a "reasoning" phrase to ${name}: state the GOAL/intent, not the file or command (those are shown already).`,
-			],
+			promptGuidelines: tool.promptGuidelines,
 			renderShell: "self",
 
 			// Strip our injected `reasoning`, delegate to the real built-in. Writes

@@ -217,12 +217,14 @@ function summarize(
 	return `${count} ${noun}`;
 }
 
+/** Kept compact because this text is repeated in every restyled tool schema. */
+export const REASONING_DESCRIPTION = "≤12-word present-tense intent: why this call is needed, not what it does. Emit first.";
+
 /** Clone a JSON-schema params object and inject a REQUIRED, first `reasoning` prop. */
 export function withReasoning(parameters: any): any {
 	const reasoning = {
 		type: "string",
-		description:
-			"Short phrase (≤12 words) stating the GOAL behind this call — the why-in-context, not the what. Do NOT restate the file, path, or command (those are already shown next to it); instead give the intent or what you expect to find/confirm. Present-tense, no period. E.g. \"confirm executionStarted is a timestamp\", \"fix the map leak from review\", \"retry match after previous miss\". IMPORTANT: emit this field FIRST, before any other argument, so the reasoning is visible while the remaining args stream in.",
+		description: REASONING_DESCRIPTION,
 	};
 	const properties = { reasoning, ...(parameters?.properties ?? {}) };
 	const required = Array.from(new Set(["reasoning", ...(parameters?.required ?? [])]));

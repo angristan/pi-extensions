@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildToolBlock } from "./core.js";
+import { buildToolBlock, REASONING_DESCRIPTION, withReasoning } from "./core.js";
 
 const ANSI_PATTERN = /\x1b\[[0-9;:]*m/g;
 const TEST_TAG_PATTERN = /<\/?(?:bold|green|magenta|red)>|<\/>/g;
@@ -7,6 +7,21 @@ const TEST_TAG_PATTERN = /<\/?(?:bold|green|magenta|red)>|<\/>/g;
 function plain(text: string): string {
 	return text.replace(ANSI_PATTERN, "").replace(TEST_TAG_PATTERN, "");
 }
+
+describe("withReasoning", () => {
+	test("keeps required reasoning metadata compact and first", () => {
+		const schema = withReasoning({
+			type: "object",
+			properties: { path: { type: "string" } },
+			required: ["path"],
+		});
+
+		expect(Object.keys(schema.properties)).toEqual(["reasoning", "path"]);
+		expect(schema.required).toEqual(["reasoning", "path"]);
+		expect(schema.properties.reasoning.description).toBe(REASONING_DESCRIPTION);
+		expect(REASONING_DESCRIPTION.length).toBeLessThanOrEqual(100);
+	});
+});
 
 describe("buildToolBlock bash summaries", () => {
 	test("keeps failed command output out of the headline", () => {

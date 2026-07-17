@@ -355,7 +355,6 @@ export default function bash(pi: ExtensionAPI) {
 		parameters: terminalEnabled ? withTerminalParameters(bashTool.parameters) : withReasoning(bashTool.parameters),
 		promptGuidelines: [
 			...(bashTool.promptGuidelines ?? []),
-			'Always pass a "reasoning" phrase to bash: state the GOAL/intent, not the command.',
 			...(terminalEnabled ? [
 				"Bash automatically yields long-running commands as managed terminals; use terminal_write or job_output with the returned job ID.",
 				"Set bash tty=true for interactive prompts, REPLs, watch processes, or control characters such as Ctrl+C.",
