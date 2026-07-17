@@ -15,15 +15,16 @@ import type {
 } from "./types";
 
 const CIRCUIT_MS = 60_000;
+const DEFAULT_PROVIDER_ORDER: WebProvider[] = ["exa", "firecrawl", "mistral"];
 const circuits = new Map<string, number>();
 
-function truthy(value: string | undefined): boolean {
-	return /^(?:1|true|yes|on)$/i.test(value?.trim() ?? "");
+function normalizedProvider(value: string | undefined): WebProvider | undefined {
+	const normalized = value?.trim().toLowerCase();
+	return normalized === "exa" || normalized === "firecrawl" || normalized === "mistral" ? normalized : undefined;
 }
 
 function configuredProvider(name: string): WebProvider | undefined {
-	const value = process.env[name]?.trim().toLowerCase();
-	return value === "exa" || value === "firecrawl" || value === "mistral" ? value : undefined;
+	return normalizedProvider(process.env[name]);
 }
 
 function available(provider: WebProvider): boolean {
@@ -32,10 +33,10 @@ function available(provider: WebProvider): boolean {
 	return true;
 }
 
-function ordered(defaults: WebProvider[], overrideName: string): WebProvider[] {
+function ordered(overrideName: string, preferredProvider?: string): WebProvider[] {
+	const preferred = normalizedProvider(preferredProvider);
 	const override = configuredProvider(overrideName);
-	const values = override ? [override, ...defaults] : defaults;
-	return [...new Set(values)].filter(available);
+	return [...new Set([preferred, override, ...DEFAULT_PROVIDER_ORDER].filter((provider): provider is WebProvider => Boolean(provider)))].filter(available);
 }
 
 function circuitKey(operation: string, provider: WebProvider): string {
@@ -112,27 +113,21 @@ export async function routeSearch<T extends WebSearchResult | NewsSearchResult>(
 	throw new WebProviderError(failureMessage(operation === "web_search" ? "Web search" : "News search", attempts));
 }
 
-export function webProviderOrder(): WebProvider[] {
-	return ordered(["exa", "mistral", "firecrawl"], "PI_WEB_SEARCH_PROVIDER");
+export function webProviderOrder(preferredProvider?: string): WebProvider[] {
+	return ordered("PI_WEB_SEARCH_PROVIDER", preferredProvider);
 }
 
-export function newsProviderOrder(): WebProvider[] {
-	const defaults: WebProvider[] = ["exa", "firecrawl"];
-	if (truthy(process.env.PI_WEB_SEARCH_ENABLE_MISTRAL_NEWS)) defaults.push("mistral");
-	return ordered(defaults, "PI_WEB_NEWS_PROVIDER");
+export function newsProviderOrder(preferredProvider?: string): WebProvider[] {
+	return ordered("PI_WEB_NEWS_PROVIDER", preferredProvider);
 }
 
-export function openProviderOrder(url: string): WebProvider[] {
+export function openProviderOrder(url: string, preferredProvider?: string): WebProvider[] {
 	if (!/^https?:\/\//i.test(url)) return hasMistralAccess() ? ["mistral"] : [];
-	const pdf = /\.pdf(?:$|[?#])/i.test(url);
-	const defaults: WebProvider[] = pdf ? ["exa", "mistral"] : ["exa", "firecrawl", "mistral"];
-	const providers = ordered(defaults, "PI_WEB_OPEN_PROVIDER");
-	if (pdf && !truthy(process.env.PI_WEB_ALLOW_FIRECRAWL_PDF)) return providers.filter((provider) => provider !== "firecrawl");
-	return providers;
+	return ordered("PI_WEB_OPEN_PROVIDER", preferredProvider);
 }
 
 export async function searchWeb(args: WebSearchArgs, options: ProviderOptions = {}): Promise<WebSearchResult> {
-	return routeSearch("web_search", webProviderOrder(), (provider) => {
+	return routeSearch("web_search", webProviderOrder(args.provider), (provider) => {
 		if (provider === "exa") return searchExaWeb(args, options);
 		if (provider === "firecrawl") return searchFirecrawlWeb(args, options);
 		return searchMistralWeb(args, options);
@@ -140,15 +135,15 @@ export async function searchWeb(args: WebSearchArgs, options: ProviderOptions = 
 }
 
 export async function searchNews(args: NewsSearchArgs, options: ProviderOptions = {}): Promise<NewsSearchResult> {
-	return routeSearch("news_search", newsProviderOrder(), (provider) => {
+	return routeSearch("news_search", newsProviderOrder(args.provider), (provider) => {
 		if (provider === "exa") return searchExaNews(args, options);
 		if (provider === "firecrawl") return searchFirecrawlNews(args, options);
 		return searchMistralNews(args, options);
 	});
 }
 
-export async function openUrl(url: string, options: ProviderOptions = {}): Promise<OpenUrlResult> {
-	const providers = openProviderOrder(url.trim());
+export async function openUrl(url: string, options: ProviderOptions = {}, preferredProvider?: string): Promise<OpenUrlResult> {
+	const providers = openProviderOrder(url.trim(), preferredProvider);
 	const started = performance.now();
 	const attempts: ProviderAttempt[] = [];
 	for (const provider of providers) {
@@ -192,7 +187,6 @@ export function webStatus() {
 			web: webProviderOrder(),
 			news: newsProviderOrder(),
 			open: openProviderOrder("https://example.com"),
-			pdf: openProviderOrder("https://example.com/file.pdf"),
 		},
 		circuits: [...circuits.entries()].filter(([, until]) => until > now).map(([key, until]) => ({ key, retryInMs: until - now })),
 	};
