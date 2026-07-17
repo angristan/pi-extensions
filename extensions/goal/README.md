@@ -64,11 +64,13 @@ the objective and requires an evidence audit before completion.
 ## Commands
 
 - `/goal` — show the current goal
-- `/goal set <objective>` — set or update the objective (auto-kicks the loop)
+- `/goal <objective>` — set or update the objective (auto-kicks the loop)
 - `/goal edit` — edit the goal document interactively
 - `/goal pause` / `/goal resume` — pause/resume the loop
 - `/goal complete` — manually mark the goal done
 - `/goal clear` — drop the goal
+
+Usage: `/goal [<objective>|clear|edit|pause|resume|complete]`
 
 ## Goal document format
 
