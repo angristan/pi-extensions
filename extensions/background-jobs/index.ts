@@ -339,9 +339,10 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	let agentRunning = false;
 
 	const activeJobs = () => [...jobs.values()].filter(isActive);
+	const activeBackgroundJobs = () => activeJobs().filter((job) => job.backgrounded);
 	const updateStatus = () => {
 		if (!activeCtx) return;
-		const count = activeJobs().length;
+		const count = activeBackgroundJobs().length;
 		activeCtx.ui.setStatus(STATUS_KEY, count > 0 ? `${count} background job${count === 1 ? "" : "s"} running · /jobs to view` : undefined);
 	};
 	const emitActivity = (job: ManagedJob) => {
@@ -633,7 +634,13 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		job.activityListeners.add(update);
 		try { await waitForYield(job, yieldMs, signal); } finally { job.activityListeners.delete(update); }
 		const yielded = isActive(job);
-		if (yielded) job.backgrounded = true;
+		if (yielded) {
+			// Until the initial yield window expires, this is still foreground tool
+			// execution. Only advertise footer state once the agent can move on and
+			// the terminal is genuinely managed in the background.
+			job.backgrounded = true;
+			updateStatus();
+		}
 		const { read, details } = readDelta(job, initialCursor, true);
 		const prefix = yielded ? `Terminal ${job.id} is still running. Use terminal_write or job_output with job_id=${job.id}.\n` : "";
 		return { content: [{ type: "text", text: `${prefix}${formatDeltaText(job, read)}` }], details };
