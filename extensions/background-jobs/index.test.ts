@@ -419,6 +419,49 @@ describe("terminal tools", () => {
 		component.dispose?.();
 	});
 
+	test("redraws running cards only when output or status changes", async () => {
+		const harness = createHarness();
+		await startHarness(harness);
+		const tool = harness.tools.get("bash");
+		const args = {
+			command: "sleep 1; printf 'changed\\n'; sleep 1",
+			reasoning: "test change-driven redraws",
+			"yield-time_ms": 250,
+		};
+		const started = await tool.execute("start", args, undefined, undefined, harness.ctx);
+		const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+		let invalidations = 0;
+		const component = tool.renderResult(started, { expanded: false }, theme, {
+			state: {},
+			args,
+			cwd: harness.ctx.cwd,
+			invalidate() { invalidations += 1; },
+		});
+		component.render(120);
+
+		// The first poll sees the same active status and output cursor.
+		await Bun.sleep(600);
+		expect(invalidations).toBe(0);
+
+		// New output advances the cursor and requests exactly one redraw.
+		await Bun.sleep(700);
+		expect(invalidations).toBe(1);
+
+		await harness.tools.get("job_output").execute("wait", {
+			job_id: started.details.id,
+			wait: true,
+		});
+		await Bun.sleep(600);
+		expect(invalidations).toBe(2);
+
+		// Reaching a terminal status stops the poller permanently.
+		const settledInvalidations = invalidations;
+		await Bun.sleep(700);
+		expect(invalidations).toBe(settledInvalidations);
+		component.dispose?.();
+		await shutdownHarness(harness);
+	});
+
 	test("keeps tool output below Pi's 50KB limit", async () => {
 		const harness = createHarness();
 		await startHarness(harness);

@@ -74,6 +74,7 @@ duplicate transcript entry.
 ## Output and lifecycle guarantees
 
 - Polls return cursor-based deltas rather than repeating old output.
+- Live command cards request a TUI redraw only when output or process status changes; idle background processes do not continuously disturb terminal scrollback.
 - Tool output remains below Pi's 50KB limit.
 - Full UI output retains bounded head and tail sections for diagnostics.
 - Session shutdown waits for SIGTERM/SIGKILL escalation.

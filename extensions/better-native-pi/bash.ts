@@ -213,6 +213,7 @@ class ManagedCommandComponent {
 	private timer?: ReturnType<typeof setInterval>;
 	private fallback: any;
 	private expanded: boolean;
+	private lastRevision = "";
 	// Width-keyed render cache, mirroring CommandComponent above. Without this,
 	// every render tick re-runs sanitizeTerminalOutput (regex), wrapTextWithAnsi
 	// (ICU grapheme segmentation), and visibleWidth across every line — for
@@ -252,11 +253,38 @@ class ManagedCommandComponent {
 		);
 	}
 
+	private revision(details: any): string {
+		return [
+			details.status,
+			details.outputCursor,
+			details.endedAt,
+			details.exitCode,
+			details.signal,
+			details.stdoutOmittedBytes,
+			details.stderrOmittedBytes,
+		].join(":");
+	}
+
+	private poll(): void {
+		const view = this.view();
+		const revision = this.revision(view.details);
+		const changed = revision !== this.lastRevision;
+		this.lastRevision = revision;
+		const active = view.details.status === "running" || view.details.status === "stopping";
+		if (!active) this.dispose();
+		if (!changed) return;
+		this.invalidate();
+		this.requestRender();
+	}
+
 	private syncTimer(): void {
-		const status = this.view().details.status;
-		const active = status === "running" || status === "stopping";
+		const view = this.view();
+		this.lastRevision = this.revision(view.details);
+		const active = view.details.status === "running" || view.details.status === "stopping";
 		if (active && !this.timer) {
-			this.timer = setInterval(() => this.requestRender(), 500);
+			// Polling keeps yielded command cards live, but unchanged jobs must not
+			// redraw the entire transcript and disrupt terminal scrollback.
+			this.timer = setInterval(() => this.poll(), 500);
 			this.timer.unref?.();
 		} else if (!active) this.dispose();
 	}
