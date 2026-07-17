@@ -1162,13 +1162,9 @@ export default function (pi: ExtensionAPI) {
 			if (!state) return inactiveGoalToolResult("no-goal");
 			if (state.status !== "active") return inactiveGoalToolResult(`goal-${state.status}`);
 			setStatus("complete", ctx);
-			// Surface how long/how much the goal took now that the overlay card
-			// hides on completion; the completion block becomes the persistent record.
+			// The completion block is the sole tool-path completion surface and
+			// persists these lifetime stats after the overlay hides.
 			const stats = completionStats(ctx, state);
-			ctx.ui.notify(
-				`Goal complete: ${params.summary ?? state.objective}\n${formatCompletionStats(stats, ctx.ui.theme)}`,
-				"info",
-			);
 			return {
 				content: [{ type: "text", text: `Goal marked complete.\nObjective: ${state.objective}${params.summary ? `\nSummary: ${params.summary}` : ""}` }],
 				details: { ok: true, completion: stats },

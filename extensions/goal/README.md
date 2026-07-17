@@ -114,8 +114,9 @@ All sections except `# Goal` are optional.
 - **`goal_complete`** — active only while a `/goal` is active; marks the goal
   complete and accepts an optional `summary`. The completion block also shows
   the goal's lifetime stats (active time, continuations, criteria, and token
-  usage), since the overlay card hides once the goal is complete. `/goal
-  complete` surfaces the same stats via a notification.
+  usage), since the overlay card hides once the goal is complete. This block is
+  the sole completion feedback for tool-driven completion; manual `/goal
+  complete` surfaces the same stats once via a notification.
 - **`goal_block`** — active only while a `/goal` is active; records a blocker.
   Optional fields can describe the blocker, attempted work, supporting detail,
   and next input; marks the goal `blocked` only after the same blocker repeats

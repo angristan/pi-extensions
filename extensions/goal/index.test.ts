@@ -327,11 +327,13 @@ function renderBlock(component: any, width = 80): string[] {
 	return component.render(width);
 }
 
-test("goal_complete renders a compact completed block and hides stale calls", async () => {
+test("goal_complete renders one compact completed block and hides stale calls", async () => {
 	const h = makeHarness();
 	await h.commands.goal.handler("reduce p95 latency below 120ms", h.ctx);
+	const notificationsBeforeCompletion = h.notifications.length;
 
 	const result = await h.tools.goal_complete.execute("call", { summary: "shipped the fix" }, undefined, undefined, h.ctx);
+	expect(h.notifications).toHaveLength(notificationsBeforeCompletion);
 	expect(result.details.completion).toBeDefined();
 	expect(result.details.completion.activeTimeMs).toBeGreaterThanOrEqual(0);
 	expect(result.details.completion.validationCount).toBe(0);
