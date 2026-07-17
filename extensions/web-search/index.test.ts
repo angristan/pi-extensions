@@ -109,7 +109,7 @@ describe("web search renderer", () => {
 		expect(render(webSearch, toolResult, { query: "Kimi pricing", startDate: "2026-04-01", endDate: "2026-04-30" })).toMatchSnapshot();
 	});
 
-	test("wraps complete snippets to the available width", () => {
+	test("caps wrapped snippets at two lines on a word boundary", () => {
 		const evidence = "A static site is HTML, CSS, and JavaScript that a server hands to a browser without rendering anything per request. No database query, no partial text.";
 		const toolResult = createSearchToolResult({
 			provider: "exa",
@@ -121,9 +121,9 @@ describe("web search renderer", () => {
 		});
 		const lines = render(webSearch, toolResult, { query: "static sites" }, { width: 48 });
 		const evidenceLines = lines.filter((line) => line.startsWith("       <dim>"));
-		expect(evidenceLines.length).toBeGreaterThan(1);
-		expect(evidenceLines.join(" ")).not.toContain("…");
-		expect(evidenceLines.join(" ")).toContain("database query");
+		expect(evidenceLines).toHaveLength(2);
+		expect(evidenceLines[1]).toEndWith("JavaScript that a server hands to a…</dim>");
+		expect(evidenceLines.join(" ")).not.toContain("database query");
 	});
 
 	test("compacts timestamps and omits unavailable dates", () => {

@@ -114,6 +114,21 @@ function compactError(text: string, fallback: string): string {
 	return truncateToWidth(normalized || fallback, 160, "…");
 }
 
+function ellipsizeAtWordBoundary(line: string, width: number): string {
+	const available = Math.max(1, width - visibleWidth("…"));
+	if (visibleWidth(line) <= available) return `${line}…`;
+	const words = line.trimEnd().split(/\s+/);
+	while (words.length > 1 && visibleWidth(words.join(" ")) > available) words.pop();
+	const body = words.join(" ");
+	return `${visibleWidth(body) <= available ? body : truncateToWidth(body, available, "")}…`;
+}
+
+function wrapEvidence(text: string, width: number): string[] {
+	const rows = wrapTextWithAnsi(text.replace(/\s+/g, " ").trim(), Math.max(1, width));
+	if (rows.length <= 2) return rows;
+	return [rows[0]!, ellipsizeAtWordBoundary(rows[1]!, width)];
+}
+
 function sourceLabel(result: SearchDisplayItem): string {
 	const label = result.title || result.url || "untitled";
 	return truncateToWidth(sanitizeSearchText(label, 600), 110, "…");
@@ -284,7 +299,7 @@ function renderSearchResult(
 		for (const [index, item] of shownResults.entries()) {
 			const label = sourceLabel(item);
 			const url = resultUrl(item);
-			const rendered = url ? hyperlink(theme.fg("mdLink", label), url) : theme.fg("toolOutput", label);
+			const rendered = url ? hyperlink(theme.fg("text", label), url) : theme.fg("text", label);
 			const website = resultWebsite(item);
 			const itemSearchEngine = resultSearchEngine(item);
 			const itemDate = formatDisplayDate(item.date);
@@ -292,14 +307,14 @@ function renderSearchResult(
 			const meta = [
 				website ? theme.fg("accent", website) : undefined,
 				via ? theme.fg("muted", via) : undefined,
-				itemDate ? theme.fg("syntaxNumber", itemDate) : undefined,
+				itemDate ? theme.fg("accent", itemDate) : undefined,
 			].filter(Boolean).join(theme.fg("dim", " · "));
 			lines.push(`${INDENT}${theme.fg("syntaxNumber", `${index + 1}.`)} ${rendered}${meta ? ` ${theme.fg("dim", "—")} ${meta}` : ""}`);
 			const evidence = item.snippets?.[0] ?? item.description;
 			if (evidence) {
 				const prefix = `${INDENT}   `;
 				const contentWidth = Math.max(1, width - visibleWidth(prefix));
-				for (const row of wrapTextWithAnsi(evidence.replace(/\s+/g, " ").trim(), contentWidth)) {
+				for (const row of wrapEvidence(evidence, contentWidth)) {
 					lines.push(`${prefix}${theme.fg("dim", row)}`);
 				}
 			}
