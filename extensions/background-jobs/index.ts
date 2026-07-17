@@ -29,9 +29,17 @@ const PARTIAL_OUTPUT_BYTES = 4 * 1024;
 const PERSISTED_OUTPUT_BYTES = 8 * 1024;
 const KILL_GRACE_MS = 5_000;
 const MAX_TIMEOUT_SECONDS = 24 * 60 * 60;
+// A 10s hard kill is applied when the model omits `timeout`, so a stuck
+// process can never hang a session indefinitely. The model raises `timeout`
+// for genuinely long work.
+const DEFAULT_TIMEOUT_SECONDS = 10;
 const DEFAULT_YIELD_MS = 10_000;
 const DEFAULT_POLL_MS = 5_000;
 const MAX_POLL_MS = 5 * 60 * 1_000;
+// `wait: true` becomes a bounded completion-poll rather than an infinite block.
+// Cap it at MAX_POLL_MS so a stuck process still returns control to the model,
+// which can then re-poll or kill. No kill happens here — this is a soft wait.
+const DEFAULT_WAIT_COMPLETION_MS = MAX_POLL_MS;
 const INTERACTION_REASONING_DESCRIPTION = "Short phrase stating the goal behind this terminal interaction, not the mechanics or command";
 
 export type JobStatus = "running" | "stopping" | "completed" | "failed" | "killed" | "timed_out";
@@ -441,8 +449,8 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		if (activeJobs().length >= MAX_CONCURRENT_JOBS) throw new Error(`At most ${MAX_CONCURRENT_JOBS} background jobs may run at once`);
 		const command = params.command.trim();
 		if (!command) throw new Error("Background command must not be empty");
-		const timeoutSeconds = params.timeoutSeconds;
-		if (timeoutSeconds !== undefined && (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > MAX_TIMEOUT_SECONDS)) {
+		const timeoutSeconds = params.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS;
+		if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > MAX_TIMEOUT_SECONDS) {
 			throw new Error(`timeoutSeconds must be an integer between 1 and ${MAX_TIMEOUT_SECONDS}`);
 		}
 		if (params.tty && !isPtySupported()) throw new Error("PTY mode is unavailable on this platform");
@@ -504,27 +512,30 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			}
 			finalize(job, code, signal);
 		});
-		if (timeoutSeconds !== undefined) {
-			job.timeout = setTimeout(() => requestKill(job, "timeout"), timeoutSeconds * 1000);
-			job.timeout.unref?.();
-		}
+		job.timeout = setTimeout(() => requestKill(job, "timeout"), timeoutSeconds * 1000);
+		job.timeout.unref?.();
 		updateStatus();
 		return job;
 	};
-	const waitForCompletion = async (job: ManagedJob, signal?: AbortSignal) => {
-		if (!isActive(job)) return;
-		if (!signal) return job.completion;
+	const waitForCompletion = async (job: ManagedJob, signal: AbortSignal | undefined, waitMs = DEFAULT_WAIT_COMPLETION_MS) => {
+		// Never block unboundedly: wait for completion OR a soft deadline,
+		// whichever comes first, then return so the model can re-decide
+		// (re-poll / kill / move on). The process is NOT killed here —
+		// killing is the job's hard-timeout responsibility.
+		if (!isActive(job) || waitMs <= 0) return;
+		if (signal?.aborted) return;
 		await new Promise<void>((resolvePromise) => {
 			let settled = false;
 			const finish = () => {
 				if (settled) return;
 				settled = true;
-				signal.removeEventListener("abort", finish);
+				if (deadline) clearTimeout(deadline);
+				signal?.removeEventListener("abort", finish);
 				resolvePromise();
 			};
+			const deadline = setTimeout(finish, waitMs);
 			job.completion.then(finish);
-			if (signal.aborted) finish();
-			else signal.addEventListener("abort", finish, { once: true });
+			signal?.addEventListener("abort", finish, { once: true });
 		});
 	};
 	const waitForActivity = async (job: ManagedJob, cursor: number, waitMs: number, signal?: AbortSignal) => {
@@ -659,7 +670,20 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 					output: job.output.read(0, maxOutputBytes).text,
 				};
 			}
-			const details = fallback ?? {};
+			// Fallback path: the job is not in the live map. This happens for
+			// completed jobs evicted past MAX_RETAINED_JOBS, and — critically —
+			// for persisted cards whose status is still `running`/`stopping`.
+			// session_start intentionally skips restoring active jobs (their
+			// process died with the previous session), so such an id can never
+			// reappear here. Returning the stale active status verbatim makes
+			// better-native-pi's bash card spin its 500ms render timer forever
+			// (no live process will ever flip it to terminal), which re-renders
+			// the whole transcript every 500ms and yanks scroll back to the
+			// bottom. Coerce to a terminal status so the card settles.
+			const fallbackDetails = fallback ?? {};
+			const staleActive =
+				fallbackDetails.status === "running" || fallbackDetails.status === "stopping";
+			const details = staleActive ? { ...fallbackDetails, status: "killed" } : fallbackDetails;
 			return {
 				details,
 				output: details.output ?? [details.stdout, details.stderr].filter(Boolean).join("\n"),
@@ -682,8 +706,8 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 				reasoning: { type: "string", description: INTERACTION_REASONING_DESCRIPTION },
 				job_id: { type: "string", description: "Full terminal ID or an unambiguous prefix" },
 				cursor: { type: "integer", minimum: 0, description: "Optional output cursor; defaults to this tool's last read position" },
-				waitMs: { type: "integer", minimum: 0, maximum: MAX_POLL_MS, description: "Wait this many milliseconds for new output" },
-				wait: { type: "boolean", description: "Compatibility option: wait until the terminal finishes", default: false },
+				waitMs: { type: "integer", minimum: 0, maximum: MAX_POLL_MS, description: `Wait this many milliseconds for new output. Also caps wait:true. Defaults to 0 (instant) for read polls, ${DEFAULT_WAIT_COMPLETION_MS} ms for wait:true.` },
+				wait: { type: "boolean", description: "Wait for the terminal to finish, bounded by waitMs (no kill; returns 'still running' if not done).", default: false },
 			},
 			required: ["reasoning", "job_id"],
 		} as any,
@@ -697,7 +721,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			if (!Number.isInteger(cursor) || cursor < 0) throw new Error("cursor must be a non-negative integer");
 			const waitMs = params.waitMs ?? 0;
 			if (!Number.isInteger(waitMs) || waitMs < 0 || waitMs > MAX_POLL_MS) throw new Error(`waitMs must be an integer between 0 and ${MAX_POLL_MS}`);
-			if (params.wait) await waitForCompletion(job, signal);
+			if (params.wait) await waitForCompletion(job, signal, params.waitMs ?? DEFAULT_WAIT_COMPLETION_MS);
 			else await waitForActivity(job, cursor, waitMs, signal);
 			const { read, details } = readDelta(job, cursor, !explicitCursor);
 			return { content: [{ type: "text", text: formatDeltaText(job, read) }], details };
