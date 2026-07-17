@@ -52,6 +52,13 @@ normal fallback route continues.
 Use `/web-status` to inspect effective routes, keyed availability, and providers
 temporarily paused after rate limiting. Credential values are never shown.
 
+## Fetch policy
+
+After search discovery, use local `ax` for readable page fetches. Use `curl` for
+protocol-level HTTP diagnostics such as headers, redirects, TLS, auth,
+robots/sitemaps, or API reproduction. Use `open_url` only as a remote fallback
+when local content retrieval is unavailable, blocked, or produces poor content.
+
 ## Results
 
 Agent-facing content and human-facing display details are bounded separately.

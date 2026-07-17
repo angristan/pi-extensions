@@ -364,6 +364,7 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 		promptGuidelines: [
 			"Use web_search to discover current or potentially changed web information; it returns structured results, not a final answer.",
 			"Prefer official or primary-source results from web_search. Inspect important pages with local content tools like `ax`; use open_url only when local retrieval is unavailable or fails.",
+			"Use `curl` via bash for protocol-level HTTP diagnostics such as headers, redirects, TLS, auth, robots/sitemaps, or API reproduction; use `ax`/open_url for readable page content.",
 			"Leave web_search provider unset unless the user asks for a provider-specific retry or a previous provider produced poor results.",
 			"Do not use web_search for local codebase search; use grep/read/ls/find for local files.",
 		],
@@ -385,6 +386,7 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 		promptGuidelines: [
 			"Use news_search for recent events, journalism, or date-bounded news queries; it returns structured results, not a final answer.",
 			"When news_search returns a URL that matters, inspect it with local content tools like `ax`; use open_url only when local retrieval is unavailable or fails.",
+			"Use `curl` via bash for protocol-level HTTP diagnostics such as headers, redirects, TLS, auth, robots/sitemaps, or API reproduction; use `ax`/open_url for readable page content.",
 			"Leave news_search provider unset unless the user asks for a provider-specific retry or a previous provider produced poor results.",
 		],
 		parameters: newsSearchSchema,
@@ -404,6 +406,7 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 		promptSnippet: "Fallback opener for a URL when local content retrieval with tools like `ax` fails",
 		promptGuidelines: [
 			"Use open_url only as a fallback when local content retrieval with tools like `ax` is unavailable, blocked, or fails.",
+			"Use `curl` via bash instead of open_url when the task is protocol-level HTTP diagnostics rather than content extraction.",
 			"Leave open_url provider unset unless the user asks for a provider-specific retry or a previous provider produced poor content.",
 			"Cite URLs from open_url or search results when making claims based on web content.",
 		],
