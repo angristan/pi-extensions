@@ -39,6 +39,11 @@ the box spans the full available transcript width.
 `Ctrl+O` (`app.tools.expand`) reveals full commands, raw output, or full written
 content without duplicating an already-shown diff.
 
+Exploration groups wait until a tool actually starts executing before rendering
+live rows. This avoids flashing streamed JSON fragments such as half-written
+paths and prevents provisional provider tool-call updates from appearing as
+brief duplicate `Exploring` blocks.
+
 ## Layout
 
 ```

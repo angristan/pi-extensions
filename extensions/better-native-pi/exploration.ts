@@ -558,6 +558,15 @@ export function renderExplorationCall(
 	if (!isExplorationTool(toolName) || !registry().rendererEnabled || !context?.isPartial) return undefined;
 	const toolCallId = context.toolCallId as string | undefined;
 	if (!toolCallId) return undefined;
+
+	// Tool arguments arrive as partial JSON while the model is still streaming.
+	// Rendering the exploration group at that point can briefly expose path
+	// fragments such as `.../github.com/ang` and, when the provider rewrites a
+	// provisional tool call into the final one, duplicate live exploration rows.
+	// Wait until Pi has actually started executing the tool; that event carries
+	// the finalized arguments and only fires for the call that will run.
+	if (!context.executionStarted) return new Container();
+
 	const group = ensureLiveCall(toolCallId, toolName, args);
 	if (!group) return undefined;
 	return group.leaderId === toolCallId ? leaderComponent(group, theme, context) : new Container();
