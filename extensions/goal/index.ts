@@ -224,20 +224,6 @@ export function renderGoalOverlayBody(
 	const objectiveBudget = Math.max(1, Math.min(GOAL_OVERLAY_OBJECTIVE_ROWS, rowBudget - reserveRows));
 	const rows = objectiveRows.slice(0, objectiveBudget);
 
-	const meta = [
-		`${formatDuration(state.elapsedMs)} active`,
-		`${state.continuations} ${pluralize(state.continuations, "continuation")}`,
-	];
-	if (state.validation.length) {
-		meta.push(`${state.validation.length} validation ${pluralize(state.validation.length, "check")}`);
-	}
-	rows.push(theme.fg("dim", meta.join(" · ")));
-
-	if (state.status === "blocked" && state.blockedAudit && rows.length < rowBudget - 1) {
-		const blockerRows = wrapTextWithAnsi(`${theme.fg("dim", "Blocked")}  ${state.blockedAudit.blocker}`, contentWidth);
-		rows.push(...blockerRows.slice(0, Math.max(0, rowBudget - rows.length - 1)));
-	}
-
 	const omittedDetails =
 		objectiveRows.length > objectiveBudget
 		|| state.validation.length > 0
@@ -250,6 +236,20 @@ export function renderGoalOverlayBody(
 		const hint = theme.fg("dim", `… ${hiddenRows} more ${pluralize(hiddenRows, "row")}; /goal-status for full`);
 		if (rows.length < rowBudget) rows.push(hint);
 		else rows[rows.length - 1] = hint;
+	}
+
+	const meta = [
+		`${formatDuration(state.elapsedMs)} active time`,
+		`${state.continuations} ${pluralize(state.continuations, "continuation")}`,
+	];
+	if (state.validation.length) {
+		meta.push(`${state.validation.length} validation ${pluralize(state.validation.length, "check")}`);
+	}
+	if (rows.length < rowBudget) rows.push(theme.fg("dim", meta.join(" · ")));
+
+	if (state.status === "blocked" && state.blockedAudit && rows.length < rowBudget) {
+		const blockerRows = wrapTextWithAnsi(`${theme.fg("dim", "Blocked")}  ${state.blockedAudit.blocker}`, contentWidth);
+		rows.push(...blockerRows.slice(0, Math.max(0, rowBudget - rows.length)));
 	}
 
 	return rows.slice(0, rowBudget).map((line) => truncateToWidth(line, contentWidth, "…"));

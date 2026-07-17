@@ -108,8 +108,8 @@ compact overlay card so it does not crowd out live plan/edit widgets:
 ```
 ╭ Goal active ─────────────────────────────╮
 Reduce p95 checkout latency below 120ms
-2m 14s active · 4 continuations · 2 validation checks
 … 4 more rows; /goal-status for full
+2m 14s active time · 4 continuations · 2 validation checks
 ╰──────────────────────────────────────────╯
 ```
 
