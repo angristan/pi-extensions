@@ -5,7 +5,7 @@ a single non-capturing Pi overlay.
 
 Feature extensions register titled sections with an order, preferred width,
 visibility predicate, and body renderer. The stack owns consistent accent frames,
-spacing, shared sizing, and overlay lifecycle. Press `F6` or run `/overlay` to
+spacing, shared sizing, and overlay lifecycle. Press `Ctrl+Shift+O` or run `/overlay` to
 hide or show the whole stack. Manual visibility resets when extensions reload or
 a new session starts.
 
