@@ -179,7 +179,18 @@ function statusColor(status: GoalStatus): "success" | "warning" | "muted" | "err
 	return status === "active" ? "success" : status === "paused" ? "warning" : status === "blocked" ? "error" : "muted";
 }
 
-function goalLines(state: GoalDisplayState, theme: any): string[] {
+const GOAL_OVERLAY_MAX_ROWS = 6;
+const GOAL_OVERLAY_OBJECTIVE_ROWS = 2;
+
+function pluralize(count: number, singular: string, plural = `${singular}s`): string {
+	return count === 1 ? singular : plural;
+}
+
+function compactWhitespace(text: string): string {
+	return text.trim().replace(/\s+/g, " ");
+}
+
+function fullGoalLines(state: GoalDisplayState, theme: any): string[] {
 	const lines = [
 		...state.objective.split("\n"),
 		"",
@@ -194,8 +205,54 @@ function goalLines(state: GoalDisplayState, theme: any): string[] {
 		lines.push("", theme.fg("accent", theme.bold("Validation")));
 		for (const item of state.validation) lines.push(`  ○ ${item}`);
 	}
-	lines.push("", theme.fg("dim", "/goal [<objective>|clear|edit|pause|resume|block]"));
+	lines.push("", theme.fg("dim", "/goal [<objective>|clear|edit|pause|resume|block|complete] · /goal-status"));
 	return lines;
+}
+
+export function renderGoalOverlayBody(
+	state: GoalDisplayState,
+	width: number,
+	maxHeight: number,
+	theme: any,
+): string[] {
+	const contentWidth = Math.max(1, width);
+	const rowBudget = Math.max(0, Math.min(maxHeight, GOAL_OVERLAY_MAX_ROWS));
+	if (rowBudget === 0) return [];
+
+	const objectiveRows = wrapTextWithAnsi(compactWhitespace(state.objective) || "(no objective)", contentWidth);
+	const reserveRows = state.status === "blocked" && state.blockedAudit ? 3 : 2;
+	const objectiveBudget = Math.max(1, Math.min(GOAL_OVERLAY_OBJECTIVE_ROWS, rowBudget - reserveRows));
+	const rows = objectiveRows.slice(0, objectiveBudget);
+
+	const meta = [
+		`${formatDuration(state.elapsedMs)} active`,
+		`${state.continuations} ${pluralize(state.continuations, "continuation")}`,
+	];
+	if (state.validation.length) {
+		meta.push(`${state.validation.length} validation ${pluralize(state.validation.length, "check")}`);
+	}
+	rows.push(theme.fg("dim", meta.join(" · ")));
+
+	if (state.status === "blocked" && state.blockedAudit && rows.length < rowBudget - 1) {
+		const blockerRows = wrapTextWithAnsi(`${theme.fg("dim", "Blocked")}  ${state.blockedAudit.blocker}`, contentWidth);
+		rows.push(...blockerRows.slice(0, Math.max(0, rowBudget - rows.length - 1)));
+	}
+
+	const omittedDetails =
+		objectiveRows.length > objectiveBudget
+		|| state.validation.length > 0
+		|| Boolean(state.status === "blocked" && state.blockedAudit?.nextInput);
+	if (omittedDetails) {
+		const visibleFullRows = fullGoalLines(state, theme)
+			.flatMap((source) => source ? wrapTextWithAnsi(source, contentWidth) : [""])
+			.length;
+		const hiddenRows = Math.max(1, visibleFullRows - rows.length);
+		const hint = theme.fg("dim", `… ${hiddenRows} more ${pluralize(hiddenRows, "row")}; /goal-status for full`);
+		if (rows.length < rowBudget) rows.push(hint);
+		else rows[rows.length - 1] = hint;
+	}
+
+	return rows.slice(0, rowBudget).map((line) => truncateToWidth(line, contentWidth, "…"));
 }
 
 
@@ -236,14 +293,9 @@ export default function (pi: ExtensionAPI) {
 		},
 		renderBody: (width: number, maxHeight: number, theme: any) => {
 			if (!state) return [];
-			const displayed = displayState(state);
-			const lines: string[] = [];
-			for (const source of goalLines(displayed, theme)) {
-				if (!source) { lines.push(""); continue; }
-				lines.push(...wrapTextWithAnsi(source, Math.max(1, width)));
-			}
-			// Size to content — do NOT pad to maxHeight, or the card balloons.
-			return lines.map((line) => truncateToWidth(line, width, "…"));
+			// Keep the always-on card compact: it is a mission badge, not the
+			// full objective document. `/goal-status` remains the detailed view.
+			return renderGoalOverlayBody(displayState(state), width, maxHeight, theme);
 		},
 	});
 
@@ -337,13 +389,13 @@ export default function (pi: ExtensionAPI) {
 
 	const showGoal = async (ctx: any) => {
 		if (!state) {
-			ctx.ui.notify("Usage: /goal [<objective>|clear|edit|pause|resume|block]\nNo goal is currently set.", "info");
+			ctx.ui.notify("Usage: /goal [<objective>|clear|edit|pause|resume|block|complete]\nNo goal is currently set.", "info");
 			return;
 		}
-		// The always-on overlay card already shows full goal state; /goal just
-		// confirms the status briefly so it doesn't open a redundant modal.
+		// The always-on overlay card is intentionally compact; /goal confirms the
+		// status briefly, while /goal-status shows the full objective document.
 		const displayed = displayState(state);
-		ctx.ui.notify(`${displayed.status}: ${displayed.objective}`, "info");
+		ctx.ui.notify(`${displayed.status}: ${displayed.objective}\n\nUse /goal-status for full details.`, "info");
 	};
 
 	// ------------------------------------------------------------------------
@@ -513,6 +565,17 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.notify("Session goal set. Auto-continuation is active.", "info");
 			// Kick the first continuation turn immediately.
 			maybeContinue(ctx);
+		},
+	});
+
+	pi.registerCommand("goal-status", {
+		description: "Show the full current session goal details",
+		handler: async (_args, ctx) => {
+			if (!state) {
+				ctx.ui.notify("No session goal is currently set.", "info");
+				return;
+			}
+			ctx.ui.notify(fullGoalLines(displayState(state), ctx.ui.theme).join("\n"), "info");
 		},
 	});
 

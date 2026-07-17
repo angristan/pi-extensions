@@ -40,7 +40,7 @@ mock.module("typebox", () => ({
 	},
 }));
 
-const { buildGoalContext, default: goalExtension } = await import("./index");
+const { buildGoalContext, renderGoalOverlayBody, default: goalExtension } = await import("./index");
 
 function makeHarness() {
 	const handlers: Record<string, Array<(event: any, ctx: any) => any>> = {};
@@ -117,6 +117,24 @@ function latestGoalState(harness: ReturnType<typeof makeHarness>) {
 function isContinuation(message: any) {
 	return message?.customType === "goal-continuation";
 }
+
+test("renders the goal overlay as a compact summary", () => {
+	const theme = { bold: (text: string) => text, fg: (_color: string, text: string) => text };
+	const lines = renderGoalOverlayBody({
+		objective: "Continue the vendor-neutral browser capture backend for the capture service while preserving parity with HTTP-only captures across discovery, filtering, assets, retries, lifecycle metadata, observability, and replayable WARC/MCDX output.",
+		validation: ["parity harness passes", "WARC counts match"],
+		status: "active",
+		createdAt: 0,
+		updatedAt: 0,
+		accumulatedActiveMs: 0,
+		continuations: 3,
+		elapsedMs: 125_000,
+	}, 52, 40, theme);
+
+	expect(lines.length).toBeLessThanOrEqual(6);
+	expect(lines.join("\n")).toContain("2m 5s active · 3 continuations · 2 validation checks");
+	expect(lines.at(-1)).toContain("/goal-status for full");
+});
 
 test("wraps goal data as escaped untrusted context", () => {
 	const text = buildGoalContext({

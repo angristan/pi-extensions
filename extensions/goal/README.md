@@ -7,10 +7,11 @@ the agent keeps working toward it until it's done or blocked.
 Blocked status uses three-turn auditing: the same blocker must repeat across at
 least three consecutive goal turns before the goal is marked blocked.
 
-The goal is a short statement plus optional **validation criteria**. The goal is
-surfaced in its own overlay card and injected into the system prompt on every
-turn. Objective and validation text are wrapped as untrusted user-provided data
-before reaching the model.
+The goal is a short statement plus optional **validation criteria**. A compact
+summary is surfaced in its own overlay card, while the full goal is available via
+`/goal-status` and injected into the system prompt on every turn. Objective and
+validation text are wrapped as untrusted user-provided data before reaching the
+model.
 
 ## How the loop works
 
@@ -65,7 +66,7 @@ a requirement-by-requirement completion audit before completion.
 
 ## Commands
 
-- `/goal` — show the current goal
+- `/goal` — show the current goal status briefly
 - `/goal <objective>` — set or update the objective (auto-kicks the loop;
   replacing an active, paused, or blocked goal asks for confirmation)
 - `/goal edit` — edit the goal document interactively; editing a completed goal
@@ -74,6 +75,7 @@ a requirement-by-requirement completion audit before completion.
 - `/goal block` — manually mark the goal blocked
 - `/goal complete` — manually mark the goal done
 - `/goal clear` — drop the goal
+- `/goal-status` — show the full objective, timing, blocker, and validation details
 
 Usage: `/goal [<objective>|clear|edit|pause|resume|block|complete]`
 
@@ -100,21 +102,19 @@ All sections except `# Goal` are optional.
 
 ## How it renders
 
-The `goal` extension stores state and renders the active goal in a dedicated
-overlay card:
+The `goal` extension stores state and renders the active goal in a dedicated,
+compact overlay card so it does not crowd out live plan/edit widgets:
 
 ```
 ╭ Goal active ─────────────────────────────╮
 Reduce p95 checkout latency below 120ms
-
-Active time    2m 14s
-Continuations  4
-
-Validation
-  ○ checkout benchmark p95 < 120ms
-  ○ correctness suite stays green
+2m 14s active · 4 continuations · 2 validation checks
+… 4 more rows; /goal-status for full
 ╰──────────────────────────────────────────╯
 ```
+
+Run `/goal-status` for the full objective, timing, blocker, and validation
+view.
 
 Status colors: `● active` (green), `◐ paused` (yellow), `blocked` (red),
 `complete` (dim).

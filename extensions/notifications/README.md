@@ -14,6 +14,10 @@ Only fires when the terminal is **unfocused** (detected via focus-reporting
 escape sequences on Ghostty/iTerm/Kitty/Warp/WezTerm). Deduplicates identical
 notifications within a 5s window.
 
+When the `goal` extension has an active self-driving goal, routine turn-complete
+bells are suppressed. Notifications still fire for user input requests, explicit
+notification events, and terminal goal states (`complete` / `blocked`).
+
 ## Config
 
 `~/.pi/agent/notifications.json`:

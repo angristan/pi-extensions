@@ -79,6 +79,16 @@ function notify(title: string, body: string) {
 	try { process.stdout.write(seq); } catch { /* terminal not writable */ }
 }
 
+type GoalStatus = "active" | "paused" | "blocked" | "complete";
+
+function isGoalStatus(status: unknown): status is GoalStatus {
+	return status === "active" || status === "paused" || status === "blocked" || status === "complete";
+}
+
+function isTerminalGoalStatus(status: GoalStatus): boolean {
+	return status === "blocked" || status === "complete";
+}
+
 export default function (pi: ExtensionAPI) {
 	let enabled = loadEnabled();
 	let finalResponse = "";
@@ -89,6 +99,9 @@ export default function (pi: ExtensionAPI) {
 	let terminalFocused = true;
 	let focusAware = false;
 	let unsubscribeTerminalInput: (() => void) | undefined;
+	let project = "pi";
+	let goalStatus: GoalStatus | undefined;
+	let goalActiveThisRun = false;
 
 	const notifyIfUnfocused = (title: string, body: string) => {
 		// The bell surfaces as the 🔔 unread-tab marker in Ghostty
@@ -102,6 +115,23 @@ export default function (pi: ExtensionAPI) {
 		const payload = event as { title?: unknown; body?: unknown };
 		if (typeof payload.title !== "string" || typeof payload.body !== "string") return;
 		notifyIfUnfocused(payload.title, payload.body);
+	});
+
+	pi.events.on("goal:changed", (event: unknown) => {
+		const previousStatus = goalStatus;
+		const nextStatus = event && typeof event === "object" && isGoalStatus((event as { status?: unknown }).status)
+			? (event as { status: GoalStatus }).status
+			: undefined;
+		goalStatus = nextStatus;
+		if (nextStatus === "active") goalActiveThisRun = true;
+		if (!enabled || !previousStatus || !nextStatus || previousStatus === nextStatus) return;
+		if (!isTerminalGoalStatus(nextStatus) || isTerminalGoalStatus(previousStatus)) return;
+
+		completionNotifiedRun = runId;
+		const objective = typeof (event as { objective?: unknown }).objective === "string"
+			? preview((event as { objective: string }).objective, 160)
+			: nextStatus === "complete" ? "Goal complete" : "Goal blocked";
+		notifyIfUnfocused(`${project}: goal ${nextStatus}`, objective);
 	});
 
 	pi.registerCommand("notifications", {
@@ -122,6 +152,9 @@ export default function (pi: ExtensionAPI) {
 		runId = 0;
 		completionNotifiedRun = -1;
 		inputNotifiedRun = -1;
+		project = ctx.cwd.split("/").filter(Boolean).pop() || "pi";
+		goalStatus = undefined;
+		goalActiveThisRun = false;
 		terminalFocused = true;
 		focusAware = ctx.mode === "tui" && supportsOsc9Terminal();
 		unsubscribeTerminalInput?.();
@@ -135,6 +168,9 @@ export default function (pi: ExtensionAPI) {
 			});
 			process.stdout.write(ENABLE_FOCUS_REPORTING);
 		}
+		// If the goal extension restored before notifications did, ask it to
+		// re-emit. If it starts later, its own session_start emit will update us.
+		pi.events.emit("goal:request", undefined);
 	});
 	pi.on("session_shutdown", () => {
 		unsubscribeTerminalInput?.();
@@ -149,6 +185,7 @@ export default function (pi: ExtensionAPI) {
 		failure = undefined;
 		completionNotifiedRun = -1;
 		inputNotifiedRun = -1;
+		goalActiveThisRun = goalStatus === "active";
 	});
 	pi.on("tool_execution_start", (event: any, ctx: any) => {
 		if (!enabled || event.toolName !== "questionnaire" || inputNotifiedRun === runId) return;
@@ -168,8 +205,12 @@ export default function (pi: ExtensionAPI) {
 	});
 	pi.on("agent_settled", (_event, ctx) => {
 		if (!enabled || completionNotifiedRun === runId) return;
+		// Active goal loops can produce many routine turn boundaries. Stay quiet
+		// until the goal reaches a terminal state, asks for input, or another
+		// extension emits an explicit notification.
+		if (goalStatus === "active" || goalActiveThisRun) return;
 		completionNotifiedRun = runId;
-		const project = ctx.cwd.split("/").filter(Boolean).pop() || "pi";
+		project = ctx.cwd.split("/").filter(Boolean).pop() || project;
 		if (failure) notifyIfUnfocused(`${project}: tool failed`, failure);
 		else notifyIfUnfocused(`${project}: turn complete`, finalResponse || "Agent turn complete");
 	});
