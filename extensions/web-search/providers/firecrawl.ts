@@ -13,21 +13,27 @@ import type {
 const FIRECRAWL_API = "https://api.firecrawl.dev/v2";
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+export function hasFirecrawlAccess(): boolean {
+	return Boolean(process.env.FIRECRAWL_API_KEY?.trim());
+}
+
 function headers(): Record<string, string> {
 	const key = process.env.FIRECRAWL_API_KEY?.trim();
+	if (!key) throw new WebProviderError("FIRECRAWL_API_KEY is not set.", { retriable: false });
 	return {
+		Authorization: `Bearer ${key}`,
 		"Content-Type": "application/json",
-		...(key ? { Authorization: `Bearer ${key}` } : {}),
 	};
 }
 
 async function post(path: string, body: Record<string, unknown>, options: ProviderOptions = {}): Promise<{ payload: any; elapsedMs: number }> {
+	const requestHeaders = headers();
 	const started = performance.now();
 	let response: Response;
 	try {
 		response = await fetch(`${FIRECRAWL_API}${path}`, {
 			method: "POST",
-			headers: headers(),
+			headers: requestHeaders,
 			body: JSON.stringify(body),
 			signal: combineSignals(options.signal, options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
 		});

@@ -1,7 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { compactProviderError, isRetriableProviderError, providerStatus, WebProviderError } from "./provider-error";
 import { openExaUrl, searchExaNews, searchExaWeb } from "./providers/exa";
-import { openFirecrawlUrl, searchFirecrawlNews, searchFirecrawlWeb } from "./providers/firecrawl";
+import { hasFirecrawlAccess, openFirecrawlUrl, searchFirecrawlNews, searchFirecrawlWeb } from "./providers/firecrawl";
 import { hasMistralAccess, openMistralUrl, searchMistralNews, searchMistralWeb } from "./providers/mistral";
 import type {
 	NewsSearchArgs,
@@ -27,7 +27,9 @@ function configuredProvider(name: string): WebProvider | undefined {
 }
 
 function available(provider: WebProvider): boolean {
-	return provider !== "mistral" || hasMistralAccess();
+	if (provider === "mistral") return hasMistralAccess();
+	if (provider === "firecrawl") return hasFirecrawlAccess();
+	return true;
 }
 
 function ordered(defaults: WebProvider[], overrideName: string): WebProvider[] {
@@ -183,7 +185,7 @@ export function webStatus() {
 	return {
 		providers: {
 			exa: { available: true, keyed: Boolean(process.env.EXA_API_KEY?.trim()) },
-			firecrawl: { available: true, keyed: Boolean(process.env.FIRECRAWL_API_KEY?.trim()) },
+			firecrawl: { available: hasFirecrawlAccess(), keyed: hasFirecrawlAccess() },
 			mistral: { available: hasMistralAccess(), keyed: hasMistralAccess() },
 		},
 		routes: {

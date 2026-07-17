@@ -178,12 +178,24 @@ describe("web search renderer", () => {
 	});
 
 	test("registers a status command without exposing credential values", () => {
-		const status = commands.find((entry) => entry.name === "web-status")?.command;
-		let message = "";
-		status.handler("", { ui: { notify(value: string) { message = value; } } });
-		expect(message).toContain("web: exa");
-		expect(message).toContain("news: exa → firecrawl");
-		expect(message).not.toContain(process.env.MISTRAL_API_KEY ?? "never-match-this");
+		const previous = {
+			firecrawlKey: process.env.FIRECRAWL_API_KEY,
+			mistralKey: process.env.MISTRAL_API_KEY,
+		};
+		try {
+			process.env.FIRECRAWL_API_KEY = "test-firecrawl-key";
+			process.env.MISTRAL_API_KEY = "test-mistral-key";
+			const status = commands.find((entry) => entry.name === "web-status")?.command;
+			let message = "";
+			status.handler("", { ui: { notify(value: string) { message = value; } } });
+			expect(message).toContain("web: exa");
+			expect(message).toContain("news: exa → firecrawl");
+			expect(message).not.toContain("test-firecrawl-key");
+			expect(message).not.toContain("test-mistral-key");
+		} finally {
+			if (previous.firecrawlKey === undefined) delete process.env.FIRECRAWL_API_KEY; else process.env.FIRECRAWL_API_KEY = previous.firecrawlKey;
+			if (previous.mistralKey === undefined) delete process.env.MISTRAL_API_KEY; else process.env.MISTRAL_API_KEY = previous.mistralKey;
+		}
 	});
 
 	test("expanded open content strips terminal controls", () => {
