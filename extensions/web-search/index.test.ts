@@ -19,7 +19,18 @@ mock.module("@earendil-works/pi-tui", () => ({
 	Container,
 	hyperlink: (text: string, url: string) => `<link:${url}>${text}</link>`,
 	truncateToWidth: (text: string, width: number, suffix = "…") => text.length <= width ? text : `${text.slice(0, Math.max(0, width - suffix.length))}${suffix}`,
-	visibleWidth: (text: string) => text.length,
+	visibleWidth: (text: string) => text.replace(/<[^>]+>/g, "").length,
+	wrapTextWithAnsi: (text: string, width: number) => {
+		const rows: string[] = [];
+		let current = "";
+		for (const word of text.split(/\s+/)) {
+			if (!current) current = word;
+			else if (`${current} ${word}`.length <= width) current += ` ${word}`;
+			else { rows.push(current); current = word; }
+		}
+		if (current) rows.push(current);
+		return rows;
+	},
 }));
 mock.module("../better-native-pi/core.js", () => ({
 	fitToolLine: (line: string) => line,
@@ -73,14 +84,14 @@ function result(index: number, source = "brave"): RagResult {
 	};
 }
 
-function render(tool: any, toolResult: unknown, args: Record<string, unknown>, options: { expanded?: boolean; isError?: boolean } = {}): string[] {
+function render(tool: any, toolResult: unknown, args: Record<string, unknown>, options: { expanded?: boolean; isError?: boolean; width?: number } = {}): string[] {
 	const component = tool.renderResult(
 		toolResult,
 		{ expanded: options.expanded ?? false, isPartial: false },
 		theme,
 		{ args, isError: options.isError ?? false },
 	);
-	return component.render(1_000);
+	return component.render(options.width ?? 1_000);
 }
 
 describe("web search renderer", () => {
@@ -96,6 +107,23 @@ describe("web search renderer", () => {
 			results: Array.from({ length: 6 }, (_, index) => result(index + 1)),
 		});
 		expect(render(webSearch, toolResult, { query: "Kimi pricing", startDate: "2026-04-01", endDate: "2026-04-30" })).toMatchSnapshot();
+	});
+
+	test("wraps complete snippets to the available width", () => {
+		const evidence = "A static site is HTML, CSS, and JavaScript that a server hands to a browser without rendering anything per request. No database query, no partial text.";
+		const toolResult = createSearchToolResult({
+			provider: "exa",
+			tool: "web_search",
+			query: "static sites",
+			limit: 1,
+			elapsedMs: 100,
+			results: [{ ...result(1, "exa"), snippets: [evidence] }],
+		});
+		const lines = render(webSearch, toolResult, { query: "static sites" }, { width: 48 });
+		const evidenceLines = lines.filter((line) => line.startsWith("       <dim>"));
+		expect(evidenceLines.length).toBeGreaterThan(1);
+		expect(evidenceLines.join(" ")).not.toContain("…");
+		expect(evidenceLines.join(" ")).toContain("database query");
 	});
 
 	test("compacts timestamps and omits unavailable dates", () => {

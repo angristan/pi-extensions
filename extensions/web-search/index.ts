@@ -1,5 +1,5 @@
 import { type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Container, hyperlink, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { Container, hyperlink, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 // Reuse better-native-pi's palette and helpers so the search rows are
 // visually identical to the built-in tools' tidy rendering (same bullets,
@@ -149,11 +149,11 @@ function sharedSearchEngine(details: SearchDisplayDetails): string | undefined {
 class SearchLines implements Component {
 	private cachedWidth?: number;
 	private cachedLines?: string[];
-	private source: () => string[];
-	constructor(source: () => string[] = () => []) {
+	private source: (width: number) => string[];
+	constructor(source: (width: number) => string[] = () => []) {
 		this.source = source;
 	}
-	update(source: () => string[]): void {
+	update(source: (width: number) => string[]): void {
 		this.source = source;
 		this.invalidate();
 	}
@@ -164,7 +164,7 @@ class SearchLines implements Component {
 	render(width: number): string[] {
 		const max = Math.max(1, width);
 		if (this.cachedLines && this.cachedWidth === max) return this.cachedLines;
-		const lines = this.source().flatMap((line) =>
+		const lines = this.source(max).flatMap((line) =>
 			visibleWidth(line) <= max ? [line] : [fitToolLine(line, max)],
 		);
 		this.cachedLines = lines;
@@ -278,7 +278,7 @@ function renderSearchResult(
 	const detail = searchDetail(args, details);
 	const searchEngine = sharedSearchEngine(details);
 	const max = expanded ? 10 : 5;
-	component.update(() => {
+	component.update((width) => {
 		const lines = [headlineRow(false, false, "Searched", detail), `${BRANCH}${searchSummary(details, searchEngine, theme)}`];
 		const shownResults = results.slice(0, max);
 		for (const [index, item] of shownResults.entries()) {
@@ -297,7 +297,11 @@ function renderSearchResult(
 			lines.push(`${INDENT}${theme.fg("syntaxNumber", `${index + 1}.`)} ${rendered}${meta ? ` ${theme.fg("dim", "—")} ${meta}` : ""}`);
 			const evidence = item.snippets?.[0] ?? item.description;
 			if (evidence) {
-				lines.push(`${INDENT}   ${theme.fg("dim", truncateToWidth(evidence.replace(/\s+/g, " ").trim(), 140, "…"))}`);
+				const prefix = `${INDENT}   `;
+				const contentWidth = Math.max(1, width - visibleWidth(prefix));
+				for (const row of wrapTextWithAnsi(evidence.replace(/\s+/g, " ").trim(), contentWidth)) {
+					lines.push(`${prefix}${theme.fg("dim", row)}`);
+				}
 			}
 		}
 		const shown = shownResults.length;
