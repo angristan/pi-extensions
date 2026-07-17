@@ -11,7 +11,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBashTool, createBashToolDefinition, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Container, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { getBackgroundTerminalService, type BackgroundTerminalService } from "../background-jobs/service.js";
+import { getBackgroundTerminalService, markBackgroundTerminalBashIntegrated, type BackgroundTerminalService } from "../background-jobs/service.js";
 import { renderCodeBox } from "../code-blocks/index.js";
 import { buildToolBlock, fitToolLine, formatShellCommandForDisplay, highlightedShellLine, withReasoning } from "./core.js";
 
@@ -289,7 +289,9 @@ class ManagedCommandComponent {
 
 export default function bash(pi: ExtensionAPI) {
 	const bashTool = createBashToolDefinition(process.cwd());
-	const terminalEnabled = Boolean(getBackgroundTerminalService());
+	const terminalService = getBackgroundTerminalService();
+	const terminalEnabled = Boolean(terminalService);
+	if (terminalService) markBackgroundTerminalBashIntegrated(terminalService);
 	pi.registerTool({
 		name: "bash",
 		label: "bash",

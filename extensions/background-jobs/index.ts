@@ -14,7 +14,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { fitToolLine, highlightShellCommand } from "../better-native-pi/core.js";
 import { BoundedOutput, CursorOutput, type CursorRead } from "./output.js";
-import { clearBackgroundTerminalService, setBackgroundTerminalService, type BackgroundTerminalService } from "./service.js";
+import { clearBackgroundTerminalService, isBackgroundTerminalBashIntegrated, setBackgroundTerminalService, type BackgroundTerminalService } from "./service.js";
 import { isPtySupported, spawnTerminal } from "./terminal-process.js";
 
 export { BoundedOutput, CursorOutput } from "./output.js";
@@ -720,34 +720,6 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	pi.registerEntryRenderer<JobSnapshot>(ENTRY_TYPE, () => new Container());
 
 	pi.registerTool({
-		name: "bash",
-		label: "bash",
-		description: "Run a shell command. Quick commands return normally; long-running commands yield a managed terminal ID. Set tty=true for prompts, REPLs, and control characters, then use terminal_write to interact.",
-		promptSnippet: "Run shell commands with automatic background yielding and optional PTY interaction",
-		promptGuidelines: [
-			"Use bash for shell commands. Quick commands return normally; long-running commands automatically yield a terminal ID.",
-			"Set bash tty=true for interactive prompts, REPLs, watch processes, or when terminal_write may need to send control characters such as Ctrl+C.",
-		],
-		parameters: {
-			type: "object",
-			properties: {
-				command: { type: "string", description: "Shell command to run" },
-				timeout: { type: "integer", minimum: 1, maximum: MAX_TIMEOUT_SECONDS, description: `Optional hard timeout from 1 to ${MAX_TIMEOUT_SECONDS} seconds` },
-				cwd: { type: "string", description: "Working directory, relative to the current project unless absolute" },
-				tty: { type: "boolean", description: "Allocate a PTY for prompts, REPLs, and control characters", default: false },
-				"yield-time_ms": { type: "integer", minimum: 250, maximum: 30_000, description: `Wait before yielding a terminal ID (default ${DEFAULT_YIELD_MS} ms)` },
-				reasoning: { type: "string", description: "Goal or intent behind running this command" },
-			},
-			required: ["command", "reasoning"],
-		} as any,
-		executionMode: "sequential",
-		execute: executeUnified,
-		renderCall: (args: any, theme: any) => new Text(`${theme.fg("accent", "●")} ${theme.bold("Running bash")} ${args.reasoning || highlightShellCommand(compactCommand(args.command || ""), theme)}`, 0, 0),
-		renderResult: liveResult,
-		renderShell: "self",
-	});
-
-	pi.registerTool({
 		name: "terminal_exec",
 		label: "Terminal Exec",
 		description: "Run a shell command, returning normally if it finishes within the yield window or a managed terminal ID if it keeps running. Supports optional PTY interaction through terminal_write.",
@@ -954,11 +926,13 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	pi.on("session_start", (_event, ctx) => {
 		sessionGeneration += 1;
 		activeCtx = ctx;
-		const activeTools = pi.getActiveTools();
-		const aliases = new Set(["terminal_exec", "background_bash"]);
-		const normalizedTools = activeTools.filter((name) => !aliases.has(name));
-		if (normalizedTools.length !== activeTools.length && !normalizedTools.includes("bash")) normalizedTools.push("bash");
-		if (normalizedTools.length !== activeTools.length || normalizedTools.some((name, index) => name !== activeTools[index])) pi.setActiveTools(normalizedTools);
+		if (isBackgroundTerminalBashIntegrated(terminalService)) {
+			const activeTools = pi.getActiveTools();
+			const aliases = new Set(["terminal_exec", "background_bash"]);
+			const normalizedTools = activeTools.filter((name) => !aliases.has(name));
+			if (normalizedTools.length !== activeTools.length && !normalizedTools.includes("bash")) normalizedTools.push("bash");
+			if (normalizedTools.length !== activeTools.length || normalizedTools.some((name, index) => name !== activeTools[index])) pi.setActiveTools(normalizedTools);
+		}
 		jobs.clear();
 		for (const entry of ctx.sessionManager.getEntries()) {
 			if (entry.type !== "custom" || entry.customType !== ENTRY_TYPE || !entry.data) continue;

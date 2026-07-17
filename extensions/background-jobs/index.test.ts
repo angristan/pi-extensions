@@ -132,12 +132,12 @@ describe("terminal tools", () => {
 		const harness = createHarness();
 		await startHarness(harness);
 		expect([...harness.tools.keys()]).toEqual([
-			"bash",
 			"terminal_exec",
 			"background_bash",
 			"job_output",
 			"terminal_write",
 			"job_kill",
+			"bash",
 		]);
 		expect([...harness.commands.keys()]).toEqual(["jobs", "ps"]);
 		expect([...harness.activeTools]).toContain("bash");
@@ -152,6 +152,14 @@ describe("terminal tools", () => {
 			expect(Object.keys(tool.parameters.properties)[0]).toBe("reasoning");
 			expect(tool.parameters.required).toContain("reasoning");
 		}
+	});
+
+	test("keeps compatibility execution tools active without better-native-pi", async () => {
+		const harness = createHarness({ betterNative: false });
+		await startHarness(harness);
+		expect([...harness.tools.keys()]).not.toContain("bash");
+		expect([...harness.activeTools]).toContain("terminal_exec");
+		expect([...harness.activeTools]).toContain("background_bash");
 	});
 
 	test("requires integer timeout seconds in schema and execution", async () => {
