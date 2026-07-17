@@ -129,11 +129,13 @@ test("renders the goal overlay as a compact summary", () => {
 		accumulatedActiveMs: 0,
 		continuations: 3,
 		elapsedMs: 125_000,
-	}, 52, 40, theme);
+	}, 52, 40, theme, { contextTokens: 42_000, contextWindow: 200_000 });
 
-	expect(lines.length).toBeLessThanOrEqual(6);
+	expect(lines.length).toBeLessThanOrEqual(7);
 	expect(lines[2]).toContain("/goal-status for full");
-	expect(lines.slice(3).join("\n")).toContain("2m 5s active time · 3 continuations");
+	expect(lines[3]).toBe("");
+	expect(lines.slice(4).join("\n")).toContain("2m 5s active time · 3 continuations");
+	expect(lines.slice(4).join("\n")).toContain("ctx 42K/200K (21%)");
 });
 
 test("wraps goal data as escaped untrusted context", () => {
