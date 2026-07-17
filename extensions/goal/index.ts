@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, Text, truncateToWidth, wrapTextWithAnsi, type TUI } from "@earendil-works/pi-tui";
+import { Text, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { registerOverlayCard } from "../overlay-stack/index.js";
 
@@ -214,58 +214,12 @@ function goalLines(state: GoalDisplayState, theme: any): string[] {
 		lines.push("", theme.fg("accent", theme.bold("Validation")));
 		for (const item of state.validation) lines.push(`  ○ ${item}`);
 	}
-	lines.push("", theme.fg("dim", "Commands: /goal edit · /goal pause|resume · /goal complete · /goal clear"));
+	lines.push("", theme.fg("dim", "/goal [<objective>|clear|edit|pause|resume]"));
 	return lines;
 }
 
 
-class GoalViewer {
-	private scroll = 0;
-	private cachedWidth = 0;
-	private cachedLines: string[] = [];
 
-	constructor(
-		private readonly state: GoalDisplayState,
-		private readonly tui: TUI,
-		private readonly theme: any,
-		private readonly done: (result?: unknown) => void,
-	) {}
-
-	private lines(width: number): string[] {
-		if (this.cachedWidth === width) return this.cachedLines;
-		const lines: string[] = [];
-		for (const source of goalLines(this.state, this.theme)) {
-			if (!source) { lines.push(""); continue; }
-			lines.push(...wrapTextWithAnsi(source, Math.max(1, width)));
-		}
-		this.cachedWidth = width;
-		this.cachedLines = lines;
-		return lines;
-	}
-
-	render(width: number): string[] {
-		const max = Math.max(1, width);
-		const height = Math.max(9, Math.min(24, (process.stdout.rows || 24) - 6));
-		const bodyHeight = height - 1;
-		const lines = this.lines(max);
-		const maxScroll = Math.max(0, lines.length - bodyHeight);
-		this.scroll = Math.min(this.scroll, maxScroll);
-		const visible = lines.slice(this.scroll, this.scroll + bodyHeight).map((line) => truncateToWidth(line, max, "…"));
-		while (visible.length < bodyHeight) visible.push("");
-		return [...visible, truncateToWidth(this.theme.fg("dim", "↑↓ scroll · q close"), max, "")];
-	}
-
-	handleInput(data: string): void {
-		if (matchesKey(data, Key.escape) || data === "q") return this.done(undefined);
-		if (matchesKey(data, Key.up)) this.scroll = Math.max(0, this.scroll - 1);
-		else if (matchesKey(data, Key.down)) this.scroll += 1;
-		else if (matchesKey(data, Key.pageUp)) this.scroll = Math.max(0, this.scroll - 8);
-		else if (matchesKey(data, Key.pageDown)) this.scroll += 8;
-		this.tui.requestRender();
-	}
-
-	invalidate(): void { this.cachedWidth = 0; }
-}
 
 // ============================================================================
 // Extension
@@ -294,8 +248,8 @@ export default function (pi: ExtensionAPI) {
 		visible: () => Boolean(state && state.status !== "complete"),
 		title: (theme: any) => {
 			if (!state) return "";
-			const icon = state.status === "active" ? "●" : state.status === "budget-limited" ? "■" : state.status === "paused" ? "◐" : "○";
-			return theme.bold(` ${theme.fg(statusColor(state.status), `${icon} Goal ${state.status}`)} `);
+			// Goal stays white; only the status word is colored.
+			return theme.bold(` Goal ${theme.fg(statusColor(state.status), state.status)} `);
 		},
 		renderBody: (width: number, maxHeight: number, theme: any) => {
 			if (!state) return [];
@@ -374,19 +328,13 @@ export default function (pi: ExtensionAPI) {
 
 	const showGoal = async (ctx: any) => {
 		if (!state) {
-			ctx.ui.notify("No session goal. Use /goal set <objective> or /goal edit.", "info");
+			ctx.ui.notify("Usage: /goal [<objective>|clear|edit|pause|resume]\nNo goal is currently set.", "info");
 			return;
 		}
+		// The always-on overlay card already shows full goal state; /goal just
+		// confirms the status briefly so it doesn't open a redundant modal.
 		const displayed = displayState(state, branchEntries(ctx));
-		if (ctx.mode !== "tui") {
-			ctx.ui.notify(`${displayed.status}: ${displayed.objective}`, "info");
-			return;
-		}
-		await ctx.ui.custom((tui: TUI, theme: any, _kb: any, done: (result: unknown) => void) =>
-			new GoalViewer(displayed, tui, theme, done), {
-				overlay: true,
-				overlayOptions: { width: "76%", maxHeight: "82%", anchor: "center", margin: 1 },
-			});
+		ctx.ui.notify(`${displayed.status}: ${displayed.objective}`, "info");
 	};
 
 	// ------------------------------------------------------------------------
