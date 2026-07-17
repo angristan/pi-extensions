@@ -6,6 +6,33 @@ function markerFor(omittedBytes: number): string {
 	return omittedBytes > 0 ? `[... ${omittedBytes.toLocaleString()} earlier bytes omitted ...]\n` : "";
 }
 
+const STRING_CONTROL = /\x1b[PX^_][\s\S]*?(?:\x1b\\|\x9c|$)|\x1b\][\s\S]*?(?:\x07|\x1b\\|\x9c|$)|\x9d[\s\S]*?(?:\x07|\x1b\\|\x9c|$)/g;
+const CSI_SEQUENCE = /(?:\x1b\[|\x9b)([0-?]*)([ -/]*)([@-~])/g;
+const ESC_SEQUENCE = /\x1b(?!\[)[ -/]*[@-~]/g;
+
+/**
+ * Return terminal output that is safe to embed in Pi-rendered tool cards.
+ *
+ * Managed background jobs intentionally capture raw process output, including
+ * full-screen TUIs. Replaying cursor movement, mode toggles, OSC strings, or
+ * BELs inside Pi's own renderer can move the outer terminal cursor and corrupt
+ * the frame. Keep only SGR color/style sequences; strip all other terminal
+ * controls while preserving ordinary text.
+ */
+export function sanitizeTerminalOutput(text: string): string {
+	return text
+		.replace(/\r\n/g, "\n")
+		.replace(/\r/g, "\n")
+		.replace(STRING_CONTROL, "")
+		.replace(CSI_SEQUENCE, (_match, params: string, intermediates: string, final: string) => {
+			if (final === "m" && intermediates === "" && /^[0-9;:]*$/.test(params)) return `\x1b[${params}m`;
+			return "";
+		})
+		.replace(ESC_SEQUENCE, "")
+		.replace(/\x1b(?!\[[0-9;:]*m)/g, "")
+		.replace(/[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f\x7f\x80-\x9f]/g, "");
+}
+
 export class BoundedOutput {
 	private head = Buffer.alloc(0);
 	private tail = Buffer.alloc(0);
@@ -40,10 +67,10 @@ export class BoundedOutput {
 			if (bounded.length > contentLimit) bounded = bounded.subarray(bounded.length - contentLimit);
 			omitted = Math.max(0, this.totalBytes - bounded.length);
 			marker = markerFor(omitted);
-			return `${marker}${bounded.toString("utf8")}`;
+			return sanitizeTerminalOutput(`${marker}${bounded.toString("utf8")}`);
 		}
 		const marker = this.omittedBytes > 0 ? `\n[... ${this.omittedBytes.toLocaleString()} bytes omitted ...]\n` : "";
-		return `${this.head.toString("utf8")}${marker}${this.tail.toString("utf8")}`;
+		return sanitizeTerminalOutput(`${this.head.toString("utf8")}${marker}${this.tail.toString("utf8")}`);
 	}
 }
 
@@ -86,12 +113,12 @@ export class CursorOutput {
 			bytes = bytes.subarray(bytes.length - contentLimit);
 			marker = markerFor(omitted);
 		}
-		return { text: `${marker}${bytes.toString("utf8")}`, cursor: this.totalBytes, omittedBytes: omitted };
+		return { text: sanitizeTerminalOutput(`${marker}${bytes.toString("utf8")}`), cursor: this.totalBytes, omittedBytes: omitted };
 	}
 
 	latestLine(limitBytes = 512): string {
 		const start = Math.max(0, this.tail.length - limitBytes);
-		const lines = this.tail.subarray(start).toString("utf8").replace(/\r/g, "").split("\n");
+		const lines = sanitizeTerminalOutput(this.tail.subarray(start).toString("utf8")).split("\n");
 		for (let index = lines.length - 1; index >= 0; index -= 1) {
 			const line = lines[index]?.trim();
 			if (line) return line;
