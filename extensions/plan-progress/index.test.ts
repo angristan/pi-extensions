@@ -71,3 +71,12 @@ test("wrapped plan result lines retain their left padding", () => {
 		"      now",
 	]);
 });
+
+test("malformed plan result details render as an empty plan", () => {
+	const component = updatePlan.renderResult({ details: {} }, {}, theme);
+
+	expect(component.render(18)).toEqual([
+		"• Updated Plan",
+		"  └ (no steps)",
+	]);
+});

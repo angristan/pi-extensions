@@ -372,7 +372,7 @@ export default function (pi: ExtensionAPI) {
 		},
 		renderCall: () => new Text("", 0, 0),
 		renderResult: (result: any, _options: any, theme: any) => {
-			const details = result.details as PlanState | undefined;
+			const details = restorePlanState(result.details);
 			return new PlanResult(details ?? { items: [] }, theme);
 		},
 		renderShell: "self",
