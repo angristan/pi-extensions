@@ -198,8 +198,6 @@ function statusColor(status: GoalStatus): "success" | "warning" | "muted" | "err
 
 function goalLines(state: GoalDisplayState, theme: any): string[] {
 	const lines = [
-		`${theme.fg("accent", theme.bold("Goal"))} ${theme.fg(statusColor(state.status), state.status)}`,
-		"",
 		...state.objective.split("\n"),
 		"",
 		`${theme.fg("dim", "Active time")}  ${formatDuration(state.elapsedMs)}`,
@@ -296,7 +294,8 @@ export default function (pi: ExtensionAPI) {
 		visible: () => Boolean(state && state.status !== "complete"),
 		title: (theme: any) => {
 			if (!state) return "";
-			return theme.bold(` ${state.status === "active" ? "● Goal" : state.status === "budget-limited" ? "■ Goal" : state.status === "paused" ? "◐ Goal" : "○ Goal"} `);
+			const icon = state.status === "active" ? "●" : state.status === "budget-limited" ? "■" : state.status === "paused" ? "◐" : "○";
+			return theme.bold(` ${theme.fg(statusColor(state.status), `${icon} Goal ${state.status}`)} `);
 		},
 		renderBody: (width: number, maxHeight: number, theme: any) => {
 			if (!state) return [];
@@ -322,14 +321,9 @@ export default function (pi: ExtensionAPI) {
 		goalCard.invalidate();
 		const displayed = state ? displayState(state, branchEntries(ctx)) : undefined;
 		pi.events.emit(EVENT_NAME, displayed);
-		if (!displayed || displayed.status === "complete") {
-			ctx.ui.setStatus("goal", undefined);
-			return;
-		}
-		const budget = displayed.tokenBudget
-			? ` ${Math.min(999, (displayed.usedTokens / displayed.tokenBudget) * 100).toFixed(0)}%`
-			: "";
-		ctx.ui.setStatus("goal", ctx.ui.theme.fg(statusColor(displayed.status), `goal ${displayed.status}${budget}`));
+		// The dedicated overlay card is the source of truth for goal status now;
+		// keep the footer clear.
+		ctx.ui.setStatus("goal", undefined);
 	};
 	const saveAndEmit = (ctx: any) => { persist(); emit(ctx); };
 	const pauseClock = (now = Date.now()) => {
@@ -463,50 +457,27 @@ export default function (pi: ExtensionAPI) {
 	// ------------------------------------------------------------------------
 
 	pi.registerCommand("goal", {
-		description: "Set, inspect, pause, resume, complete, or clear the durable session goal",
+		description: "Set, inspect, pause, resume, complete, or clear the durable session goal. Usage: /goal [<objective>|clear|edit|pause|resume|complete]",
 		handler: async (args, ctx) => {
 			const input = args.trim();
-			const [command = "show", ...rest] = input.split(/\s+/);
+			if (!input) { await showGoal(ctx); return; }
+			const [command = "", ...rest] = input.split(/\s+/);
 			const value = rest.join(" ").trim();
-			switch (command.toLowerCase()) {
-				case "show":
-					await showGoal(ctx);
-					return;
-				case "set":
-					if (value) {
-						const parsed = parseGoalDocument(value);
-						const now = Date.now();
-						state = {
-							...parsed,
-							status: "active",
-							createdAt: now,
-							updatedAt: now,
-							activeSince: now,
-							accumulatedActiveMs: 0,
-							baselinePromptTokens: promptTokens(branchEntries(ctx)),
-							continuations: 0,
-						};
-						saveAndEmit(ctx);
-						ctx.ui.notify("Session goal set. Auto-continuation is active.", "info");
-						// Kick the first continuation turn immediately.
-						maybeContinue(ctx);
-						return;
-					}
-					await editGoal(ctx);
-					// If we just created the goal via the editor, kick the loop.
-					if (state && state.status === "active" && state.continuations === 0) {
-						maybeContinue(ctx);
-					}
-					return;
-				case "edit":
-					await editGoal(ctx);
-					return;
+			const sub = command.toLowerCase();
+			// Subcommands with fixed meaning.
+			switch (sub) {
 				case "pause":
 					if (!setStatus("paused", ctx)) ctx.ui.notify("No session goal to pause.", "warning");
 					return;
 				case "resume":
 					if (!setStatus("active", ctx)) ctx.ui.notify("No session goal to resume.", "warning");
-					else maybeContinue(ctx);
+					else {
+						// Reset anti-spin flags so a fresh resume isn't immediately
+						// re-paused by the stale "last turn had no tool call" state.
+						lastTurnWasContinuation = false;
+						lastTurnHadToolCall = false;
+						maybeContinue(ctx);
+					}
 					return;
 				case "complete":
 					if (!setStatus("complete", ctx)) ctx.ui.notify("No session goal to complete.", "warning");
@@ -519,9 +490,31 @@ export default function (pi: ExtensionAPI) {
 					saveAndEmit(ctx);
 					return;
 				}
-				default:
-					ctx.ui.notify("Usage: /goal [show|set <objective>|edit|pause|resume|complete|clear]", "warning");
+				case "edit":
+					await editGoal(ctx);
+					// If we just created the goal via the editor, kick the loop.
+					if (state && state.status === "active" && state.continuations === 0) {
+						maybeContinue(ctx);
+					}
+					return;
 			}
+			// Default: treat the whole input as the objective: `/goal <objective>`.
+			const parsed = parseGoalDocument(input);
+			const now = Date.now();
+			state = {
+				...parsed,
+				status: "active",
+				createdAt: now,
+				updatedAt: now,
+				activeSince: now,
+				accumulatedActiveMs: 0,
+				baselinePromptTokens: promptTokens(branchEntries(ctx)),
+				continuations: 0,
+			};
+			saveAndEmit(ctx);
+			ctx.ui.notify("Session goal set. Auto-continuation is active.", "info");
+			// Kick the first continuation turn immediately.
+			maybeContinue(ctx);
 		},
 	});
 
