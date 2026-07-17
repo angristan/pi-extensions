@@ -38,9 +38,10 @@ metadata without mixing it into command output:
   └ ● demo-loop-a1b2c3d4 · running · /ps
 ```
 
-`terminal_write` and `job_output` use the same colored `•` headline, accent
-reasoning, `│` output gutter, and `└` metadata hierarchy. Their reasoning field
-states why the agent is waiting, reading, or answering a prompt.
+`terminal_write` and `job_output` use the same colored `•` headline, dim
+terminal name, accent reasoning, `│` output gutter, and `└` metadata hierarchy:
+`Interacted with <terminal> to <goal>`, `Waited for <terminal> to <goal>`, or
+`Read from <terminal> to <goal>`.
 
 While terminals are active, the footer shows:
 

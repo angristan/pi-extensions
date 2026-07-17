@@ -310,13 +310,14 @@ class TerminalInteractionComponent {
 		const details = this.details;
 		if (!details) return [];
 		const wrote = this.action === "write" && typeof this.args?.chars === "string" && this.args.chars.length > 0;
-		const verb = this.action === "read" ? "Read" : wrote ? "Interacted" : "Waited";
+		const verb = this.action === "read" ? "Read from" : wrote ? "Interacted with" : "Waited for";
 		const color = statusColor(details.status);
 		const name = details.description || details.id;
 		const reasoning = typeof this.args?.reasoning === "string" ? compactCommand(this.args.reasoning, 96) : "";
-		const intent = reasoning ? this.theme.fg("accent", reasoning) : this.theme.fg("dim", name);
+		const terminal = this.theme.fg("dim", compactCommand(name, 64));
+		const goal = reasoning ? ` ${this.theme.fg("dim", "to")} ${this.theme.fg("accent", reasoning)}` : "";
 		const elapsed = compactDuration(duration(details));
-		const header = `${this.theme.fg(color, "•")} ${verb} ${intent} ${this.theme.fg("dim", `· ${details.status} in ${elapsed}`)}`;
+		const header = `${this.theme.fg(color, "•")} ${verb} ${terminal}${goal} ${this.theme.fg("dim", `· ${details.status} in ${elapsed}`)}`;
 		const output = details.output?.replace(/\s+$/, "") || "(no new output)";
 		const bodyWidth = Math.max(1, max - 4);
 		let rows = output.split("\n").flatMap((line) => wrapTextWithAnsi(line, bodyWidth));
@@ -327,7 +328,7 @@ class TerminalInteractionComponent {
 		return [
 			fitToolLine(header, max),
 			...rows.map((row) => truncateToWidth(`${this.theme.fg("dim", "  │ ")}${row}`, max, "…")),
-			fitToolLine(`  └ ${this.theme.fg(color, statusSymbol(details.status))} ${this.theme.fg("dim", `${compactCommand(name, 64)} · ${details.id}${details.tty ? " · tty" : ""}`)}`, max),
+			fitToolLine(`  └ ${this.theme.fg(color, statusSymbol(details.status))} ${this.theme.fg("dim", `${details.id}${details.tty ? " · tty" : ""}`)}`, max),
 		];
 	}
 
@@ -668,7 +669,11 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		return component;
 	};
 	const executeUnified = async (_id: string, rawParams: any, signal: AbortSignal | undefined, onUpdate: any, ctx: any) => {
-		const params = { ...rawParams, timeoutSeconds: rawParams.timeoutSeconds ?? rawParams.timeout };
+		const params = {
+			...rawParams,
+			description: rawParams.description ?? rawParams.reasoning,
+			timeoutSeconds: rawParams.timeoutSeconds ?? rawParams.timeout,
+		};
 		const yieldMs = params["yield-time_ms"] ?? DEFAULT_YIELD_MS;
 		if (!Number.isInteger(yieldMs) || yieldMs < 250 || yieldMs > 30_000) throw new Error("yield-time_ms must be an integer between 250 and 30000");
 		const job = startJob(params, ctx);
