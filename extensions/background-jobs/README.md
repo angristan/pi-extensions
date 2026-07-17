@@ -74,7 +74,7 @@ duplicate transcript entry.
 - Full UI output retains bounded head and tail sections for diagnostics.
 - Session shutdown waits for SIGTERM/SIGKILL escalation.
 - PTY wrapper and child process groups are both terminated to prevent orphans.
-- Completion notifications fire only after a command yields into the background.
+- A yielded command notifies only if it finishes after the agent turn settles; active turns rely on the single turn-complete notification.
 
 ## Dependencies
 
