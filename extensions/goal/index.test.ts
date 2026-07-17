@@ -44,8 +44,12 @@ mock.module("../better-native-pi/render.js", () => ({
 	RESET: "</>",
 }));
 
+const registeredOverlayCards: any[] = [];
 mock.module("../overlay-stack/index.js", () => ({
-	registerOverlayCard: () => ({ invalidate() {}, unregister() {} }),
+	registerOverlayCard: (definition: any) => {
+		registeredOverlayCards.push(definition);
+		return { invalidate() {}, unregister() {} };
+	},
 }));
 
 mock.module("typebox", () => ({
@@ -154,13 +158,40 @@ test("renders the goal overlay as a compact summary", () => {
 		accumulatedActiveMs: 0,
 		continuations: 3,
 		elapsedMs: 125_000,
-	}, 52, 40, theme, { inputTokens: 42_000, outputTokens: 3_000, cacheReadTokens: 0, cacheWriteTokens: 0 });
+	}, 52, 40, theme, { inputTokens: 42_000, outputTokens: 3_000, cacheReadTokens: 62_000_000, cacheWriteTokens: 1_500_000 });
 
 	expect(lines.length).toBeLessThanOrEqual(7);
-	expect(lines[2]).toContain("/goal-status for full");
+	expect(lines.every((line) => line.length <= 52)).toBe(true);
+	expect(lines[2]).toMatch(/^\+\d+ lines? · \/goal-status$/);
 	expect(lines[3]).toBe("");
-	expect(lines.slice(4).join("\n")).toContain("2m 5s active time · 3 continuations");
-	expect(lines.slice(4).join("\n")).toContain("goal tokens spent 45K · ↓42K ↑3K");
+	expect(lines.slice(4).join("\n")).toContain("2m 5s active · 3 continuations · 2 criteria");
+	expect(lines.slice(4).join("\n")).toContain("Usage  ↓42K  ↑3K · cached 62M · written 1.5M");
+	expect(lines.join("\n")).not.toContain("tokens spent");
+	expect(lines.join("\n")).not.toContain("R62M");
+});
+
+test("keeps continuation and criteria counters visible at zero", () => {
+	const theme = { bold: (text: string) => text, fg: (_color: string, text: string) => text };
+	const lines = renderGoalOverlayBody({
+		objective: "Ship the feature",
+		validation: [],
+		status: "active",
+		createdAt: 0,
+		updatedAt: 0,
+		accumulatedActiveMs: 0,
+		continuations: 0,
+		elapsedMs: 1_000,
+	}, 52, 40, theme);
+
+	expect(lines.join("\n")).toContain("1s active · 0 continuations · 0 criteria");
+});
+
+test("renders a semantic goal status indicator", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("ship the feature", h.ctx);
+	const card = registeredOverlayCards.at(-1)!;
+	const title = card.title(h.ctx.ui.theme);
+	expect(title).toContain("Goal ● active");
 });
 
 test("wraps goal data as escaped untrusted context", () => {
@@ -304,7 +335,7 @@ test("goal_complete renders a compact completed block and hides stale calls", as
 	// The completion block surfaces lifetime stats since the overlay card hid.
 	expect(lines.length).toBeGreaterThanOrEqual(3);
 	expect(lines[2]).toContain("└");
-	expect(lines[2]).toMatch(/active.*continuation/i);
+	expect(lines[2]).toMatch(/active.*continuation.*0 criteria/i);
 
 	// A stale call against no active goal renders nothing.
 	const stale = { ...result, details: { ok: false, ignored: true, reason: "no-goal" } };

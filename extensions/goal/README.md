@@ -105,9 +105,9 @@ All sections except `# Goal` are optional.
   an easier task.
 - **`goal_complete`** — active only while a `/goal` is active; marks the goal
   complete and accepts an optional `summary`. The completion block also shows
-  the goal's lifetime stats (active time, continuations, tokens spent), since
-  the overlay card hides once the goal is complete. `/goal complete` surfaces
-  the same stats via a notification.
+  the goal's lifetime stats (active time, continuations, criteria, and token
+  usage), since the overlay card hides once the goal is complete. `/goal
+  complete` surfaces the same stats via a notification.
 - **`goal_block`** — active only while a `/goal` is active; records a blocker.
   Optional fields can describe the blocker, attempted work, supporting detail,
   and next input; marks the goal `blocked` only after the same blocker repeats
@@ -133,7 +133,7 @@ blocker) over a dim `└ summary` branch. Example settled blocks:
   └ make all tests pass
 • Completed goal
   └ Reduce p95 checkout latency below 120ms
-  └ 2m 14s active · 4 continuations · 45K tokens spent
+  └ 2m 14s active · 4 continuations · 2 criteria · Usage ↓42K  ↑3K
 • Goal blocked
   └ flaky CI on macOS · next: re-run after runner image bumped
 • Blocker recorded
@@ -146,20 +146,21 @@ The `goal` extension stores state and renders the active goal in a dedicated,
 compact overlay card so it does not crowd out live plan/edit widgets:
 
 ```
-╭ Goal active ─────────────────────────────╮
+╭ Goal ● active ───────────────────────────╮
 Reduce p95 checkout latency below 120ms
-… 4 more rows; /goal-status for full
++4 lines · /goal-status
 
-2m 14s active time · 4 continuations · 2 validation checks
-goal tokens spent 45K · ↓42K ↑3K
+2m 14s active · 4 continuations · 2 criteria
+Usage  ↓42K  ↑3K · cached 310K
 ╰──────────────────────────────────────────╯
 ```
 
 Run `/goal-status` for the full objective, timing, blocker, and validation
-view.
+view. Usage uses `↓` for input and `↑` for output; cache reads and writes are
+shown as `cached` and `written` when present.
 
-Status colors: `● active` (green), `◐ paused` (yellow), `blocked` (red),
-`complete` (dim).
+Status colors: `● active` (green), `● paused` (yellow), `● blocked` (red), and
+`● complete` (dim).
 
 ## Dependencies
 

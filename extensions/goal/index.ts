@@ -217,18 +217,23 @@ function compactNumber(value: number): string {
 	return `${formatted}${suffix}`;
 }
 
-function goalTokenUsageLine(stats: GoalOverlayStats | undefined, theme: any): string | undefined {
-	if (!stats) return undefined;
-	const total = stats.inputTokens + stats.outputTokens + stats.cacheReadTokens + stats.cacheWriteTokens;
-	if (total <= 0) return undefined;
-	const parts = [
+function goalUsageGroups(stats: GoalOverlayStats | undefined): string[] {
+	if (!stats) return [];
+	const inputOutput = [
 		stats.inputTokens > 0 ? `↓${compactNumber(stats.inputTokens)}` : undefined,
 		stats.outputTokens > 0 ? `↑${compactNumber(stats.outputTokens)}` : undefined,
-		stats.cacheReadTokens > 0 ? `R${compactNumber(stats.cacheReadTokens)}` : undefined,
-		stats.cacheWriteTokens > 0 ? `W${compactNumber(stats.cacheWriteTokens)}` : undefined,
-	].filter(Boolean);
-	const detail = parts.length ? ` · ${parts.join(" ")}` : "";
-	return theme.fg("dim", `goal tokens spent ${compactNumber(total)}${detail}`);
+	].filter((part): part is string => Boolean(part));
+	return [
+		inputOutput.length ? inputOutput.join("  ") : undefined,
+		stats.cacheReadTokens > 0 ? `cached ${compactNumber(stats.cacheReadTokens)}` : undefined,
+		stats.cacheWriteTokens > 0 ? `written ${compactNumber(stats.cacheWriteTokens)}` : undefined,
+	].filter((part): part is string => Boolean(part));
+}
+
+function goalTokenUsageLine(stats: GoalOverlayStats | undefined, theme: any): string | undefined {
+	const groups = goalUsageGroups(stats);
+	if (groups.length === 0) return undefined;
+	return `${theme.fg("muted", "Usage")}  ${theme.fg("text", groups.join(" · "))}`;
 }
 
 function goalOverlayStats(ctx: any, state: GoalState): GoalOverlayStats | undefined {
@@ -274,7 +279,7 @@ export interface GoalCompletionStats {
 
 /**
  * Snapshot the goal's lifetime stats at completion: accumulated active time,
- * continuation count, validation check count, and tokens spent while the goal
+ * continuation count, validation-criteria count, and token usage while the goal
  * was active. Computed at execute time (the render slots are pure and cannot
  * reach the extension closure) and stashed in the tool result `details` so the
  * completion block can render the same numbers the overlay card was showing.
@@ -296,24 +301,9 @@ function completionStats(ctx: any, state: GoalState): GoalCompletionStats {
 function formatCompletionStats(stats: GoalCompletionStats, theme: any): string {
 	const parts: string[] = [`${formatDuration(stats.activeTimeMs)} active`];
 	parts.push(`${stats.continuations} ${pluralize(stats.continuations, "continuation")}`);
-	if (stats.validationCount > 0) {
-		parts.push(`${stats.validationCount} ${pluralize(stats.validationCount, "validation check")}`);
-	}
-	const tokens = stats.tokens;
-	if (tokens) {
-		const total = tokens.inputTokens + tokens.outputTokens + tokens.cacheReadTokens + tokens.cacheWriteTokens;
-		if (total > 0) {
-			// Same ↓↑RW breakdown as the overlay's goalTokenUsageLine so the two
-			// views never drift apart.
-			const breakdown = [
-				tokens.inputTokens > 0 ? `↓${compactNumber(tokens.inputTokens)}` : undefined,
-				tokens.outputTokens > 0 ? `↑${compactNumber(tokens.outputTokens)}` : undefined,
-				tokens.cacheReadTokens > 0 ? `R${compactNumber(tokens.cacheReadTokens)}` : undefined,
-				tokens.cacheWriteTokens > 0 ? `W${compactNumber(tokens.cacheWriteTokens)}` : undefined,
-			].filter(Boolean);
-			parts.push(`${compactNumber(total)} tokens spent${breakdown.length ? ` · ${breakdown.join(" ")}` : ""}`);
-		}
-	}
+	parts.push(`${stats.validationCount} ${pluralize(stats.validationCount, "criterion", "criteria")}`);
+	const usageGroups = goalUsageGroups(stats.tokens);
+	if (usageGroups.length > 0) parts.push(`Usage ${usageGroups.join(" · ")}`);
 	return theme.fg("dim", parts.join(" · "));
 }
 
@@ -361,18 +351,16 @@ export function renderGoalOverlayBody(
 			.flatMap((source) => source ? wrapTextWithAnsi(source, contentWidth) : [""])
 			.length;
 		const hiddenRows = Math.max(1, visibleFullRows - rows.length);
-		const hint = theme.fg("dim", `… ${hiddenRows} more ${pluralize(hiddenRows, "row")}; /goal-status for full`);
+		const hint = theme.fg("dim", `+${hiddenRows} ${pluralize(hiddenRows, "line")} · /goal-status`);
 		if (rows.length < rowBudget) rows.push(hint);
 		else rows[rows.length - 1] = hint;
 	}
 
 	const meta = [
-		`${formatDuration(state.elapsedMs)} active time`,
+		`${formatDuration(state.elapsedMs)} active`,
 		`${state.continuations} ${pluralize(state.continuations, "continuation")}`,
+		`${state.validation.length} ${pluralize(state.validation.length, "criterion", "criteria")}`,
 	];
-	if (state.validation.length) {
-		meta.push(`${state.validation.length} validation ${pluralize(state.validation.length, "check")}`);
-	}
 	if (rows.length < rowBudget - 1) rows.push("");
 	if (rows.length < rowBudget) rows.push(theme.fg("dim", meta.join(" · ")));
 	const tokenLine = goalTokenUsageLine(stats, theme);
@@ -544,8 +532,8 @@ function renderGoalCompleteResult(
 			toolBranch(branch ? theme.fg("dim", branch) : ""),
 		];
 		// The overlay card hides on completion, so the completion block carries
-		// the final stats (active time, continuations, tokens spent) as the
-		// persistent transcript record of what the goal cost.
+		// the final stats (active time, continuations, criteria, and usage) as the
+		// persistent transcript record of the goal's lifetime.
 		if (completion) lines.push(toolBranch(formatCompletionStats(completion, theme)));
 		return lines;
 	});
@@ -680,8 +668,8 @@ export default function (pi: ExtensionAPI) {
 		visible: () => Boolean(state && state.status !== "complete"),
 		title: (theme: any) => {
 			if (!state) return "";
-			// Goal stays white; only the status word is colored.
-			return theme.bold(` Goal ${theme.fg(statusColor(state.status), state.status)} `);
+			// Goal stays white; the semantic status indicator carries state color.
+			return theme.bold(` Goal ${theme.fg(statusColor(state.status), `● ${state.status}`)} `);
 		},
 		renderBody: (width: number, maxHeight: number, theme: any) => {
 			if (!state) return [];
