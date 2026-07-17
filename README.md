@@ -1,28 +1,5 @@
 # pi-extensions
 
-## Dependencies
-
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent).
-- **npm packages:** None; extensions use Pi's bundled modules and Node/Bun APIs.
-- **System/services:** Only where noted in each extension README.
-
-An arrow means the extension on the left directly imports the extension on the
-right. Extensions not shown have no internal extension dependency.
-
-```text
-background-jobs <------> better-native-pi ------> code-blocks
-                           |
-                           +---------------------> hyperlinks
-mistral-web-search ------> better-native-pi
-doctor ------------------> accent-color
-overlay-stack -----------> accent-color
-edit-summary ------------> overlay-stack <------- plan-progress
-```
-
-`background-jobs` and `better-native-pi` deliberately integrate in both
-directions: the former reuses shared rendering primitives, while the latter
-owns `bash` and delegates its execution to the managed terminal service.
-
 A collection of [pi](https://github.com/earendil-works/pi-coding-agent) TUI
 extensions: nicer tool-block rendering, context telemetry, goal/plan tracking,
 background jobs, working timers, and quality-of-life features for the terminal UI.
@@ -97,3 +74,26 @@ All default to sensible values if the file is absent.
 ## License
 
 MIT
+
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent).
+- **npm packages:** None; extensions use Pi's bundled modules and Node/Bun APIs.
+- **System/services:** Only where noted in each extension README.
+
+An arrow means the extension on the left directly imports the extension on the
+right. Extensions not shown have no internal extension dependency.
+
+```text
+background-jobs <------> better-native-pi ------> code-blocks
+                           |
+                           +---------------------> hyperlinks
+mistral-web-search ------> better-native-pi
+doctor ------------------> accent-color
+overlay-stack -----------> accent-color
+edit-summary ------------> overlay-stack <------- plan-progress
+```
+
+`background-jobs` and `better-native-pi` deliberately integrate in both
+directions: the former reuses shared rendering primitives, while the latter
+owns `bash` and delegates its execution to the managed terminal service.

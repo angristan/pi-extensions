@@ -1,10 +1,4 @@
 /**
- * Dependency graph:
- * Direct: `../background-jobs/service.js`, `../code-blocks/index.js`, `./core.js`,
- *   `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`.
- * Used by: `extensions/background-jobs/index.test.ts`, `extensions/better-native-pi/index.ts`.
- */
-/**
  * bash — restyles pi's `bash` tool with a reason-first headline, a bordered and
  * syntax-highlighted command, plus bounded head/tail output (expandable via C-o).
  *

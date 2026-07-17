@@ -1,11 +1,5 @@
 # footer
 
-## Dependencies
-
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** None.
-- **Used by extensions:** None.
-
 A status line below the transcript showing session, model, context usage, and
 cumulative cost.
 
@@ -24,3 +18,9 @@ another tab.
 - Window-title spinner (OSC 0) while the agent is running
 - Softened Catppuccin-Mocha-derived palette that adapts to the active theme
 - Purple `fast` status beside the model when the bundled OpenAI Codex Fast mode is enabled
+
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.

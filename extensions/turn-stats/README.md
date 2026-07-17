@@ -1,11 +1,5 @@
 # turn-stats
 
-## Dependencies
-
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** None.
-- **Used by extensions:** None.
-
 Per-turn timing and token-usage entries appended to the transcript after each
 agent run.
 
@@ -21,3 +15,9 @@ usage (in/out/cache), and cost — sourced from real usage, not estimated.
 Throughput renders the **last finalized provider response** (not an average),
 since ttft/tps are inherently per-request. Token usage and cost sum across the
 whole run.
+
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.

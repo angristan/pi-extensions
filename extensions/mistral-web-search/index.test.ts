@@ -1,8 +1,3 @@
-/**
- * Dependency graph:
- * Direct: `./client`, `./index`, `bun:test`.
- * Used by: `Bun test runner`.
- */
 import { describe, expect, mock, test } from "bun:test";
 import { createSearchToolResult, type RagResult } from "./client";
 

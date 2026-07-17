@@ -1,8 +1,3 @@
-/**
- * Dependency graph:
- * Direct: `./index`, `bun:test`.
- * Used by: `Bun test runner`.
- */
 import { expect, mock, test } from "bun:test";
 
 function wrapText(text: string, width: number): string[] {

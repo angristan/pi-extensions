@@ -1,8 +1,3 @@
-/**
- * Dependency graph:
- * Direct: `node:os`, `node:path`.
- * Used by: `extensions/wakatime/paths.test.ts`, `extensions/wakatime/state.ts`.
- */
 import { homedir } from "node:os";
 import { join } from "node:path";
 

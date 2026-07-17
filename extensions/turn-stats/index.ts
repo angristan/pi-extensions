@@ -1,8 +1,3 @@
-/**
- * Dependency graph:
- * Direct: `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`.
- * Used by: `Pi extension loader`.
- */
 import {
 	calculateCost,
 	type AssistantMessage,

@@ -1,11 +1,5 @@
 # session-search
 
-## Dependencies
-
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** None.
-- **Used by extensions:** None.
-
 Full-text search across all your saved sessions, with ranked results.
 
 `/session-search <query>` streams through every session JSONL on disk
@@ -26,3 +20,9 @@ excerpt.
 - Up to 100 results, each shown as `date · title · path · session-id`
 - Result label is a `ctx.ui.select` picker; choosing one gives a follow-up
   menu (resume / fork / copy excerpt / put in editor)
+
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.

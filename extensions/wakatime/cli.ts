@@ -1,8 +1,3 @@
-/**
- * Dependency graph:
- * Direct: `node:fs`, `node:path`.
- * Used by: `extensions/wakatime/cli.test.ts`, `extensions/wakatime/index.ts`.
- */
 import { accessSync, constants, statSync } from "node:fs";
 import { join } from "node:path";
 

@@ -1,11 +1,5 @@
 # transcript
 
-## Dependencies
-
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** None.
-- **Used by extensions:** None.
-
 Open a full, scrollable view of the entire session transcript.
 
 `/transcript` (or `Ctrl+Shift+T`) opens a near-fullscreen overlay (95% width,
@@ -25,3 +19,9 @@ transcript, plus cleaned-up web-search metadata.
 
 Strips pi's internal web-search HTML comments and collapses runs of blank
 lines so the reading view is clean. Navigate with the usual pager keys.
+
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.

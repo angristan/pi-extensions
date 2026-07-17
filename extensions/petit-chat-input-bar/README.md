@@ -1,11 +1,5 @@
 # petit-chat-input-bar
 
-## Dependencies
-
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** None.
-- **Used by extensions:** None.
-
 A tiny static companion sprite that sits above the editor (a la Vibe's petit
 chat). Purely cosmetic — no commands, no config.
 
@@ -42,3 +36,9 @@ The feet row is composited on top of the editor's border line so the artwork
 stays intact while visually resting on it. The border's live ANSI color (which
 changes with thinking level / bash mode) is sampled and preserved through the
 leading blank cells.
+
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.

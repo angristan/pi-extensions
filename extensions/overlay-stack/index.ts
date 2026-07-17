@@ -1,10 +1,3 @@
-/**
- * Dependency graph:
- * Direct: `../accent-color/index.js`, `@earendil-works/pi-coding-agent`,
- *   `@earendil-works/pi-tui`.
- * Used by: `extensions/edit-summary/index.ts`, `extensions/plan-progress/index.ts`, `Pi
- *   extension loader`.
- */
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import {
 	truncateToWidth,

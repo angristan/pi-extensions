@@ -1,11 +1,5 @@
 # auto-session-title
 
-## Dependencies
-
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** None.
-- **Used by extensions:** None.
-
 Generates and maintains short, descriptive titles for your pi sessions.
 
 As soon as the first prompt is accepted, it asks a cheap model for a provisional
@@ -52,3 +46,9 @@ configured in `models.json` works):
 
 - `/title-refresh` — regenerate the title now
 - `/title-status` — show current title, summaries, last attempt, and skip reason
+
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.

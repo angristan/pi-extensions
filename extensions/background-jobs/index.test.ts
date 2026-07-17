@@ -1,9 +1,3 @@
-/**
- * Dependency graph:
- * Direct: `../better-native-pi/bash`, `./index`, `./terminal-process`, `bun:test`,
- *   `node:fs/promises`, `node:os`, `node:path`.
- * Used by: `Bun test runner`.
- */
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";

@@ -1,11 +1,5 @@
 # edit-summary
 
-## Dependencies
-
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** [`overlay-stack`](../overlay-stack/).
-- **Used by extensions:** None.
-
 A passive top-right overlay summarizing files changed by `edit` and `write` during
 the current agent run. While tools are running it shows **current** changes; once
 the agent settles it keeps the result as the **last** turn's summary.
@@ -48,3 +42,9 @@ total.
 
 Changes made indirectly through `bash`, user shell commands, remote tool
 backends, or custom mutation tools are not included.
+
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** [`overlay-stack`](../overlay-stack/).
+- **Used by extensions:** None.

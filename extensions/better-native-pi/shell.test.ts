@@ -1,8 +1,3 @@
-/**
- * Dependency graph:
- * Direct: `./shell.js`, `bun:test`.
- * Used by: `Bun test runner`.
- */
 import { describe, expect, test } from "bun:test";
 import { formatShellCommandForDisplay } from "./shell.js";
 

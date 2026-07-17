@@ -1,11 +1,5 @@
 # overlay-stack
 
-## Dependencies
-
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** [`accent-color`](../accent-color/).
-- **Used by extensions:** [`edit-summary`](../edit-summary/), [`plan-progress`](../plan-progress/).
-
 Internal UI infrastructure for composing independent top-right overlay cards in
 a single non-capturing Pi overlay.
 
@@ -23,3 +17,9 @@ Each visible section is rendered as a separate card with the same width, accent
 border, title placement, and padding. Cards are separated by one blank row. The
 widest active section determines the common width. If the terminal cannot fit a
 lower card within 80% of its height, that card is omitted rather than clipped.
+
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** [`accent-color`](../accent-color/).
+- **Used by extensions:** [`edit-summary`](../edit-summary/), [`plan-progress`](../plan-progress/).

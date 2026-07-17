@@ -1,9 +1,3 @@
-/**
- * Dependency graph:
- * Direct: `node:child_process`, `node:os`.
- * Used by: `extensions/wakatime/heartbeat.test.ts`, `extensions/wakatime/index.ts`,
- *   `extensions/wakatime/tracker.ts`.
- */
 import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 

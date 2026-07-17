@@ -1,12 +1,5 @@
 # wakatime
 
-## Dependencies
-
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** None.
-- **Used by extensions:** None.
-- **System/service:** `wakatime-cli` on `PATH` and a configured WakaTime API key.
-
 Tracks file activity from Pi with an existing
 [`wakatime-cli`](https://github.com/wakatime/wakatime-cli) installation.
 
@@ -43,3 +36,10 @@ Heartbeats send the file path, project folder, AI line change count, category
 The rate-limit timestamp is stored in `~/.wakatime/pi-<project-hash>.json`, or
 under `$WAKATIME_HOME` when configured. No state is written when the CLI is not
 installed.
+
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.
+- **System/service:** `wakatime-cli` on `PATH` and a configured WakaTime API key.

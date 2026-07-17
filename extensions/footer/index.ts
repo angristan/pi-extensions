@@ -1,9 +1,3 @@
-/**
- * Dependency graph:
- * Direct: `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`,
- *   `node:os`.
- * Used by: `Pi extension loader`.
- */
 import { calculateCost, type AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";

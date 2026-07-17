@@ -1,8 +1,3 @@
-/**
- * Dependency graph:
- * Direct: `./state`, `bun:test`.
- * Used by: `Bun test runner`.
- */
 import { describe, expect, test } from "bun:test";
 import { shouldSendHeartbeat } from "./state";
 

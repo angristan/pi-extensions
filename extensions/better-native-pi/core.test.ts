@@ -1,8 +1,3 @@
-/**
- * Dependency graph:
- * Direct: `./core.js`, `bun:test`.
- * Used by: `Bun test runner`.
- */
 import { describe, expect, test } from "bun:test";
 import { buildToolBlock } from "./core.js";
 

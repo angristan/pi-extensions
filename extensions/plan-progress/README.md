@@ -1,11 +1,5 @@
 # plan-progress
 
-## Dependencies
-
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** [`overlay-stack`](../overlay-stack/).
-- **Used by extensions:** None.
-
 Track a multi-step plan as a collapsible overlay above the editor, and expose a
 tool the agent can call to maintain it.
 
@@ -42,3 +36,9 @@ budget.
   agent sees each update before continuing.
 
 Box border uses the accent color from `accent-color`.
+
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** [`overlay-stack`](../overlay-stack/).
+- **Used by extensions:** None.

@@ -1,11 +1,5 @@
 # side-chat
 
-## Dependencies
-
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** None.
-- **Used by extensions:** None.
-
 An ephemeral, read-only side question about the current conversation, without
 changing the main transcript.
 
@@ -30,3 +24,9 @@ reply into it only when useful.
 - Runs at `reasoning: "low"`, capped at 4096 output tokens
 - Independent abort; cancelled on session switch/shutdown
 - Promoted messages render inline as `• Promoted side answer`
+
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.
