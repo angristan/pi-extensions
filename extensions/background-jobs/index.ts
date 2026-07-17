@@ -113,8 +113,12 @@ function duration(job: Pick<JobSnapshot, "startedAt" | "endedAt">): number {
 	return Math.max(0, (job.endedAt ?? Date.now()) - job.startedAt);
 }
 
-function compactCommand(command: string, limit = 100): string {
-	const oneLine = command.replace(/\s+/g, " ").trim();
+function compactCommand(command: unknown, limit = 100): string {
+	// Defensive: several render paths feed this from persisted/restored job
+	// snapshots or fallback details that may be missing fields. Coerce to a
+	// string so a malformed `details` object can never crash the TUI render.
+	const text = typeof command === "string" ? command : String(command ?? "");
+	const oneLine = text.replace(/\s+/g, " ").trim();
 	return oneLine.length > limit ? `${oneLine.slice(0, limit - 1)}…` : oneLine;
 }
 
