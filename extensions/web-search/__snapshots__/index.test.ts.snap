@@ -60,7 +60,7 @@ exports[`web search renderer bot challenges render as blocked rather than opened
 exports[`web search renderer expanded open content strips terminal controls 1`] = `
 [
   "<green>•</> <bold>Opened</> <link:https://example.com/docs><mdLink>https://example.com/docs</mdLink></link>",
-  "  └ <green>1 line · 32b</> · <1s",
+  "  └ <green>1 line · 32 B</> · <1s",
   "",
   "    <dim>Readable red content</dim>",
 ]
