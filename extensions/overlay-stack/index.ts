@@ -289,7 +289,7 @@ export default function (pi: ExtensionAPI) {
 		description: "Toggle the top-right overlay stack",
 		handler: (_args, ctx) => toggleVisibility(ctx),
 	});
-	pi.registerShortcut("alt+o", {
+	pi.registerShortcut("f6", {
 		description: "Toggle the top-right overlay stack",
 		handler: toggleVisibility,
 	});

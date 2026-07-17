@@ -53,13 +53,13 @@ function makeHarness() {
 	return { commands, shortcuts, modal: (event: unknown) => modalListener?.(event), ctx, hiddenStates, notifications };
 }
 
-test("Alt+O and /overlay toggle the overlay stack", () => {
+test("F6 and /overlay toggle the overlay stack", () => {
 	const harness = makeHarness();
 
-	expect(harness.shortcuts.has("alt+o")).toBe(true);
+	expect(harness.shortcuts.has("f6")).toBe(true);
 	expect(harness.commands.has("overlay")).toBe(true);
 
-	harness.shortcuts.get("alt+o").handler(harness.ctx);
+	harness.shortcuts.get("f6").handler(harness.ctx);
 	expect(harness.hiddenStates.at(-1)).toBe(true);
 	expect(harness.notifications.at(-1)).toBe("Overlay hidden");
 
@@ -71,7 +71,7 @@ test("Alt+O and /overlay toggle the overlay stack", () => {
 test("closing a modal does not reveal a manually hidden overlay", () => {
 	const harness = makeHarness();
 
-	harness.shortcuts.get("alt+o").handler(harness.ctx);
+	harness.shortcuts.get("f6").handler(harness.ctx);
 	harness.modal({ id: "context", hidden: true });
 	harness.modal({ id: "context", hidden: false });
 
