@@ -41,11 +41,14 @@ terminal name, accent reasoning, `│` output gutter, and `└` metadata hierarc
 `Interacted with <terminal> to <goal>`, `Waited for <terminal> to <goal>`, or
 `Read from <terminal> to <goal>`.
 
-While terminals are active, the footer shows:
+After terminals yield into the background, the footer shows:
 
 ```text
 2 background jobs running · /jobs to view
 ```
+
+Commands that are still inside their initial foreground yield window do not show
+this footer status.
 
 Commands:
 

@@ -220,6 +220,26 @@ describe("terminal tools", () => {
 		expect(rendered).not.toContain(result.details.id);
 	});
 
+	test("hides footer status until a command actually yields", async () => {
+		const harness = createHarness({ killGraceMs: 50 });
+		await startHarness(harness);
+		const pending = harness.tools.get("bash").execute("exec", {
+			command: "sleep 2",
+			reasoning: "test foreground status",
+			"yield-time_ms": 250,
+		}, undefined, undefined, harness.ctx);
+		try {
+			await Bun.sleep(50);
+			expect(harness.statuses.get("background-jobs")).toBeUndefined();
+
+			const started = await pending;
+			expect(started.details.status).toBe("running");
+			expect(harness.statuses.get("background-jobs")).toContain("1 background job running");
+		} finally {
+			await shutdownHarness(harness);
+		}
+	}, 3_000);
+
 	test("yields long commands without notifying before the turn settles", async () => {
 		const harness = createHarness();
 		await startHarness(harness);
