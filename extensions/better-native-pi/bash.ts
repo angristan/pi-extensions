@@ -342,10 +342,14 @@ export default function bash(pi: ExtensionAPI) {
 		},
 		renderCall: (args: any, theme: any, context: any) => {
 			if (!context?.isPartial) return new Container();
-			// Once renderResult has mounted a ManagedCommandComponent for the
-			// streaming partial, it owns the full card (headline + command + output).
-			// Suppress the separate call card so we don't render two copies.
-			if (context.state.managedCommand) return new Container();
+			// When the terminal service is present, execute delegates to
+			// executeUnified, whose result always carries managedTerminal details.
+			// renderResult mounts a ManagedCommandComponent that owns the entire card
+			// (headline + command + output), so the call card would duplicate it.
+			// Returning empty here avoids a one-frame double-card: renderCall runs
+			// before renderResult in the same frame, so the state check alone can't
+			// close the gap.
+			if (terminalEnabled) return new Container();
 			context.state.startedAt ??= Date.now();
 			return new CommandComponent(args, {}, {
 				partial: true,

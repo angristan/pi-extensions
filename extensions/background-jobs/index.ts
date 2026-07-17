@@ -732,6 +732,10 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			});
 		};
 		job.activityListeners.add(update);
+		// Fire one immediate partial so the managed-terminal card mounts on the
+		// first render (the 100ms throttle would otherwise leave the card empty
+		// for up to 100ms after the call starts).
+		update();
 		try { await waitForYield(job, yieldMs, signal); } finally { job.activityListeners.delete(update); }
 		const yielded = isActive(job);
 		if (yielded) {
