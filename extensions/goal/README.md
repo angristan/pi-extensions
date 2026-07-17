@@ -9,14 +9,17 @@ least three consecutive goal turns before the goal is marked blocked.
 
 The goal is a short statement plus optional **validation criteria**. The goal is
 surfaced in its own overlay card and injected into the system prompt on every
-turn.
+turn. Objective and validation text are wrapped as untrusted user-provided data
+before reaching the model.
 
 ## How the loop works
 
 When a goal is **active**, after each `agent_settled` (turn done, no retry,
-no compaction, no queued user input), the extension sends a silent continuation
-prompt that triggers a new turn. The continuation re-orients the agent around
-the objective and asks for a completion audit before completion.
+no compaction, no queued user input), the extension queues a hidden wake marker
+and injects the full continuation prompt only into the next model context. The
+stored session history gets the small marker, not the full objective-bearing
+prompt. The continuation re-orients the agent around the objective and asks for
+a requirement-by-requirement completion audit before completion.
 
 ```
 /goal set <objective>
@@ -34,7 +37,7 @@ the objective and asks for a completion audit before completion.
         └──────┬─────────────┘
                │ yes
                ▼
-   send silent continuation prompt ──► new agent turn ──► …
+   queue hidden wake marker + transient prompt ──► new agent turn ──► …
                │
                │ model calls goal_complete ────────────────────► complete
                │ repeated goal_block reports ──────────────────► blocked
@@ -50,8 +53,12 @@ the objective and asks for a completion audit before completion.
   of spinning forever.
 - **Interruption → pause** — if you abort a turn (Esc), the goal auto-pauses
   so it doesn't immediately resume on the next boundary.
+- **Provider error → blocked** — if a turn ends with a terminal provider error,
+  the goal is marked `blocked` at the next safe idle boundary instead of
+  retry-looping. Usage/rate/quota errors get a specific resume hint.
 - **Completion status** — the model marks the goal complete by calling
-  `goal_complete` when the objective is achieved and no required work remains.
+  `goal_complete` when current evidence proves every requirement is satisfied
+  and no required work remains.
 - **Blocked audit** — `goal_block` records blockers while leaving the goal
   active until the same blocker has recurred three times. Resuming a blocked
   goal starts a fresh audit.
@@ -59,8 +66,10 @@ the objective and asks for a completion audit before completion.
 ## Commands
 
 - `/goal` — show the current goal
-- `/goal <objective>` — set or update the objective (auto-kicks the loop)
-- `/goal edit` — edit the goal document interactively
+- `/goal <objective>` — set or update the objective (auto-kicks the loop;
+  replacing an active, paused, or blocked goal asks for confirmation)
+- `/goal edit` — edit the goal document interactively; editing a completed goal
+  reactivates it and resumes the loop
 - `/goal pause` / `/goal resume` — pause/resume the loop
 - `/goal block` — manually mark the goal blocked
 - `/goal complete` — manually mark the goal done

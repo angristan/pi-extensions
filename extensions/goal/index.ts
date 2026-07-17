@@ -10,6 +10,7 @@ import { registerOverlayCard } from "../overlay-stack/index.js";
 const ENTRY_TYPE = "goal-state";
 const EVENT_NAME = "goal:changed";
 const CONTINUATION_CUSTOM_TYPE = "goal-continuation";
+const CONTINUATION_TRIGGER_CONTENT = "Goal continuation requested.";
 const BLOCKED_AUDIT_THRESHOLD = 3;
 
 /**
@@ -167,7 +168,7 @@ export function buildGoalContext(state: GoalState): string {
  * Re-orients the agent around the objective and asks for a completion audit.
  */
 function continuationPrompt(state: GoalState): string {
-	return `[Goal continuation — turn ${state.continuations + 1}]\n${untrustedGoalBlock(state)}\n\nContinuation behavior:\n- Keep the full objective intact; do not redefine success around a smaller or easier task.\n- Use the current worktree and external state as authoritative; inspect current state before relying on memory.\n- If update_plan is available and the next work is meaningfully multi-step, keep the plan tied to the real objective.\n\nCompletion audit:\nBefore declaring the goal complete, audit it against the actual current state. If the objective has actually been achieved and no required work remains, call \`goal_complete\`.\n\nBlocked audit:\n- Do not call \`goal_block\` the first time a blocker appears.\n- Call \`goal_block\` only when the same blocking condition has repeated for at least ${BLOCKED_AUDIT_THRESHOLD} consecutive goal turns and no meaningful progress is possible without user input or an external-state change.\n- Never use blocked merely because the work is hard, slow, uncertain, incomplete, or would benefit from clarification.\n\nDo not just summarize — either make progress, complete the goal, or report a repeated blocker.`;
+	return `[Goal continuation — turn ${state.continuations + 1}]\n${untrustedGoalBlock(state)}\n\nContinuation behavior:\n- Keep the full objective intact; do not redefine success around a smaller or easier task.\n- Use the current worktree and external state as authoritative; inspect current state before relying on memory.\n- If update_plan is available and the next work is meaningfully multi-step, keep the plan tied to the real objective.\n\nCompletion audit:\nBefore declaring the goal complete, treat completion as unproven and verify it against current authoritative evidence.\n- Derive concrete requirements from the objective, validation criteria, referenced files, plans, issues, user instructions, and relevant project state.\n- For every explicit requirement, named artifact, command, test, gate, invariant, and deliverable, identify the evidence that would prove it.\n- Inspect the current evidence directly: files, command output, test results, rendered artifacts, runtime behavior, PR/check state, or other authoritative sources.\n- Decide for each requirement whether the evidence proves completion, contradicts it, shows incomplete work, is too weak or indirect, or is missing.\n- Match verification scope to requirement scope; do not use a narrow check to prove a broad claim.\n- Treat uncertain, stale, or indirect evidence as not complete; gather stronger evidence or keep working.\nOnly call \`goal_complete\` when current evidence proves every requirement is satisfied and no required work remains.\n\nBlocked audit:\n- Do not call \`goal_block\` the first time a blocker appears.\n- Call \`goal_block\` only when the same blocking condition has repeated for at least ${BLOCKED_AUDIT_THRESHOLD} consecutive goal turns and no meaningful progress is possible without user input or an external-state change.\n- Never use blocked merely because the work is hard, slow, uncertain, incomplete, or would benefit from clarification.\n\nDo not just summarize — either make progress, complete the goal, or report a repeated blocker.`;
 }
 
 // ============================================================================
@@ -215,6 +216,7 @@ export default function (pi: ExtensionAPI) {
 	let lastTurnHadToolCall = false;
 	let lastTurnCalledGoalBlock = false;
 	let noToolContinuationStreak = 0;
+	let pendingContinuationPrompt: string | undefined;
 	let lastTerminalError: { errorMessage?: string } | undefined;
 
 	// Dedicated overlay card so the goal renders as its own box, separate from
@@ -348,11 +350,17 @@ export default function (pi: ExtensionAPI) {
 	// Continuation loop primitives
 	// ------------------------------------------------------------------------
 
-	/** Send a silent continuation prompt that triggers a new turn. */
+	/**
+	 * Trigger a continuation without persisting the full steering prompt. Pi needs
+	 * a queued message to wake the agent today, so the session stores only this
+	 * small hidden marker; the context hook below swaps in the real prompt for the
+	 * next model call and then drops it.
+	 */
 	const sendContinuation = (ctx: any, prompt: string) => {
 		nextTurnIsContinuation = true;
+		pendingContinuationPrompt = prompt;
 		pi.sendMessage(
-			{ customType: CONTINUATION_CUSTOM_TYPE, content: prompt, display: false, details: { continuation: true } },
+			{ customType: CONTINUATION_CUSTOM_TYPE, content: CONTINUATION_TRIGGER_CONTENT, display: false, details: { continuation: true, transient: true } },
 			{ triggerTurn: true },
 		);
 	};
@@ -523,10 +531,14 @@ export default function (pi: ExtensionAPI) {
 			if (isGoalContinuationMessage(event.messages[index])) lastContinuationIndex = index;
 		}
 		if (lastContinuationIndex < 0) return;
+		const prompt = currentTurnIsContinuation ? pendingContinuationPrompt : undefined;
+		if (prompt) pendingContinuationPrompt = undefined;
 		return {
-			messages: event.messages.filter((message: any, index: number) =>
-				!isGoalContinuationMessage(message) || (currentTurnIsContinuation && index === lastContinuationIndex),
-			),
+			messages: event.messages.flatMap((message: any, index: number) => {
+				if (!isGoalContinuationMessage(message)) return [message];
+				if (!prompt || index !== lastContinuationIndex) return [];
+				return [{ ...message, content: prompt, details: { ...(message.details ?? {}), transient: true } }];
+			}),
 		};
 	});
 
@@ -594,6 +606,7 @@ export default function (pi: ExtensionAPI) {
 		lastTurnWasContinuation = false;
 		lastTurnCalledGoalBlock = false;
 		noToolContinuationStreak = 0;
+		pendingContinuationPrompt = undefined;
 		lastTerminalError = undefined;
 		for (const entry of branchEntries(ctx)) {
 			if (entry.type !== "custom" || entry.customType !== ENTRY_TYPE) continue;
