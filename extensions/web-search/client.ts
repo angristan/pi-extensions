@@ -415,6 +415,14 @@ function websiteFromUrl(url: string | null | undefined): string | undefined {
 	return new URL(normalized).hostname.replace(/^www\./i, "") || undefined;
 }
 
+export function formatDisplayDate(value: string | null | undefined): string | undefined {
+	if (!value) return undefined;
+	const sanitized = sanitizeSearchText(value, MAX_DATE_CHARS);
+	if (!sanitized || /^(?:n\/?a|none|null|unknown)$/i.test(sanitized)) return undefined;
+	const isoDate = /^(\d{4}-\d{2}-\d{2})(?:[T\s].*)?$/.exec(sanitized);
+	return isoDate?.[1] ?? sanitized;
+}
+
 function uniqueSanitizedSnippets(snippets: string[], limit: number): string[] {
 	const seen = new Set<string>();
 	const unique: string[] = [];
@@ -502,7 +510,7 @@ function createSearchDisplayDetails(result: WebSearchResult | NewsSearchResult):
 		website: websiteFromUrl(item.url),
 		searchEngine: sanitizeSearchText(item.source, MAX_SOURCE_CHARS),
 		rank: item.rank,
-		date: item.date ? sanitizeSearchText(item.date, MAX_DATE_CHARS) : undefined,
+		date: formatDisplayDate(item.date),
 		description: item.description ? sanitizeSearchText(item.description, 600) : undefined,
 		snippets: uniqueSanitizedSnippets(item.snippets, 1),
 		canOpen: item.canOpen ? undefined : false,
@@ -616,7 +624,7 @@ export function parseSearchResultText(text: string): SearchDisplayDetails {
 		}
 		match = /^ {3}Date:\s(.*)$/.exec(line);
 		if (match) {
-			current.date = match[1];
+			current.date = formatDisplayDate(match[1]);
 			continue;
 		}
 		match = /^ {3}Description:\s(.*)$/.exec(line);
