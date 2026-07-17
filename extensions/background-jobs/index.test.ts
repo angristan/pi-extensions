@@ -293,13 +293,14 @@ describe("terminal tools", () => {
 		expect(harness.notifications).toHaveLength(1);
 	});
 
-	test("writes stdin to a running non-PTY command", async () => {
+	test("writes stdin to a running tty command and renders the interaction", async () => {
+		if (!isPtySupported()) return; // stdin writes require a PTY
 		const harness = createHarness();
 		await startHarness(harness);
 		const started = await harness.tools.get("bash").execute("exec", {
 			command: "read -r value; printf 'got:%s\\n' \"$value\"",
 			reasoning: "test terminal input",
-			interactive: true, // keep stdin writable so terminal_write can feed the prompt
+			tty: true, // stdin is writable only with a PTY
 			"yield-time_ms": 250,
 		}, undefined, undefined, harness.ctx);
 		expect(started.details.status).toBe("running");
@@ -326,11 +327,11 @@ describe("terminal tools", () => {
 		expect(rendered).not.toContain("↳");
 	});
 
-	test("non-interactive command that reads stdin exits on EOF instead of hanging", async () => {
+	test("non-tty command that reads stdin exits on EOF instead of hanging", async () => {
 		// Regression: a command that reads stdin with no input (e.g. `rg PATTERN`
-		// with no path) used to block on read(stdin) forever. With the default
-		// interactive=false, stdin is closed (ignore) so the command gets EOF and
-		// exits immediately — no hang, no 10s timeout needed.
+		// with no path) used to block on read(stdin) forever. Non-tty commands now
+		// spawn with stdin closed (ignore) so the command gets EOF and exits
+		// immediately — no hang, no 10s timeout needed.
 		const harness = createHarness();
 		await startHarness(harness);
 		const started = await harness.tools.get("bash").execute("exec", {
@@ -340,15 +341,15 @@ describe("terminal tools", () => {
 		}, undefined, undefined, harness.ctx);
 		expect(started.details.status).toBe("completed");
 		expect(started.details.exitCode).toBe(0);
-		// terminal_write on a non-interactive job must error clearly. Use a
-		// still-running command so writeInput reaches the interactive guard.
+		// terminal_write on a non-tty job must error clearly. Use a
+		// still-running command so writeInput reaches the tty guard.
 		const stuck = await harness.tools.get("bash").execute("exec", {
 			command: "sleep 5",
-			reasoning: "non-interactive job that stays running",
+			reasoning: "non-tty job that stays running",
 			"yield-time_ms": 250,
 		}, undefined, undefined, harness.ctx);
 		await expect(harness.tools.get("terminal_write").execute("write", {
-			reasoning: "should fail on non-interactive job",
+			reasoning: "should fail on non-tty job",
 			job_id: stuck.details.id,
 			chars: "x\n",
 		})).rejects.toThrow("does not accept input");

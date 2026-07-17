@@ -88,7 +88,6 @@ interface ManagedJob {
 	cwd: string;
 	status: JobStatus;
 	tty: boolean;
-	interactive: boolean;
 	startedAt: number;
 	endedAt?: number;
 	exitCode?: number;
@@ -457,7 +456,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			}
 		}
 	};
-	const startJob = (params: { command: string; description?: string; cwd?: string; timeoutSeconds?: number; tty?: boolean; interactive?: boolean }, ctx: any): ManagedJob => {
+	const startJob = (params: { command: string; description?: string; cwd?: string; timeoutSeconds?: number; tty?: boolean }, ctx: any): ManagedJob => {
 		if (activeJobs().length >= MAX_CONCURRENT_JOBS) throw new Error(`At most ${MAX_CONCURRENT_JOBS} background jobs may run at once`);
 		const command = params.command.trim();
 		if (!command) throw new Error("Background command must not be empty");
@@ -466,12 +465,6 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			throw new Error(`timeoutSeconds must be an integer between 1 and ${MAX_TIMEOUT_SECONDS}`);
 		}
 		if (params.tty && !isPtySupported()) throw new Error("PTY mode is unavailable on this platform");
-		// tty jobs are inherently interactive (they have a PTY stdin). For non-tty
-		// jobs, `interactive` defaults to false: stdin is closed so a command that
-		// reads stdin with no input exits on EOF instead of hanging. The model
-		// sets interactive=true to keep stdin writable for non-tty commands it
-		// intends to feed via terminal_write.
-		const interactive = Boolean(params.interactive) || Boolean(params.tty);
 		const cwd = resolve(ctx.cwd, params.cwd?.trim() || ".");
 		try {
 			if (!statSync(cwd).isDirectory()) throw new Error("not a directory");
@@ -488,7 +481,6 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			cwd,
 			status: "running",
 			tty: Boolean(params.tty),
-			interactive,
 			startedAt: Date.now(),
 			stdout: new BoundedOutput(),
 			stderr: new BoundedOutput(),
@@ -508,7 +500,6 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 				command,
 				cwd,
 				tty: job.tty,
-				interactive: job.interactive,
 				onStdout: (chunk) => appendOutput(job, "stdout", chunk),
 				onStderr: (chunk) => appendOutput(job, "stderr", chunk),
 				onPtyPid: (pid) => { job.ptyPid = pid; },
@@ -620,7 +611,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	};
 	const writeInput = async (job: ManagedJob, chars: string, closeStdin: boolean) => {
 		if (!isActive(job)) return;
-		if (!job.interactive) throw new Error(`Terminal ${job.id} does not accept input: started without interactive=true`);
+		if (!job.tty) throw new Error(`Terminal ${job.id} does not accept input: started without tty=true`);
 		const stdin = job.process?.stdin;
 		if (!stdin || stdin.destroyed) throw new Error(`Terminal ${job.id} does not accept input`);
 		if (chars) {

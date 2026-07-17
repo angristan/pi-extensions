@@ -8,11 +8,6 @@ export interface TerminalSpawnOptions {
 	command: string;
 	cwd: string;
 	tty: boolean;
-	// When false (default), a non-tty command spawns with stdin closed (ignore)
-	// so a command that reads stdin without input exits immediately on EOF
-	// instead of hanging forever. Set true to keep stdin writable for
-	// non-tty interactive commands fed via terminal_write.
-	interactive: boolean;
 	onStdout: (chunk: Buffer) => void;
 	onStderr: (chunk: Buffer) => void;
 	onPtyPid: (pid: number) => void;
@@ -79,16 +74,14 @@ export function spawnTerminal(options: TerminalSpawnOptions): ChildProcess {
 	let markerFilter: PidMarkerFilter | undefined;
 
 	if (!options.tty) {
-		// Non-interactive non-tty commands get stdin closed (ignore) so a command
-		// that reads stdin with no input exits on EOF instead of hanging. tty jobs
-		// and explicit `interactive: true` jobs keep a writable stdin pipe for
-		// terminal_write.
-		const stdin = options.tty || options.interactive ? "pipe" : "ignore";
+		// Non-tty commands spawn with stdin closed (ignore) so a command that
+		// reads stdin with no input exits on EOF instead of hanging forever.
+		// Use tty=true for interactive commands that need a writable stdin.
 		child = spawn(shell.shell, [...shell.args, options.command], {
 			cwd: options.cwd,
 			env,
 			detached: process.platform !== "win32",
-			stdio: [stdin, "pipe", "pipe"],
+			stdio: ["ignore", "pipe", "pipe"],
 			windowsHide: true,
 		});
 		child.stdout?.on("data", options.onStdout);
