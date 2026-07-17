@@ -46,6 +46,7 @@ function makeHarness() {
 	const handlers: Record<string, Array<(event: any, ctx: any) => any>> = {};
 	const commands: Record<string, any> = {};
 	const tools: Record<string, any> = {};
+	const activeTools = new Set<string>();
 	const entries: any[] = [];
 	const sent: Array<{ message: any; options: any }> = [];
 	const notifications: Array<{ message: string; type?: string }> = [];
@@ -80,13 +81,19 @@ function makeHarness() {
 		events: { emit() {}, on() { return () => {}; } },
 		on(event: string, handler: any) { (handlers[event] ??= []).push(handler); },
 		registerCommand(name: string, command: any) { commands[name] = command; },
-		registerTool(tool: any) { tools[tool.name] = tool; },
+		registerTool(tool: any) { tools[tool.name] = tool; activeTools.add(tool.name); },
+		getActiveTools() { return [...activeTools]; },
+		setActiveTools(names: string[]) {
+			activeTools.clear();
+			for (const name of names) activeTools.add(name);
+		},
 	} as any);
 
 	return {
 		handlers,
 		commands,
 		tools,
+		activeTools,
 		entries,
 		sent,
 		notifications,
@@ -196,6 +203,28 @@ test("replacing an unfinished goal requires confirmation", async () => {
 	await h.commands.goal.handler("replacement goal", h.ctx);
 	expect(h.confirmCalls).toHaveLength(2);
 	expect(latestGoalState(h).objective).toBe("replacement goal");
+});
+
+test("goal tools are active only while a goal is active", async () => {
+	const h = makeHarness();
+	await emit(h, "session_start");
+	for (const name of ["goal_complete", "goal_block"]) {
+		expect(h.activeTools.has(name)).toBe(false);
+	}
+
+	const stale = await h.tools.goal_complete.execute("stale", {}, undefined, undefined, h.ctx);
+	expect(stale.content[0].text).toBe("");
+	expect(stale.details).toMatchObject({ ok: false, ignored: true, reason: "no-goal" });
+
+	await h.commands.goal.handler("active goal", h.ctx);
+	for (const name of ["goal_complete", "goal_block"]) {
+		expect(h.activeTools.has(name)).toBe(true);
+	}
+
+	await h.tools.goal_complete.execute("complete", {}, undefined, undefined, h.ctx);
+	for (const name of ["goal_complete", "goal_block"]) {
+		expect(h.activeTools.has(name)).toBe(false);
+	}
 });
 
 test("editing a completed goal reactivates it and starts the loop", async () => {
