@@ -95,10 +95,16 @@ All sections except `# Goal` are optional.
 
 ## Tools exposed to the agent
 
-- **`goal_complete`** — mark the goal complete. Accepts an optional `summary`.
-- **`goal_block`** — record a blocker. Optional fields can describe the blocker,
-  attempted work, supporting detail, and next input; marks the goal `blocked`
-  only after the same blocker repeats three times.
+- **`goal_complete`** — active only while a `/goal` is active; marks the goal
+  complete and accepts an optional `summary`.
+- **`goal_block`** — active only while a `/goal` is active; records a blocker.
+  Optional fields can describe the blocker, attempted work, supporting detail,
+  and next input; marks the goal `blocked` only after the same blocker repeats
+  three times.
+
+When no goal is active, these tools are removed from the active tool set. If a
+stale in-flight model request still calls one, the call is ignored silently so it
+does not add noisy "no active goal" output to the transcript.
 
 ## How it renders
 

@@ -12,6 +12,8 @@ const EVENT_NAME = "goal:changed";
 const CONTINUATION_CUSTOM_TYPE = "goal-continuation";
 const CONTINUATION_TRIGGER_CONTENT = "Goal continuation requested.";
 const BLOCKED_AUDIT_THRESHOLD = 3;
+const GOAL_TOOL_NAMES = ["goal_complete", "goal_block"] as const;
+const GOAL_TOOL_NAME_SET = new Set<string>(GOAL_TOOL_NAMES);
 
 /**
  * Status lifecycle mirrors a persistent-objective goal system:
@@ -377,8 +379,32 @@ export default function (pi: ExtensionAPI) {
 
 	const persist = () => pi.appendEntry(ENTRY_TYPE, state ? { state } satisfies PersistedGoalEntry : { cleared: true } satisfies PersistedGoalEntry);
 
+	const syncGoalToolAvailability = () => {
+		const getActiveTools = (pi as any).getActiveTools;
+		const setActiveTools = (pi as any).setActiveTools;
+		if (typeof getActiveTools !== "function" || typeof setActiveTools !== "function") return;
+		const active = getActiveTools.call(pi);
+		if (!Array.isArray(active)) return;
+
+		const next = active.filter((name: string) => !GOAL_TOOL_NAME_SET.has(name));
+		if (state?.status === "active") {
+			for (const name of GOAL_TOOL_NAMES) if (!next.includes(name)) next.push(name);
+		}
+		if (active.length === next.length && active.every((name: string, index: number) => name === next[index])) return;
+		setActiveTools.call(pi, next);
+	};
+
+	const inactiveGoalToolResult = (reason: string) => ({
+		// Stale model requests may still contain a goal tool call from before the
+		// active-tool set was refreshed. Keep that misuse invisible to the user;
+		// the tools are removed from future requests whenever no goal is active.
+		content: [{ type: "text" as const, text: "" }],
+		details: { ok: false, ignored: true, reason },
+	});
+
 	const emit = (ctx: any) => {
 		activeCtx = ctx;
+		syncGoalToolAvailability();
 		goalCard.invalidate();
 		const displayed = state ? displayState(state) : undefined;
 		pi.events.emit(EVENT_NAME, displayed);
@@ -810,18 +836,14 @@ export default function (pi: ExtensionAPI) {
 		name: "goal_complete",
 		label: "Complete Goal",
 		description:
-			"Mark the active session goal as complete. Only call this when the objective is achieved and no required work remains. Do not call this speculatively.",
+			"Mark the active session goal as complete. Only available while a /goal is active; do not call this for normal task completion. Only call this when the objective is achieved and no required work remains. Do not call this speculatively.",
 		parameters: Type.Object({
 			summary: Type.Optional(Type.String({ description: "Optional concise summary of what was accomplished." })),
 		}),
 		renderCall: () => new Text("", 0, 0),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			if (!state) {
-				return { content: [{ type: "text", text: "No active session goal." }], details: { ok: false } };
-			}
-			if (state.status !== "active") {
-				return { content: [{ type: "text", text: `Goal is ${state.status}, not active. Resume it before completing.` }], details: { ok: false } };
-			}
+			if (!state) return inactiveGoalToolResult("no-goal");
+			if (state.status !== "active") return inactiveGoalToolResult(`goal-${state.status}`);
 			setStatus("complete", ctx);
 			ctx.ui.notify(`Goal complete: ${params.summary ?? state.objective}`, "info");
 			return {
@@ -835,7 +857,7 @@ export default function (pi: ExtensionAPI) {
 		name: "goal_block",
 		label: "Report Goal Blocker",
 		description:
-			`Mark the active goal blocked after the same blocking condition has recurred for at least ${BLOCKED_AUDIT_THRESHOLD} consecutive goal turns and no meaningful progress is possible without user input or an external-state change. Do not call merely because work is hard, slow, uncertain, incomplete, or would benefit from clarification.`,
+			`Mark the active goal blocked. Only available while a /goal is active. Use after the same blocking condition has recurred for at least ${BLOCKED_AUDIT_THRESHOLD} consecutive goal turns and no meaningful progress is possible without user input or an external-state change. Do not call merely because work is hard, slow, uncertain, incomplete, or would benefit from clarification.`,
 		parameters: Type.Object({
 			blocker: Type.Optional(Type.String({ description: "Optional short description of the blocking condition." })),
 			attempted: Type.Optional(Type.String({ description: "Optional note about what was attempted." })),
@@ -843,14 +865,10 @@ export default function (pi: ExtensionAPI) {
 			next_input: Type.Optional(Type.String({ description: "Optional input or external change that would unlock progress." })),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			if (!state) return inactiveGoalToolResult("no-goal");
+			if (state.status !== "active") return inactiveGoalToolResult(`goal-${state.status}`);
 			const alreadyReportedThisTurn = currentTurnCalledGoalBlock;
 			currentTurnCalledGoalBlock = true;
-			if (!state) {
-				return { content: [{ type: "text", text: "No active session goal." }], details: { ok: false } };
-			}
-			if (state.status !== "active") {
-				return { content: [{ type: "text", text: `Goal is ${state.status}, not active. Resume it before reporting blockers.` }], details: { ok: false } };
-			}
 			if (alreadyReportedThisTurn) {
 				return { content: [{ type: "text", text: "A blocker has already been recorded for this goal turn. Wait for the next goal turn before counting the same blocker again." }], details: { ok: true, blocked: false, duplicateTurn: true } };
 			}
