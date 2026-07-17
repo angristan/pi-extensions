@@ -16,6 +16,8 @@ interface Harness {
 	selectCalls: Array<{ title: string; options: string[] }>;
 	notifications: Array<{ message: string; level: string | undefined }>;
 	events: Array<{ name: string; payload: any }>;
+	entryRendererTypes: string[];
+	appendedEntries: Array<{ type: string; data: any }>;
 	ctx: any;
 }
 
@@ -37,6 +39,8 @@ function createHarness(options: { killGraceMs?: number } = {}): Harness {
 	const selectCalls: Array<{ title: string; options: string[] }> = [];
 	const notifications: Array<{ message: string; level: string | undefined }> = [];
 	const events: Array<{ name: string; payload: any }> = [];
+	const entryRendererTypes: string[] = [];
+	const appendedEntries: Array<{ type: string; data: any }> = [];
 	const ctx = {
 		cwd: process.cwd(),
 		mode: "tui",
@@ -57,14 +61,26 @@ function createHarness(options: { killGraceMs?: number } = {}): Harness {
 		registerCommand(name: string, definition: any) { commands.set(name, definition); },
 		getActiveTools() { return [...activeTools]; },
 		setActiveTools(names: string[]) { activeTools.clear(); for (const name of names) activeTools.add(name); },
-		registerEntryRenderer() {},
+		registerEntryRenderer(type: string) { entryRendererTypes.push(type); },
 		on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
-		appendEntry() {},
+		appendEntry(type: string, data: any) { appendedEntries.push({ type, data }); },
 		events: { emit(name: string, payload: any) { events.push({ name, payload }); } },
 	};
 	registerBackgroundJobs(pi as any, options);
 	registerBetterNativeBash(pi as any);
-	return { tools, activeTools, commands, handlers, statuses, selectCalls, notifications, events, ctx };
+	return {
+		tools,
+		activeTools,
+		commands,
+		handlers,
+		statuses,
+		selectCalls,
+		notifications,
+		events,
+		entryRendererTypes,
+		appendedEntries,
+		ctx,
+	};
 }
 
 async function startHarness(harness: Harness): Promise<void> {
@@ -179,6 +195,22 @@ describe("terminal tools", () => {
 			expect(Object.keys(tool.parameters.properties)[0]).toBe("reasoning");
 			expect(tool.parameters.required).toContain("reasoning");
 		}
+	});
+
+	test("persists completion without a spacer-producing entry renderer", async () => {
+		const harness = createHarness();
+		await startHarness(harness);
+		await harness.tools.get("bash").execute("exec", {
+			command: "true",
+			reasoning: "verify invisible persistence",
+		}, undefined, undefined, harness.ctx);
+
+		expect(harness.appendedEntries).toHaveLength(1);
+		expect(harness.appendedEntries[0]).toMatchObject({
+			type: "background-job",
+			data: { status: "completed" },
+		});
+		expect(harness.entryRendererTypes).not.toContain("background-job");
 	});
 
 	test("requires integer timeout seconds in schema and execution", async () => {

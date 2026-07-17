@@ -782,9 +782,10 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	};
 	setBackgroundTerminalService(terminalService);
 
-	// Completion entries persist final state but intentionally render nothing:
-	// the original tool card reads the live/restored job and updates in place.
-	pi.registerEntryRenderer<JobSnapshot>(ENTRY_TYPE, () => new Container());
+	// Completion entries persist final state without an entry renderer. The
+	// original tool card reads the live/restored job and updates in place. An
+	// empty component still receives Pi's custom-entry spacer, so registering one
+	// would add a blank transcript row for every completed command.
 
 	pi.registerTool({
 		name: "job_output",
