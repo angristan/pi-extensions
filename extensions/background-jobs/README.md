@@ -84,7 +84,7 @@ duplicate transcript entry.
   that ignores SIGTERM (`trap '' TERM`) cannot survive an ungraceful pi exit
   (crash, `emergencyTerminalExit`, signal). Without it, such jobs were
   re-parented to PID 1 and drove the render loop forever.
-- A yielded command notifies only if it finishes after the agent turn settles; active turns rely on the single turn-complete notification.
+- Yielded command completions update their tool card and footer status without emitting desktop notifications.
 
 ## Dependencies
 

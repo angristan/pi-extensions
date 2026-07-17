@@ -20,7 +20,6 @@ import { isPtySupported, spawnTerminal } from "./terminal-process.js";
 export { BoundedOutput, CursorOutput } from "./output.js";
 
 const ENTRY_TYPE = "background-job";
-const NOTIFICATION_EVENT = "notification";
 const STATUS_KEY = "background-jobs";
 const MAX_CONCURRENT_JOBS = 16;
 const MAX_RETAINED_JOBS = 50;
@@ -417,7 +416,6 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	const killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
 	let activeCtx: any;
 	let sessionGeneration = 0;
-	let agentRunning = false;
 
 	const activeJobs = () => [...jobs.values()].filter(isActive);
 	const activeBackgroundJobs = () => activeJobs().filter((job) => job.backgrounded);
@@ -504,14 +502,6 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 
 		if (!job.suppressPersistence && job.sessionGeneration === sessionGeneration) {
 			pi.appendEntry(ENTRY_TYPE, snapshot(job, PERSISTED_OUTPUT_BYTES));
-			if (job.backgrounded && !agentRunning) {
-				const project = job.cwd.split("/").filter(Boolean).pop() || "pi";
-				pi.events.emit(NOTIFICATION_EVENT, {
-					title: `${project}: background job ${job.status}`,
-					body: `${job.id}: ${compactCommand(job.command, 150)}`,
-				});
-				activeCtx?.ui.notify?.(`${job.id} ${job.status}${job.exitCode !== undefined ? ` (exit ${job.exitCode})` : ""}.`, job.status === "completed" ? "info" : "warning");
-			}
 		}
 	};
 	const startJob = (params: { command: string; description?: string; cwd?: string; timeoutSeconds?: number; tty?: boolean }, ctx: any): ManagedJob => {
@@ -939,7 +929,6 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 
 	pi.on("session_start", (_event, ctx) => {
 		sessionGeneration += 1;
-		agentRunning = false;
 		activeCtx = ctx;
 		jobs.clear();
 		for (const entry of ctx.sessionManager.getEntries()) {
@@ -952,12 +941,8 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		updateStatus();
 	});
 
-	pi.on("agent_start", () => { agentRunning = true; });
-	pi.on("agent_settled", () => { agentRunning = false; });
-
 	pi.on("session_shutdown", async () => {
 		sessionGeneration += 1;
-		agentRunning = false;
 		const stopping = activeJobs();
 		for (const job of stopping) {
 			job.suppressPersistence = true;
