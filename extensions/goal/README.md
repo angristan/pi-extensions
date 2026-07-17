@@ -1,14 +1,14 @@
 # goal
 
 Track an explicit objective for the session as a **persistent, self-driving
-loop**): the objective stays in view, and after each turn
+loop**: the objective stays in view, and after each turn
 the agent keeps working toward it until the evidence says it's done or it gets
 blocked.
 
-The goal is a short statement plus optional **validation criteria**, an optional
-**token budget**, and an optional **verify command** (a shell command that must
-exit 0 before completion). The goal is surfaced in the `plan-progress` overlay
-above the plan, and injected into the system prompt on every turn.
+The goal is a short statement plus optional **validation criteria** and an
+optional **verify command** (a shell command that must exit 0 before
+completion). The goal is surfaced in its own overlay card and injected into the
+system prompt on every turn.
 
 ## How the loop works
 
@@ -28,7 +28,6 @@ the objective and requires an evidence audit before completion.
                      ▼
         ┌── maybeContinue ──┐
         │ active + idle?     │── no ──► stop (wait for user)
-        │ within budget?     │
         │ last turn had     │
         │  a tool call?     │── no ──► pause (anti-spin)
         └──────┬─────────────┘
@@ -38,7 +37,6 @@ the objective and requires an evidence audit before completion.
                │
                │ model calls goal_complete (evidence-backed) ──► complete
                │ model calls goal_block ──► pause
-               │ token budget hit ──► budget-limited + one summary turn
                │ user presses Esc ──► pause (interruption)
 ```
 
@@ -51,15 +49,10 @@ the objective and requires an evidence audit before completion.
   spin on summarizing turns.
 - **Interruption → pause** — if you abort a turn (Esc), the goal auto-pauses
   so it doesn't immediately resume on the next boundary.
-- **Budget enforcement** — if a `tokenBudget` is set and exceeded, the goal
-  switches to `budget-limited`, stops substantive work, and sends one final
-  "summarize progress + blockers" turn.
 - **Evidence-based completion** — the model marks the goal complete only by
   calling the `goal_complete` tool, which requires one evidence entry per
   validation criterion. If a `verify` command is configured, it runs and must
   exit 0 before completion is allowed.
-- **No caps by default** — set a `tokenBudget` if you want
-  a hard stop. You are expected to monitor long-running goals.
 
 ## Commands
 
@@ -78,9 +71,6 @@ Usage: `/goal [<objective>|clear|edit|pause|resume|complete]`
 # Goal
 Reduce p95 checkout latency below 120ms
 
-## Token budget
-100k
-
 ## Verify
 npm test
 
@@ -90,9 +80,8 @@ npm test
 - no public API changes
 ```
 
-All sections except `# Goal` are optional. `Token budget` accepts plain numbers
-or `K`/`M`/`G` suffixes (`off`/`none`/`unlimited` disable it). `Verify` is a
-single shell command line.
+All sections except `# Goal` are optional. `Verify` is a single shell command
+line.
 
 ## Tools exposed to the agent
 
@@ -103,24 +92,27 @@ single shell command line.
 
 ## How it renders
 
-The `goal` extension stores state and emits `goal:changed`. The `plan-progress`
-extension subscribes and shows the active goal at the top of the plan overlay:
+The `goal` extension stores state and renders the active goal in a dedicated
+overlay card:
 
 ```
-╭ Goal · Plan 1/3 ─────────────────────────╮
-● active  continuations 4
-  Reduce p95 checkout latency below 120ms
-  budget 18% · 18,000/100,000 tokens
-  verify $ npm test
+╭ Goal active ─────────────────────────────╮
+Reduce p95 checkout latency below 120ms
+
+Active time    2m 14s
+Continuations  4
+Verify         $ npm test
+
+Validation
   ○ checkout benchmark p95 < 120ms
   ○ correctness suite stays green
+╰──────────────────────────────────────────╯
 ```
 
-Status colors: `● active` (green), `◐ paused` (yellow), `budget-limited`
-(red), `complete` (dim).
+Status colors: `● active` (green), `◐ paused` (yellow), `complete` (dim).
 
 ## Dependencies
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
 - **Depends on extensions:** None.
-- **Used by extensions:** `plan-progress` (subscribes to `goal:changed`).
+- **Used by extensions:** None.

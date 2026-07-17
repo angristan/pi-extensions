@@ -15,24 +15,20 @@ const CONTINUATION_CUSTOM_TYPE = "goal-continuation";
  * Status lifecycle mirrors a persistent-objective goal system:
  * active → (pause) → paused → (resume) → active
  * active → (complete, evidence-backed) → complete
- * active → (budget hit) → budget-limited → (resume) → active
  * active → (interrupted by user) → paused
  */
-type GoalStatus = "active" | "paused" | "complete" | "budget-limited";
+type GoalStatus = "active" | "paused" | "complete";
 
 export interface GoalState {
 	objective: string;
 	validation: string[];
 	/** Optional shell command that must exit 0 before the goal can be completed. */
 	verify?: string;
-	/** Optional cap on additional prompt tokens consumed while the goal is active. */
-	tokenBudget?: number;
 	status: GoalStatus;
 	createdAt: number;
 	updatedAt: number;
 	activeSince?: number;
 	accumulatedActiveMs: number;
-	baselinePromptTokens: number;
 	completedAt?: number;
 	/** Continuation accounting for the auto-loop. */
 	continuations: number;
@@ -40,7 +36,6 @@ export interface GoalState {
 }
 
 export interface GoalDisplayState extends GoalState {
-	usedTokens: number;
 	elapsedMs: number;
 }
 
@@ -50,16 +45,8 @@ interface PersistedGoalEntry {
 }
 
 // ============================================================================
-// Formatting helpers (unchanged)
+// Formatting helpers
 // ============================================================================
-
-function compactNumber(value: number): string {
-	const safe = Math.max(0, Math.round(value));
-	if (safe < 1_000) return String(safe);
-	if (safe < 1_000_000) return `${(safe / 1_000).toFixed(safe < 10_000 ? 1 : 0)}K`;
-	if (safe < 1_000_000_000) return `${(safe / 1_000_000).toFixed(safe < 10_000_000 ? 1 : 0)}M`;
-	return `${(safe / 1_000_000_000).toFixed(1)}B`;
-}
 
 function formatDuration(milliseconds: number): string {
 	const seconds = Math.max(0, Math.floor(milliseconds / 1000));
@@ -71,37 +58,20 @@ function formatDuration(milliseconds: number): string {
 }
 
 // ============================================================================
-// Token budget parsing (unchanged public API)
-// ============================================================================
-
-export function parseTokenBudget(value: string): number | undefined {
-	const normalized = value.trim().replace(/,/g, "").toLowerCase();
-	if (!normalized || normalized === "off" || normalized === "none" || normalized === "unlimited") return undefined;
-	const match = normalized.match(/^(\d+(?:\.\d+)?)\s*([kmg])?(?:\s*tokens?)?$/);
-	if (!match) throw new Error(`Invalid token budget: ${value}`);
-	const multiplier = match[2] === "g" ? 1_000_000_000 : match[2] === "m" ? 1_000_000 : match[2] === "k" ? 1_000 : 1;
-	const parsed = Math.round(Number(match[1]) * multiplier);
-	if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(`Invalid token budget: ${value}`);
-	return parsed;
-}
-
-// ============================================================================
-// Goal document (markdown) — schema extended with `## Verify` and `## Token budget`
+// Goal document (markdown) — schema extended with `## Verify`
 // ============================================================================
 
 export function goalDocument(state?: Partial<GoalState>): string {
 	const objective = state?.objective?.trim() || "Describe the outcome that must become true.";
-	const budget = state?.tokenBudget ? compactNumber(state.tokenBudget) : "off";
 	const verify = state?.verify?.trim() || "off";
 	const validation = state?.validation?.length
 		? state.validation.map((item) => `- ${item}`).join("\n")
 		: "- Add a concrete acceptance criterion.";
-	return `# Goal\n${objective}\n\n## Token budget\n${budget}\n\n## Verify\n${verify}\n\n## Validation\n${validation}\n`;
+	return `# Goal\n${objective}\n\n## Verify\n${verify}\n\n## Validation\n${validation}\n`;
 }
 
 export interface ParsedGoalDocument {
 	objective: string;
-	tokenBudget?: number;
 	verify?: string;
 	validation: string[];
 }
@@ -117,42 +87,29 @@ export function parseGoalDocument(document: string): ParsedGoalDocument {
 	if (!objective) throw new Error("Goal objective must not be empty");
 	const section = (header: string) =>
 		source.match(new RegExp(`^##\\s+${header}\\s*\\n([\\s\\S]*?)(?=^##\\s+|(?![\\s\\S]))`, "im"))?.[1] ?? "";
-	const budgetRaw = section("Token budget").trim().split("\n", 1)[0];
-	const tokenBudget = budgetRaw ? parseTokenBudget(budgetRaw) : undefined;
 	const verifyRaw = section("Verify").trim().split("\n", 1)[0];
 	const verify = verifyRaw && !/^off$/i.test(verifyRaw) ? verifyRaw : undefined;
 	const validation = (section("Validation"))
 		.split("\n")
 		.map((line) => line.replace(/^\s*[-*]\s*/, "").trim())
 		.filter((line) => line && !/^add a concrete acceptance criterion\.?$/i.test(line));
-	return { objective, tokenBudget, verify, validation };
-}
-
-// ============================================================================
-// Prompt-token accounting (prompt tokens = input + cache reads/writes)
-// ============================================================================
-
-function promptTokens(entries: readonly any[]): number {
-	let total = 0;
-	for (const entry of entries) {
-		if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
-		const usage = entry.message.usage;
-		if (!usage) continue;
-		total += Math.max(0, usage.input ?? 0) + Math.max(0, usage.cacheRead ?? 0) + Math.max(0, usage.cacheWrite ?? 0);
-	}
-	return total;
+	return { objective, verify, validation };
 }
 
 function elapsedMs(state: GoalState, now = Date.now()): number {
 	return state.accumulatedActiveMs + (state.status === "active" && state.activeSince ? Math.max(0, now - state.activeSince) : 0);
 }
 
-function displayState(state: GoalState, entries: readonly any[], now = Date.now()): GoalDisplayState {
+function displayState(state: GoalState, now = Date.now()): GoalDisplayState {
 	return {
 		...state,
-		usedTokens: Math.max(0, promptTokens(entries) - state.baselinePromptTokens),
 		elapsedMs: elapsedMs(state, now),
 	};
+}
+
+function normalizeStatus(status: unknown): GoalStatus {
+	if (status === "active" || status === "complete") return status;
+	return "paused";
 }
 
 // ============================================================================
@@ -163,13 +120,10 @@ export function buildGoalContext(state: GoalState): string {
 	const validation = state.validation.length
 		? `\nValidation criteria:\n${state.validation.map((item) => `- ${item}`).join("\n")}`
 		: "";
-	const budget = state.tokenBudget
-		? `\nToken budget for this goal: ${state.tokenBudget} additional prompt tokens. When you reach it, stop substantive work, summarize progress and blockers, and identify the next useful step.`
-		: "";
 	const verify = state.verify
 		? `\nA verification command is configured and MUST exit 0 before this goal can be marked complete:\n  $ ${state.verify}`
 		: "";
-	return `## Active session goal\nThe durable outcome for this session is:\n${state.objective}${validation}${budget}${verify}\n\nUse the execution plan for intermediate steps. Do not mark the goal complete until its validation criteria are satisfied AND verified against concrete evidence (files changed, commands run, tests passed, artifacts produced). If no valid path remains, stop and report the blocker instead of declaring success.`;
+	return `## Active session goal\nThe durable outcome for this session is:\n${state.objective}${validation}${verify}\n\nUse the execution plan for intermediate steps. Do not mark the goal complete until its validation criteria are satisfied AND verified against concrete evidence (files changed, commands run, tests passed, artifacts produced). If no valid path remains, stop and report the blocker instead of declaring success.`;
 }
 
 /**
@@ -177,23 +131,20 @@ export function buildGoalContext(state: GoalState): string {
  * Re-orients the agent around the objective and requires an evidence audit
  * before completion.
  */
-function continuationPrompt(state: GoalState, display: GoalDisplayState): string {
-	const budgetLine = state.tokenBudget
-		? `\nBudget: ${compactNumber(display.usedTokens)}/${compactNumber(state.tokenBudget)} prompt tokens used (${Math.min(999, (display.usedTokens / state.tokenBudget) * 100).toFixed(0)}%).`
-		: "";
+function continuationPrompt(state: GoalState): string {
 	const verifyLine = state.verify ? `\nRemember: the verify command \`${state.verify}\` must exit 0 before completion.` : "";
 	const validationList = state.validation.length
 		? state.validation.map((v, i) => `  ${i + 1}. ${v}`).join("\n")
 		: "  - (no explicit criteria — judge against the objective)";
-	return `[Goal continuation — turn ${state.continuations + 1}]${budgetLine}\nThe active goal is:\n${state.objective}\n\nValidation criteria:\n${validationList}${verifyLine}\n\nContinue working toward this goal. Before declaring it complete, audit it against concrete evidence (files changed, commands run, tests passed, build/benchmark output, generated artifacts). If it is complete and verified, call the \`goal_complete\` tool with per-criterion evidence. If you are blocked or no valid path remains, call \`goal_block\` instead. Do not just summarize — either make progress or report a blocker.`;
+	return `[Goal continuation — turn ${state.continuations + 1}]\nThe active goal is:\n${state.objective}\n\nValidation criteria:\n${validationList}${verifyLine}\n\nContinue working toward this goal. Before declaring it complete, audit it against concrete evidence (files changed, commands run, tests passed, build/benchmark output, generated artifacts). If it is complete and verified, call the \`goal_complete\` tool with per-criterion evidence. If you are blocked or no valid path remains, call \`goal_block\` instead. Do not just summarize — either make progress or report a blocker.`;
 }
 
 // ============================================================================
 // Overlay rendering (kept compatible with plan-progress subscriber)
 // ============================================================================
 
-function statusColor(status: GoalStatus): "success" | "warning" | "muted" | "error" {
-	return status === "active" ? "success" : status === "paused" ? "warning" : status === "budget-limited" ? "error" : "muted";
+function statusColor(status: GoalStatus): "success" | "warning" | "muted" {
+	return status === "active" ? "success" : status === "paused" ? "warning" : "muted";
 }
 
 function goalLines(state: GoalDisplayState, theme: any): string[] {
@@ -202,12 +153,6 @@ function goalLines(state: GoalDisplayState, theme: any): string[] {
 		"",
 		`${theme.fg("dim", "Active time")}  ${formatDuration(state.elapsedMs)}`,
 	];
-	if (state.tokenBudget) {
-		const percent = Math.min(999, (state.usedTokens / state.tokenBudget) * 100);
-		lines.push(`${theme.fg("dim", "Token budget")} ${compactNumber(state.usedTokens)} / ${compactNumber(state.tokenBudget)} · ${percent.toFixed(1)}%`);
-	} else {
-		lines.push(`${theme.fg("dim", "Tokens used")}  ${compactNumber(state.usedTokens)} since goal creation`);
-	}
 	lines.push(`${theme.fg("dim", "Continuations")}  ${state.continuations}`);
 	if (state.verify) lines.push(`${theme.fg("dim", "Verify")}  $ ${state.verify}`);
 	if (state.validation.length) {
@@ -253,7 +198,7 @@ export default function (pi: ExtensionAPI) {
 		},
 		renderBody: (width: number, maxHeight: number, theme: any) => {
 			if (!state) return [];
-			const displayed = displayState(state, branchEntries(activeCtx));
+			const displayed = displayState(state);
 			const lines: string[] = [];
 			for (const source of goalLines(displayed, theme)) {
 				if (!source) { lines.push(""); continue; }
@@ -273,7 +218,7 @@ export default function (pi: ExtensionAPI) {
 	const emit = (ctx: any) => {
 		activeCtx = ctx;
 		goalCard.invalidate();
-		const displayed = state ? displayState(state, branchEntries(ctx)) : undefined;
+		const displayed = state ? displayState(state) : undefined;
 		pi.events.emit(EVENT_NAME, displayed);
 		// The dedicated overlay card is the source of truth for goal status now;
 		// keep the footer clear.
@@ -318,7 +263,6 @@ export default function (pi: ExtensionAPI) {
 				updatedAt: now,
 				activeSince: now,
 				accumulatedActiveMs: 0,
-				baselinePromptTokens: promptTokens(branchEntries(ctx)),
 				continuations: 0,
 			};
 		}
@@ -333,7 +277,7 @@ export default function (pi: ExtensionAPI) {
 		}
 		// The always-on overlay card already shows full goal state; /goal just
 		// confirms the status briefly so it doesn't open a redundant modal.
-		const displayed = displayState(state, branchEntries(ctx));
+		const displayed = displayState(state);
 		ctx.ui.notify(`${displayed.status}: ${displayed.objective}`, "info");
 	};
 
@@ -356,7 +300,6 @@ export default function (pi: ExtensionAPI) {
 	 *  - goal must be active
 	 *  - thread must be idle (not streaming)
 	 *  - no pending user input queued
-	 *  - within token budget
 	 *  - anti-spin: the last continuation turn must have made a tool call
 	 *  - the previous turn must not have been aborted (interruption → pause)
 	 */
@@ -379,24 +322,10 @@ export default function (pi: ExtensionAPI) {
 			return false;
 		}
 
-		// Budget enforcement.
-		if (state.tokenBudget) {
-			const used = Math.max(0, promptTokens(branchEntries(ctx)) - state.baselinePromptTokens);
-			if (used >= state.tokenBudget) {
-				ctx.ui.notify(`Goal: token budget of ${compactNumber(state.tokenBudget)} reached — switching to budget-limited.`, "warning");
-				setStatus("budget-limited", ctx);
-				// One final summarize-and-stop prompt.
-				sendContinuation(ctx,
-					`[Goal budget reached] The token budget for this goal has been exhausted. Stop substantive work. Summarize: what was attempted, what evidence was gathered, what is the current blocker, and what input would unlock progress. Do not start new work.`);
-				return true;
-			}
-		}
-
-		const displayed = displayState(state, branchEntries(ctx));
 		state.continuations += 1;
 		state.lastContinuationAt = Date.now();
 		saveAndEmit(ctx);
-		sendContinuation(ctx, continuationPrompt(state, displayed));
+		sendContinuation(ctx, continuationPrompt(state));
 		return true;
 	};
 
@@ -409,8 +338,7 @@ export default function (pi: ExtensionAPI) {
 		handler: async (args, ctx) => {
 			const input = args.trim();
 			if (!input) { await showGoal(ctx); return; }
-			const [command = "", ...rest] = input.split(/\s+/);
-			const value = rest.join(" ").trim();
+			const [command = ""] = input.split(/\s+/);
 			const sub = command.toLowerCase();
 			// Subcommands with fixed meaning.
 			switch (sub) {
@@ -456,7 +384,6 @@ export default function (pi: ExtensionAPI) {
 				updatedAt: now,
 				activeSince: now,
 				accumulatedActiveMs: 0,
-				baselinePromptTokens: promptTokens(branchEntries(ctx)),
 				continuations: 0,
 			};
 			saveAndEmit(ctx);
@@ -471,7 +398,7 @@ export default function (pi: ExtensionAPI) {
 	// ------------------------------------------------------------------------
 
 	pi.on("before_agent_start", (event) => {
-		if (!state || (state.status !== "active" && state.status !== "budget-limited")) return;
+		if (!state || state.status !== "active") return;
 		return { systemPrompt: `${event.systemPrompt}\n\n${buildGoalContext(state)}` };
 	});
 
@@ -503,7 +430,7 @@ export default function (pi: ExtensionAPI) {
 		maybeContinue(ctx);
 	});
 
-	// If compaction runs, re-emit so the overlay stays accurate (token counts shift).
+	// If compaction runs, re-emit so the overlay stays accurate.
 	pi.on("session_compact", (_event, ctx) => emit(ctx));
 
 	// ------------------------------------------------------------------------
@@ -518,12 +445,24 @@ export default function (pi: ExtensionAPI) {
 		for (const entry of branchEntries(ctx)) {
 			if (entry.type !== "custom" || entry.customType !== ENTRY_TYPE) continue;
 			const data = entry.data as PersistedGoalEntry | undefined;
-			state = data?.cleared || !data?.state
-				? undefined
-				: {
-					...data.state,
-					validation: [...(data.state.validation ?? [])],
-				};
+			if (data?.cleared || !data?.state) {
+				state = undefined;
+				continue;
+			}
+			const restored = data.state as GoalState & Record<string, unknown>;
+			state = {
+				objective: typeof restored.objective === "string" ? restored.objective : "",
+				validation: Array.isArray(restored.validation) ? [...restored.validation] : [],
+				verify: typeof restored.verify === "string" ? restored.verify : undefined,
+				status: normalizeStatus(restored.status),
+				createdAt: typeof restored.createdAt === "number" ? restored.createdAt : Date.now(),
+				updatedAt: typeof restored.updatedAt === "number" ? restored.updatedAt : Date.now(),
+				activeSince: typeof restored.activeSince === "number" ? restored.activeSince : undefined,
+				accumulatedActiveMs: typeof restored.accumulatedActiveMs === "number" ? restored.accumulatedActiveMs : 0,
+				completedAt: typeof restored.completedAt === "number" ? restored.completedAt : undefined,
+				continuations: typeof restored.continuations === "number" ? restored.continuations : 0,
+				lastContinuationAt: typeof restored.lastContinuationAt === "number" ? restored.lastContinuationAt : undefined,
+			};
 		}
 		emit(ctx);
 	};
@@ -574,7 +513,7 @@ export default function (pi: ExtensionAPI) {
 			if (!state) {
 				return { content: [{ type: "text", text: "No active session goal." }], details: { ok: false } };
 			}
-			if (state.status !== "active" && state.status !== "budget-limited") {
+			if (state.status !== "active") {
 				return { content: [{ type: "text", text: `Goal is ${state.status}, not active. Resume it before completing.` }], details: { ok: false } };
 			}
 			// Evidence audit: require one entry per validation criterion.
