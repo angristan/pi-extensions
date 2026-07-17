@@ -4,12 +4,13 @@ import {
 	detectOpenUrlFailure,
 	normalizeHttpUrl,
 	parseSearchResultText,
+	truncateText,
 	type NewsSearchResult,
 } from "./client";
 
 function largeNewsResult(): NewsSearchResult {
 	return {
-		provider: "mistral-web-search-mcp",
+		provider: "mistral",
 		tool: "news_search",
 		query: "bounded persistence",
 		startDate: "2026-03-01",
@@ -172,6 +173,12 @@ describe("search tool persistence", () => {
 			message: "Website denied automated access.",
 		});
 		expect(detectOpenUrlFailure("Page content loaded normally.")).toBeUndefined();
+	});
+
+	test("strips terminal controls before page content reaches the model", () => {
+		const result = truncateText("Readable \x1b[31mred\x1b[0m text\x1b]8;;https://evil.example\x07link\x1b]8;;\x07");
+		expect(result.content).toBe("Readable red textlink");
+		expect(result.originalBytes).toBeGreaterThan(Buffer.byteLength(result.content));
 	});
 
 	test("keeps description available when snippets are absent", () => {

@@ -43,7 +43,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | [`goal`](extensions/goal/) | Track an explicit objective for the session |
 | [`history-search`](extensions/history-search/) | Incremental search across your previous user prompts, inline in the editor |
 | [`hyperlinks`](extensions/hyperlinks/) | Render local file paths as clickable OSC 8 terminal hyperlinks, and expose the helper to other extensions |
-| [`mistral-web-search`](extensions/mistral-web-search/) | Web search via Mistral's web-search connector, rendered as compact transcript rows |
+| [`web-search`](extensions/web-search/) | Quality-routed web search, news discovery, and page opening through Exa, Firecrawl, and optional Mistral |
 | [`notifications`](extensions/notifications/) | Desktop notifications for agent activity, so you can context-switch away and get pinged |
 | [`openai-codex-fast`](extensions/openai-codex-fast/) | Toggle OpenAI Codex Fast mode and show a purple `fast` footer indicator when active |
 | [`overlay-stack`](extensions/overlay-stack/) | Internal host that vertically composes independent top-right overlay cards |
@@ -88,7 +88,7 @@ right. Extensions not shown have no internal extension dependency.
 background-jobs <------> better-native-pi ------> code-blocks
                            |
                            +---------------------> hyperlinks
-mistral-web-search ------> better-native-pi
+web-search --------------> better-native-pi
 doctor ------------------> accent-color
 overlay-stack -----------> accent-color
 edit-summary ------------> overlay-stack <------- plan-progress

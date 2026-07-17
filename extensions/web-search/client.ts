@@ -2,6 +2,26 @@ import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type {
+	NewsSearchArgs,
+	NewsSearchResult,
+	OpenUrlResult,
+	RagResult,
+	SearchDisplayDetails,
+	SearchDisplayItem,
+	WebSearchArgs,
+	WebSearchResult,
+} from "./types";
+export type {
+	NewsSearchArgs,
+	NewsSearchResult,
+	OpenUrlResult,
+	RagResult,
+	SearchDisplayDetails,
+	SearchDisplayItem,
+	WebSearchArgs,
+	WebSearchResult,
+} from "./types";
 
 const DEFAULT_PROVIDER_ID = "mistral";
 const DEFAULT_API_KEY_ENV = "MISTRAL_API_KEY";
@@ -19,78 +39,6 @@ const MAX_SOURCE_CHARS = 200;
 const MAX_DATE_CHARS = 100;
 const MAX_DISPLAY_RESULTS = 10;
 
-export interface RagResult {
-	id: string;
-	url: string | null;
-	title: string | null;
-	description: string | null;
-	snippets: string[];
-	date: string | null;
-	rank: number;
-	source: string;
-	metadata: Record<string, unknown> | null;
-	canOpen: boolean;
-}
-
-export interface WebSearchResult {
-	provider: "mistral-web-search-mcp";
-	tool: "web_search";
-	query: string;
-	startDate?: string;
-	endDate?: string;
-	limit: number;
-	results: RagResult[];
-	elapsedMs: number;
-}
-
-export interface NewsSearchResult {
-	provider: "mistral-web-search-mcp";
-	tool: "news_search";
-	query: string;
-	startDate?: string;
-	endDate?: string;
-	lang?: string;
-	limit: number;
-	results: RagResult[];
-	elapsedMs: number;
-}
-
-export interface OpenUrlResult {
-	provider: "mistral-web-search-mcp";
-	tool: "open_url";
-	url: string;
-	content: string;
-	elapsedMs: number;
-	truncated: boolean;
-	originalBytes: number;
-	originalLines: number;
-}
-
-export interface SearchDisplayItem {
-	title?: string;
-	url?: string;
-	website?: string;
-	searchEngine?: string;
-	/** Legacy field retained for older persisted tool results. */
-	source?: string;
-	rank?: number;
-	date?: string;
-	description?: string;
-	snippets: string[];
-	canOpen?: boolean;
-}
-
-export interface SearchDisplayDetails {
-	query?: string;
-	startDate?: string;
-	endDate?: string;
-	lang?: string;
-	searchEngine?: string;
-	elapsedMs?: number;
-	resultCount: number;
-	results: SearchDisplayItem[];
-}
-
 interface ProviderConfig {
 	baseUrl?: string;
 	apiKey?: string;
@@ -107,17 +55,6 @@ export interface MistralMcpOptions {
 	apiKey?: string;
 	timeoutMs?: number;
 	signal?: AbortSignal;
-}
-
-export interface WebSearchArgs {
-	query: string;
-	startDate?: string;
-	endDate?: string;
-	limit?: number;
-}
-
-export interface NewsSearchArgs extends WebSearchArgs {
-	lang?: string;
 }
 
 function agentDir(): string {
@@ -148,11 +85,21 @@ function resolveApiKey(reference: string | undefined, fallbackEnv: string): stri
 		if (reference.trim().startsWith("!")) {
 			// Pi provider configs can support command substitution, but extensions should
 			// not execute arbitrary configured commands just to search the web.
-			throw new Error("Command-backed Mistral API keys are not supported by mistral_web_search.");
+			throw new Error("Command-backed Mistral API keys are not supported by web-search.");
 		}
 		if (!reference.trim().startsWith("$")) return reference;
 	}
 	return process.env[fallbackEnv];
+}
+
+export function hasMistralAccess(options: MistralMcpOptions = {}): boolean {
+	try {
+		const dir = options.agentDir ?? agentDir();
+		const provider = readModelsConfig(dir)?.providers?.[options.providerId ?? DEFAULT_PROVIDER_ID];
+		return Boolean(options.apiKey ?? resolveApiKey(provider?.apiKey, DEFAULT_API_KEY_ENV));
+	} catch {
+		return false;
+	}
 }
 
 function connectorEndpoint(baseUrl: string): string {
@@ -279,7 +226,7 @@ export async function searchMistralWeb(args: WebSearchArgs | string, options: Mi
 	const input = typeof args === "string" ? { query: args } : args;
 	const query = input.query.trim();
 	if (!query) throw new Error("query must not be empty");
-	const limit = clampLimit(input.limit, 20, 20);
+	const limit = clampLimit(input.limit, 10, 20);
 	const startDate = trimDate(input.startDate);
 	const endDate = trimDate(input.endDate);
 	const mcpArgs: Record<string, unknown> = { query, limit };
@@ -288,7 +235,7 @@ export async function searchMistralWeb(args: WebSearchArgs | string, options: Mi
 
 	const { result, elapsedMs } = await callMcpTool("web_search", mcpArgs, options);
 	return {
-		provider: "mistral-web-search-mcp",
+		provider: "mistral",
 		tool: "web_search",
 		query,
 		startDate,
@@ -302,7 +249,7 @@ export async function searchMistralWeb(args: WebSearchArgs | string, options: Mi
 export async function searchMistralNews(args: NewsSearchArgs, options: MistralMcpOptions = {}): Promise<NewsSearchResult> {
 	const query = args.query.trim();
 	if (!query) throw new Error("query must not be empty");
-	const limit = clampLimit(args.limit, 10, 400);
+	const limit = clampLimit(args.limit, 10, 20);
 	const startDate = trimDate(args.startDate);
 	const endDate = trimDate(args.endDate);
 	const lang = args.lang?.trim() || undefined;
@@ -313,7 +260,7 @@ export async function searchMistralNews(args: NewsSearchArgs, options: MistralMc
 
 	const { result, elapsedMs } = await callMcpTool("news_search", mcpArgs, options);
 	return {
-		provider: "mistral-web-search-mcp",
+		provider: "mistral",
 		tool: "news_search",
 		query,
 		startDate,
@@ -325,10 +272,10 @@ export async function searchMistralNews(args: NewsSearchArgs, options: MistralMc
 	};
 }
 
-function truncateText(text: string): { content: string; truncated: boolean; originalBytes: number; originalLines: number } {
-	const lines = text.split("\n");
-	const originalLines = lines.length;
+export function truncateText(text: string): { content: string; truncated: boolean; originalBytes: number; originalLines: number } {
+	const originalLines = text.split("\n").length;
 	const originalBytes = Buffer.byteLength(text, "utf8");
+	const lines = stripTerminalControls(text).split("\n");
 	let selected = lines.slice(0, MAX_OUTPUT_LINES).join("\n");
 	let truncated = lines.length > MAX_OUTPUT_LINES;
 	while (Buffer.byteLength(selected, "utf8") > MAX_OUTPUT_BYTES) {
@@ -393,7 +340,7 @@ export async function openMistralUrl(url: string, options: MistralMcpOptions = {
 	if (failure) throw new Error(`${failure.kind === "blocked" ? "Open blocked" : "Open failed"}: ${failure.message}`);
 	const truncated = truncateText(content);
 	return {
-		provider: "mistral-web-search-mcp",
+		provider: "mistral",
 		tool: "open_url",
 		url: trimmedUrl,
 		content: truncated.content,
@@ -514,6 +461,10 @@ export function formatSearchResults(result: WebSearchResult | NewsSearchResult):
 		`elapsed_ms: ${Math.round(result.elapsedMs)}`,
 		`result_count: ${result.results.length}`,
 	];
+	if (result.attempts?.length) {
+		lines.push(`attempts: ${result.attempts.map((attempt) => `${attempt.provider}:${attempt.status}:${Math.round(attempt.elapsedMs)}ms`).join(" -> ")}`);
+	}
+	if (result.creditsUsed) lines.push(`credits_used: ${result.creditsUsed}`);
 	if (result.startDate) lines.push(`start_date: ${shorten(result.startDate, MAX_DATE_CHARS)}`);
 	if (result.endDate) lines.push(`end_date: ${shorten(result.endDate, MAX_DATE_CHARS)}`);
 	if (result.tool === "news_search" && result.lang) lines.push(`lang: ${shorten(result.lang, MAX_SOURCE_CHARS)}`);
@@ -562,6 +513,12 @@ function createSearchDisplayDetails(result: WebSearchResult | NewsSearchResult):
 		startDate: result.startDate ? sanitizeSearchText(result.startDate, MAX_DATE_CHARS) : undefined,
 		endDate: result.endDate ? sanitizeSearchText(result.endDate, MAX_DATE_CHARS) : undefined,
 		lang: result.tool === "news_search" && result.lang ? sanitizeSearchText(result.lang, MAX_SOURCE_CHARS) : undefined,
+		provider: result.provider,
+		attempts: result.attempts?.map((attempt) => ({
+			...attempt,
+			error: attempt.error ? sanitizeSearchText(attempt.error, 300) : undefined,
+		})),
+		creditsUsed: result.creditsUsed,
 		searchEngine: searchEngines.size === 1 ? [...searchEngines][0] : undefined,
 		elapsedMs: Math.round(result.elapsedMs),
 		resultCount: result.results.length,
@@ -689,6 +646,8 @@ export function formatOpenUrlResult(result: OpenUrlResult): string {
 		`truncated: ${result.truncated}`,
 		`original_bytes: ${result.originalBytes}`,
 		`original_lines: ${result.originalLines}`,
+		...(result.attempts?.length ? [`attempts: ${result.attempts.map((attempt) => `${attempt.provider}:${attempt.status}:${Math.round(attempt.elapsedMs)}ms`).join(" -> ")}`] : []),
+		...(result.creditsUsed ? [`credits_used: ${result.creditsUsed}`] : []),
 		"",
 		"content:",
 		result.content,
