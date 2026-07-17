@@ -78,6 +78,11 @@ duplicate transcript entry.
 - Full UI output retains bounded head and tail sections for diagnostics.
 - Session shutdown waits for SIGTERM/SIGKILL escalation.
 - PTY wrapper and child process groups are both terminated to prevent orphans.
+- A last-resort reaper also SIGKILLs every live job's process tree from
+  `process.on('exit')` and `SIGTERM`/`SIGHUP`/`SIGINT`, so a managed terminal
+  that ignores SIGTERM (`trap '' TERM`) cannot survive an ungraceful pi exit
+  (crash, `emergencyTerminalExit`, signal). Without it, such jobs were
+  re-parented to PID 1 and drove the render loop forever.
 - A yielded command notifies only if it finishes after the agent turn settles; active turns rely on the single turn-complete notification.
 
 ## Dependencies

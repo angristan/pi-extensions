@@ -27,6 +27,64 @@ const MAX_RETAINED_JOBS = 50;
 const TOOL_OUTPUT_BYTES = 24 * 1024;
 const PARTIAL_OUTPUT_BYTES = 4 * 1024;
 const PERSISTED_OUTPUT_BYTES = 8 * 1024;
+
+// ---------------------------------------------------------------------------
+// Last-resort reaper: prevent orphaned managed terminals on ungraceful exit.
+// ---------------------------------------------------------------------------
+// `session_shutdown` (graceful /quit, Ctrl+D, SIGTERM, /reload) calls
+// requestKill + awaits completion, so jobs are reaped there. But pi has other
+// exit paths that do NOT fire session_shutdown:
+//   - emergencyTerminalExit() (dead/EIO terminal) calls process.exit(129).
+//   - uncaughtException / unhandledRejection hard exits.
+//   - SIGKILL of the pi process itself.
+//   - a crash mid-run while a job is `trap '' TERM`-ignoring SIGTERM.
+// On those paths the killTimer (5s SIGTERM->SIGKILL escalation) never fires,
+// and detached children (each its own session leader via spawnTerminal) are
+// re-parented to PID 1 and live forever as orphans — which then drive the
+// 500ms render loop forever (the scroll-jank bug). Register every live job's
+// pids here and SIGKILL their whole process tree from process exit + the same
+// signals pi listens to, as a sync best-effort. Idempotent and re-entrant.
+const liveJobPids = new Set<number>();
+let lastResortReaperArmed = false;
+const LAST_RESORT_SIGNALS: NodeJS.Signals[] = ["SIGTERM", "SIGHUP", "SIGINT"];
+
+function reapLiveJobPidsSync(): void {
+	for (const pid of liveJobPids) {
+		// Match requestKill's escalation: SIGKILL the whole process group. The
+		// wrapper pid is the group leader (spawnTerminal uses detached: true),
+		// so -pid reaches every descendant including `trap '' TERM` survivors.
+		try {
+			process.kill(-pid, "SIGKILL");
+		} catch {
+			try { process.kill(pid, "SIGKILL"); } catch { /* already dead */ }
+		}
+	}
+	liveJobPids.clear();
+}
+
+function armLastResortReaper(): void {
+	if (lastResortReaperArmed) return;
+	lastResortReaperArmed = true;
+	// process 'exit' is sync-only and the only hook guaranteed to run on
+	// process.exit() and uncaught exceptions. Cannot do async work here.
+	process.on("exit", reapLiveJobPidsSync);
+	// Signals: reaping from inside a signal handler is best-effort. If pi has
+	// its own handler that calls process.exit, the 'exit' hook above still
+	// runs; if pi is SIGKILLed, nothing can run, which is unavoidable.
+	for (const sig of LAST_RESORT_SIGNALS) {
+		process.once(sig, reapLiveJobPidsSync);
+	}
+}
+
+function trackJobPid(pid: number | undefined): void {
+	if (!Number.isInteger(pid) || pid <= 0) return;
+	liveJobPids.add(pid);
+	armLastResortReaper();
+}
+
+function untrackJobPid(pid: number | undefined): void {
+	if (Number.isInteger(pid)) liveJobPids.delete(pid!);
+}
 // Model-controllable output budget, mirroring codex's `max_output_tokens`.
 // Default 10000 tokens; pi doesn't tokenize, so we map tokens -> bytes at
 // ~4 bytes/token (matching codex's UNIFIED_EXEC_OUTPUT_MAX_BYTES / 4) and cap
@@ -502,15 +560,30 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 				tty: job.tty,
 				onStdout: (chunk) => appendOutput(job, "stdout", chunk),
 				onStderr: (chunk) => appendOutput(job, "stderr", chunk),
-				onPtyPid: (pid) => { job.ptyPid = pid; },
+				onPtyPid: (pid) => {
+					job.ptyPid = pid;
+					// The PTY child is a separate session leader (expect/script), so it
+					// needs independent tracking for the last-resort reaper too.
+					trackJobPid(pid);
+				},
 			});
 		} catch (error) {
 			jobs.delete(job.id);
 			throw error;
 		}
 		job.process.stdin?.on("error", () => {});
-		job.process.once("error", (error) => finalize(job, null, null, error));
+		// Track the spawned wrapper pid so the last-resort reaper can SIGKILL
+		// the whole process tree even when pi exits without firing
+		// session_shutdown (crash, emergencyTerminalExit, signal). Untrack on
+		// close so the set stays bounded and we never signal a recycled pid.
+		trackJobPid(job.process.pid);
+		job.process.once("error", (error) => {
+			untrackJobPid(job.process?.pid);
+			finalize(job, null, null, error);
+		});
 		job.process.once("close", (code, signal) => {
+			untrackJobPid(job.process?.pid);
+			untrackJobPid(job.ptyPid);
 			if (job.ptyPid && pidExists(job.ptyPid)) {
 				job.pendingClose = { code, signal };
 				if (!job.killReason) {
@@ -888,6 +961,11 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		await Promise.all(stopping.map((job) => job.completion));
 		activeCtx?.ui.setStatus(STATUS_KEY, undefined);
 		jobs.clear();
+		// Belt-and-suspenders: graceful shutdown reaped everything via
+		// requestKill, but clear the reaper set in case any close handler
+		// hasn't fired yet (e.g. a SIGTERM-ignoring job whose SIGKILL is still
+		// mid-escalation). The last-resort reaper stays armed for the next.
+		liveJobPids.clear();
 		clearBackgroundTerminalService(terminalService);
 		activeCtx = undefined;
 	});

@@ -471,6 +471,53 @@ describe("terminal tools", () => {
 		// component still being active. settle by disposing.
 		component.dispose?.();
 	});
+
+	test("last-resort reaper SIGKILLs a trap-TERM orphan on ungraceful exit", async () => {
+		// Regression: when pi exits without firing session_shutdown (crash,
+		// emergencyTerminalExit, SIGKILL of pi), a running job that ignores
+		// SIGTERM (`trap '' TERM`) was re-parented to PID 1 and leaked forever,
+		// keeping the 500ms render loop alive. background-jobs now registers every
+		// live job pid and SIGKILLs the whole process tree from process 'exit'.
+		// We can't call session_shutdown (that's the graceful path). Instead, emit
+		// the sync 'exit' event the way Node does on process.exit() and assert no
+		// orphan survives.
+		const harness = createHarness({ killGraceMs: 50 });
+		await startHarness(harness);
+		const bash = harness.tools.get("bash");
+
+		// trap '' TERM defeats the SIGTERM step of the normal escalation; only
+		// SIGKILL to the process group can stop it.
+		await bash.execute("call", {
+			command: "trap '' TERM; while :; do sleep 1; done",
+			description: "stubborn orphan",
+			reasoning: "repro ungraceful exit",
+			timeoutSeconds: 60, // long; we exit "ungracefully" before it fires
+			"yield-time_ms": 250,
+		}, undefined, undefined, harness.ctx);
+
+		// Snapshot the live wrapper pid + any sleep child so we can verify they die.
+		// Match on the command string (the description is not visible to ps).
+		const { spawnSync } = require("node:child_process");
+		const ps1 = spawnSync("pgrep", ["-af", "trap '' TERM; while :; do sleep 1; done"], { encoding: "utf8" });
+		const before = ps1.stdout.trim().split("\n").filter(Boolean);
+		expect(before.length).toBeGreaterThan(0);
+
+		// Simulate an ungraceful exit: Node emits 'exit' synchronously on
+		// process.exit(). Our reaper is registered on that event.
+		process.emit("exit", 0);
+
+		// Give the kernel a beat to reap.
+		await Bun.sleep(200);
+
+		const ps2 = spawnSync("pgrep", ["-af", "stubborn orphan"], { encoding: "utf8" });
+		const survivors = ps2.stdout.trim().split("\n").filter(Boolean);
+		// Best-effort cleanup of anything that slipped through (should be none).
+		for (const line of survivors) {
+			const pid = Number(line.split(/\s+/)[0]);
+			if (Number.isInteger(pid)) { try { process.kill(pid, "SIGKILL"); } catch {} }
+		}
+		expect(survivors.length).toBe(0);
+	}, 15000);
 });
 
 describe("background terminal UX", () => {
