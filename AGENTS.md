@@ -2,6 +2,7 @@
 
 - Write idiomatic, maintainable TypeScript. Prefer small, focused helpers over clever code.
 - Add comments only where they explain non-obvious behavior, edge cases, or terminal/TUI safety constraints.
+- Treat model context as a shared budget: keep always-on schemas, descriptions, prompt metadata, agent instructions, and tool outputs concise and non-duplicative; prefer deferred activation for rarely used tools, measure before/after, and add behavior coverage for context optimizations.
 - Add or update tests for extension behavior changes. Keep tests slim and focused on regressions/user-visible behavior.
 - Run the relevant focused tests while iterating, then run the full test suite before pushing.
 - Update the relevant extension README whenever behavior, commands, configuration, output, or user-facing UX changes.
