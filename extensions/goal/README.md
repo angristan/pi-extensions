@@ -111,7 +111,7 @@ Reduce p95 checkout latency below 120ms
 … 4 more rows; /goal-status for full
 
 2m 14s active time · 4 continuations · 2 validation checks
-tokens 42K/200K (21%)
+goal tokens spent 45K · ↓42K ↑3K
 ╰──────────────────────────────────────────╯
 ```
 

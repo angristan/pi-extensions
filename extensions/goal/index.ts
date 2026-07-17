@@ -183,8 +183,10 @@ const GOAL_OVERLAY_MAX_ROWS = 7;
 const GOAL_OVERLAY_OBJECTIVE_ROWS = 2;
 
 export interface GoalOverlayStats {
-	contextTokens?: number;
-	contextWindow?: number;
+	inputTokens: number;
+	outputTokens: number;
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
 }
 
 function pluralize(count: number, singular: string, plural = `${singular}s`): string {
@@ -198,32 +200,62 @@ function compactWhitespace(text: string): string {
 function compactNumber(value: number): string {
 	const safe = Math.max(0, Math.round(value));
 	if (safe < 1_000) return String(safe);
-	if (safe < 1_000_000) return `${(safe / 1_000).toFixed(safe < 10_000 ? 1 : 0)}K`;
-	if (safe < 1_000_000_000) return `${(safe / 1_000_000).toFixed(safe < 10_000_000 ? 1 : 0)}M`;
-	return `${(safe / 1_000_000_000).toFixed(1)}B`;
+	const [scaled, suffix] = safe >= 1_000_000_000
+		? [safe / 1_000_000_000, "B"]
+		: safe >= 1_000_000
+			? [safe / 1_000_000, "M"]
+			: [safe / 1_000, "K"];
+	const decimals = scaled < 10 ? 1 : 0;
+	const formatted = scaled.toFixed(decimals).replace(/\.0$/, "");
+	return `${formatted}${suffix}`;
 }
 
-function contextUsageLine(stats: GoalOverlayStats | undefined, theme: any): string | undefined {
-	if (typeof stats?.contextTokens !== "number") return undefined;
-	const used = compactNumber(stats.contextTokens);
-	if (typeof stats.contextWindow !== "number" || stats.contextWindow <= 0) {
-		return theme.fg("dim", `tokens ${used}`);
-	}
-	const window = compactNumber(stats.contextWindow);
-	const percent = Math.min(100, Math.max(0, (stats.contextTokens / stats.contextWindow) * 100));
-	return theme.fg("dim", `tokens ${used}/${window} (${percent.toFixed(0)}%)`);
+function goalTokenUsageLine(stats: GoalOverlayStats | undefined, theme: any): string | undefined {
+	if (!stats) return undefined;
+	const total = stats.inputTokens + stats.outputTokens + stats.cacheReadTokens + stats.cacheWriteTokens;
+	if (total <= 0) return undefined;
+	const parts = [
+		stats.inputTokens > 0 ? `↓${compactNumber(stats.inputTokens)}` : undefined,
+		stats.outputTokens > 0 ? `↑${compactNumber(stats.outputTokens)}` : undefined,
+		stats.cacheReadTokens > 0 ? `R${compactNumber(stats.cacheReadTokens)}` : undefined,
+		stats.cacheWriteTokens > 0 ? `W${compactNumber(stats.cacheWriteTokens)}` : undefined,
+	].filter(Boolean);
+	const detail = parts.length ? ` · ${parts.join(" ")}` : "";
+	return theme.fg("dim", `goal tokens spent ${compactNumber(total)}${detail}`);
 }
 
-function goalOverlayStats(ctx: any): GoalOverlayStats | undefined {
-	const usage = ctx?.getContextUsage?.();
-	const contextTokens = typeof usage?.tokens === "number" ? usage.tokens : undefined;
-	const contextWindow = typeof usage?.contextWindow === "number"
-		? usage.contextWindow
-		: typeof ctx?.model?.contextWindow === "number"
-			? ctx.model.contextWindow
+function goalOverlayStats(ctx: any, state: GoalState): GoalOverlayStats | undefined {
+	const entries = typeof ctx?.sessionManager?.getBranch === "function"
+		? ctx.sessionManager.getBranch()
+		: typeof ctx?.sessionManager?.getEntries === "function"
+			? ctx.sessionManager.getEntries()
+			: [];
+	if (!Array.isArray(entries)) return undefined;
+
+	let startIndex = -1;
+	for (let index = 0; index < entries.length; index++) {
+		const entry = entries[index];
+		const restored = entry?.type === "custom" && entry.customType === ENTRY_TYPE
+			? (entry.data as PersistedGoalEntry | undefined)?.state
 			: undefined;
-	if (contextTokens === undefined && contextWindow === undefined) return undefined;
-	return { contextTokens, contextWindow };
+		if (restored?.createdAt === state.createdAt) {
+			startIndex = index;
+			break;
+		}
+	}
+	if (startIndex < 0) return undefined;
+
+	const totals: GoalOverlayStats = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+	for (const entry of entries.slice(startIndex + 1)) {
+		if (entry?.type !== "message" || entry.message?.role !== "assistant") continue;
+		const usage = entry.message.usage;
+		if (!usage) continue;
+		totals.inputTokens += Math.max(0, usage.input ?? 0);
+		totals.outputTokens += Math.max(0, usage.output ?? 0);
+		totals.cacheReadTokens += Math.max(0, usage.cacheRead ?? 0);
+		totals.cacheWriteTokens += Math.max(0, usage.cacheWrite ?? 0);
+	}
+	return totals;
 }
 
 function fullGoalLines(state: GoalDisplayState, theme: any): string[] {
@@ -284,8 +316,8 @@ export function renderGoalOverlayBody(
 	}
 	if (rows.length < rowBudget - 1) rows.push("");
 	if (rows.length < rowBudget) rows.push(theme.fg("dim", meta.join(" · ")));
-	const contextLine = contextUsageLine(stats, theme);
-	if (contextLine && rows.length < rowBudget) rows.push(contextLine);
+	const tokenLine = goalTokenUsageLine(stats, theme);
+	if (tokenLine && rows.length < rowBudget) rows.push(tokenLine);
 
 	if (state.status === "blocked" && state.blockedAudit && rows.length < rowBudget) {
 		const blockerRows = wrapTextWithAnsi(`${theme.fg("dim", "Blocked")}  ${state.blockedAudit.blocker}`, contentWidth);
@@ -335,7 +367,7 @@ export default function (pi: ExtensionAPI) {
 			if (!state) return [];
 			// Keep the always-on card compact: it is a mission badge, not the
 			// full objective document. `/goal-status` remains the detailed view.
-			return renderGoalOverlayBody(displayState(state), width, maxHeight, theme, goalOverlayStats(activeCtx));
+			return renderGoalOverlayBody(displayState(state), width, maxHeight, theme, goalOverlayStats(activeCtx, state));
 		},
 	});
 
