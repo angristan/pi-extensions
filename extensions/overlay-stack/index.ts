@@ -225,7 +225,7 @@ class OverlayStackHost implements Component {
 		this.tui.requestRender();
 	}
 
-	setModalHidden(hidden: boolean) {
+	setHidden(hidden: boolean) {
 		this.handle.setHidden(hidden);
 		this.tui.requestRender();
 	}
@@ -249,8 +249,15 @@ class OverlayStackHost implements Component {
 
 export default function (pi: ExtensionAPI) {
 	let host: OverlayStackHost | undefined;
+	let userHidden = false;
 	const modalOwners = new Set<string>();
 
+	const syncVisibility = () => host?.setHidden(userHidden || modalOwners.size > 0);
+	const toggleVisibility = (ctx: any) => {
+		userHidden = !userHidden;
+		syncVisibility();
+		ctx.ui.notify(`Overlay ${userHidden ? "hidden" : "shown"}`, "info");
+	};
 	const clearHost = (ctx: any) => {
 		ctx.ui.setWidget(HOST_WIDGET_KEY, undefined);
 		host = undefined;
@@ -264,7 +271,7 @@ export default function (pi: ExtensionAPI) {
 				if (host === nextHost) host = undefined;
 			});
 			host = nextHost;
-			nextHost.setModalHidden(modalOwners.size > 0);
+			syncVisibility();
 			return nextHost;
 		});
 	};
@@ -275,7 +282,16 @@ export default function (pi: ExtensionAPI) {
 		if (typeof payload.id !== "string" || typeof payload.hidden !== "boolean") return;
 		if (payload.hidden) modalOwners.add(payload.id);
 		else modalOwners.delete(payload.id);
-		host?.setModalHidden(modalOwners.size > 0);
+		syncVisibility();
+	});
+
+	pi.registerCommand("overlay", {
+		description: "Toggle the top-right overlay stack",
+		handler: (_args, ctx) => toggleVisibility(ctx),
+	});
+	pi.registerShortcut("alt+o", {
+		description: "Toggle the top-right overlay stack",
+		handler: toggleVisibility,
 	});
 
 	pi.on("session_start", (_event, ctx) => mountHost(ctx));

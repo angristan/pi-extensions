@@ -5,11 +5,16 @@ a single non-capturing Pi overlay.
 
 Feature extensions register titled sections with an order, preferred width,
 visibility predicate, and body renderer. The stack owns consistent accent frames,
-spacing, shared sizing, and overlay lifecycle only; it has no commands,
-persistence, or feature state.
+spacing, shared sizing, and overlay lifecycle. Press `Alt+O` or run `/overlay` to
+hide or show the whole stack. Manual visibility resets when extensions reload or
+a new session starts.
+
+The stack also hides automatically while a modal overlay is open. Closing the
+modal restores the stack only when it was not manually hidden.
 
 Current cards:
 
+- `goal` — order 5
 - `plan-progress` — order 10
 - `edit-summary` — order 20
 
