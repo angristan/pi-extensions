@@ -60,10 +60,24 @@ interface FooterGroup {
 	segments: StatusSegment[];
 	/** Optional longest-to-shortest alternatives used before dropping the group. */
 	variants?: StatusSegment[][];
-	/** Higher values are removed or shortened first when the terminal is narrow. */
+	/** Higher values are removed first when the terminal is narrow. */
 	priority: number;
+	/** Higher values are shortened first, independently of removal priority. */
+	variantPriority?: number;
 	required?: boolean;
 }
+
+export const FOOTER_GROUP_PRIORITY = {
+	thread: 0,
+	context: 1,
+	cost: 2,
+	input: 3,
+	output: 4,
+	model: 7,
+	path: 8,
+	git: 9,
+	cache: 10,
+} as const;
 
 interface UsageTotals {
 	input: number;
@@ -219,7 +233,7 @@ function renderSplitRow(left: string, right: string, width: number): string {
 	return `${FOOTER_INDENT}${fittedLeft}${" ".repeat(padding)}${right}`;
 }
 
-function renderAdaptiveRow(groups: FooterGroup[], right: string, width: number, theme?: any): string {
+export function renderAdaptiveRow(groups: FooterGroup[], right: string, width: number, theme?: any): string {
 	const available = Math.max(0, width - visibleWidth(FOOTER_INDENT));
 	const rightWidth = visibleWidth(right);
 	const minimumGap = right ? 3 : 0;
@@ -241,8 +255,12 @@ function renderAdaptiveRow(groups: FooterGroup[], right: string, width: number, 
 			.sort((a, b) => b.priority - a.priority || b.index - a.index)[0];
 		const shrinkable = active
 			.filter((group) => group.variants && group.variantIndex + 1 < group.variants.length)
-			.sort((a, b) => b.priority - a.priority || b.index - a.index)[0];
-		if (shrinkable && (!removable || shrinkable.priority >= removable.priority)) {
+			.sort((a, b) =>
+				(b.variantPriority ?? b.priority) - (a.variantPriority ?? a.priority)
+				|| b.index - a.index,
+			)[0];
+		const shrinkPriority = shrinkable?.variantPriority ?? shrinkable?.priority;
+		if (shrinkable && (!removable || (shrinkPriority ?? 0) >= removable.priority)) {
 			shrinkable.variantIndex += 1;
 			continue;
 		}
@@ -478,6 +496,7 @@ export default function (pi: ExtensionAPI) {
 							[inputSegment, ...fullCacheSegments],
 							[inputSegment, ...fullCacheSegments.slice(0, 1), ...fullCacheSegments.slice(-1)],
 							[inputSegment, ...fullCacheSegments.slice(-1)],
+							[inputSegment],
 						]
 						: [];
 
@@ -489,28 +508,29 @@ export default function (pi: ExtensionAPI) {
 					if (fastStatus) modelSegments.push({ accent: "cost", text: fastStatus });
 
 					const groups: FooterGroup[] = [
-						{ segments: [{ accent: "thread", text: threadTitle(current) }], priority: 0, required: true },
-						{ segments: [{ accent: "path", text: formatDirectory(current.cwd) }], priority: 8 },
-						{ segments: branchSegments, priority: 6 },
-						{ segments: modelSegments, priority: 7 },
+						{ segments: [{ accent: "thread", text: threadTitle(current) }], priority: FOOTER_GROUP_PRIORITY.thread, required: true },
+						{ segments: [{ accent: "path", text: formatDirectory(current.cwd) }], priority: FOOTER_GROUP_PRIORITY.path },
+						{ segments: branchSegments, priority: FOOTER_GROUP_PRIORITY.git },
+						{ segments: modelSegments, priority: FOOTER_GROUP_PRIORITY.model },
 						{
 							segments: contextWindow > 0
 								? [{ accent: "timing", label: "ctx", text: `${contextRemainingPercent(usage?.tokens, contextWindow)}%/${formatTokensCompact(contextWindow)}` }]
 								: [],
-							priority: 1,
+							priority: FOOTER_GROUP_PRIORITY.context,
 						},
 						{
 							segments: inputCacheVariants[0] ?? [],
 							variants: inputCacheVariants,
-							priority: 3,
+							priority: FOOTER_GROUP_PRIORITY.input,
+							variantPriority: FOOTER_GROUP_PRIORITY.cache,
 						},
 						{
 							segments: totals.output > 0 ? [{ accent: "usage", label: "↑", text: formatTokensCompact(totals.output) }] : [],
-							priority: 4,
+							priority: FOOTER_GROUP_PRIORITY.output,
 						},
 						{
 							segments: totals.cost > 0 ? [{ accent: "cost", text: formatCostCents(totals.cost) }] : [],
-							priority: 2,
+							priority: FOOTER_GROUP_PRIORITY.cost,
 						},
 					];
 
