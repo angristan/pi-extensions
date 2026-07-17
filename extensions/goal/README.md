@@ -95,6 +95,14 @@ All sections except `# Goal` are optional.
 
 ## Tools exposed to the agent
 
+- **`goal_set`** — always available; lets the agent set (or replace) the
+  durable session goal itself and start the auto-continuation loop, without a
+  user running `/goal`. Accepts an `objective`, optional `validation`
+  criteria, and `replace: true` to overwrite an existing in-progress goal. A
+  completed goal can be overwritten freely. The tool refuses to silently
+  overwrite an active/paused/blocked goal and asks the caller to re-call with
+  `replace: true`, so an in-progress goal cannot be silently redefined around
+  an easier task.
 - **`goal_complete`** — active only while a `/goal` is active; marks the goal
   complete and accepts an optional `summary`.
 - **`goal_block`** — active only while a `/goal` is active; records a blocker.
@@ -102,17 +110,24 @@ All sections except `# Goal` are optional.
   and next input; marks the goal `blocked` only after the same blocker repeats
   three times.
 
-When no goal is active, these tools are removed from the active tool set. If a
-stale in-flight model request still calls one, the call is ignored silently so it
-does not add noisy "no active goal" output to the transcript — the rendered
-block is hidden too.
+`goal_set` is always registered. `goal_complete` and `goal_block` are removed
+from the active tool set when no goal is active. If a stale in-flight model
+request still calls one of them, the call is ignored silently so it does not
+add noisy "no active goal" output to the transcript — the rendered block is
+hidden too.
 
-Both tools render as the same compact 2-line transcript blocks as the native
+All three tools render as the same compact 2-line transcript blocks as the native
 and web tools (`renderShell: "self"`): a `• verb` headline whose bullet color
 tracks the outcome (magenta while running, green on success, red for a real
 blocker) over a dim `└ summary` branch. Example settled blocks:
 
 ```
+• Set goal
+  └ make all tests pass
+• Replaced goal
+  └ ship the feature
+• Goal already active
+  └ make all tests pass
 • Completed goal
   └ Reduce p95 checkout latency below 120ms
 • Goal blocked

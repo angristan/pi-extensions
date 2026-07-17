@@ -53,6 +53,8 @@ mock.module("typebox", () => ({
 		Object: (schema: any) => ({ type: "object", ...schema }),
 		Optional: (schema: any) => ({ ...schema, optional: true }),
 		String: (options?: any) => ({ type: "string", ...options }),
+		Array: (items: any, options?: any) => ({ type: "array", items, ...options }),
+		Boolean: (options?: any) => ({ type: "boolean", ...options }),
 	},
 }));
 
@@ -338,4 +340,87 @@ test("goal_block renders recorded, blocked, and duplicate outcomes", async () =>
 	block = h.tools.goal_block.renderResult(duplicate, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
 	lines = renderBlock(block);
 	expect(lines[0]).toContain("Blocker already recorded");
+});
+
+test("goal_set is always available and sets a fresh active goal", async () => {
+	const h = makeHarness();
+	await emit(h, "session_start");
+	// goal_set is NOT gated on an active goal, so it must be registered from the start.
+	expect(h.activeTools.has("goal_set")).toBe(true);
+	expect(h.activeTools.has("goal_complete")).toBe(false);
+	expect(h.activeTools.has("goal_block")).toBe(false);
+
+	// Setting a goal activates the loop tools and starts the loop.
+	await h.tools.goal_set.execute("call", {
+		objective: "make all tests pass",
+		validation: ["bun test is green"],
+	}, undefined, undefined, h.ctx);
+	const state = latestGoalState(h);
+	expect(state.status).toBe("active");
+	expect(state.objective).toBe("make all tests pass");
+	expect(state.validation).toEqual(["bun test is green"]);
+	expect(h.activeTools.has("goal_complete")).toBe(true);
+	expect(h.activeTools.has("goal_block")).toBe(true);
+	expect(h.sent).toHaveLength(1);
+	expect(h.sent[0]!.message.content).toBe("Goal continuation requested.");
+});
+
+test("goal_set refuses to silently overwrite an in-progress goal", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("initial goal", h.ctx);
+
+	// Without replace:true, overwriting an active goal is refused, not silent.
+	const refused = await h.tools.goal_set.execute("call", { objective: "easier goal" }, undefined, undefined, h.ctx);
+	expect(refused.details.needsReplace).toBe(true);
+	expect(latestGoalState(h).objective).toBe("initial goal");
+
+	// With replace:true, the goal is overwritten and the loop restarts.
+	const sentBeforeReplace = h.sent.length;
+	const replaced = await h.tools.goal_set.execute("call", { objective: "replacement goal", replace: true }, undefined, undefined, h.ctx);
+	expect(replaced.details.replaced).toBe(true);
+	const state = latestGoalState(h);
+	expect(state.objective).toBe("replacement goal");
+	// maybeContinue kicks a fresh continuation (incrementing continuations to 1);
+	// the fresh-audit guarantee is that noToolContinuationStreak was reset.
+	expect(h.sent).toHaveLength(sentBeforeReplace + 1);
+	expect(h.sent.at(-1)!.message.content).toBe("Goal continuation requested.");
+});
+
+test("goal_set overwrites a completed goal freely without replace:true", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("first goal", h.ctx);
+	await h.commands.goal.handler("complete", h.ctx);
+	expect(latestGoalState(h).status).toBe("complete");
+
+	// Completed goals are not "in progress", so no replace:true needed.
+	const result = await h.tools.goal_set.execute("call", { objective: "next goal" }, undefined, undefined, h.ctx);
+	expect(result.details.set).toBe(true);
+	const state = latestGoalState(h);
+	expect(state.status).toBe("active");
+	expect(state.objective).toBe("next goal");
+});
+
+test("goal_set renders set, replaced, and needsReplace blocks", async () => {
+	const h = makeHarness();
+
+	// Fresh set → green "Set goal".
+	const set = await h.tools.goal_set.execute("call", { objective: "ship the feature" }, undefined, undefined, h.ctx);
+	let block = h.tools.goal_set.renderResult(set, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
+	let lines = renderBlock(block);
+	expect(lines[0]).toContain("Set goal");
+	expect(lines[1]).toContain("ship the feature");
+
+	// Active goal, no replace → green "Goal already active".
+	const refused = await h.tools.goal_set.execute("call", { objective: "easier" }, undefined, undefined, h.ctx);
+	block = h.tools.goal_set.renderResult(refused, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
+	lines = renderBlock(block);
+	expect(lines[0]).toContain("Goal already active");
+	expect(lines[1]).toContain("ship the feature");
+
+	// Replace → green "Replaced goal".
+	const replaced = await h.tools.goal_set.execute("call", { objective: "replacement", replace: true }, undefined, undefined, h.ctx);
+	block = h.tools.goal_set.renderResult(replaced, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
+	lines = renderBlock(block);
+	expect(lines[0]).toContain("Replaced goal");
+	expect(lines[1]).toContain("replacement");
 });

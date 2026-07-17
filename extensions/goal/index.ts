@@ -415,6 +415,12 @@ interface GoalToolResultDetails {
 	count?: number;
 	threshold?: number;
 	reason?: string;
+	/** goal_set created a fresh goal. */
+	set?: boolean;
+	/** goal_set overwrote an existing goal. */
+	replaced?: boolean;
+	/** goal_set refused because a goal is in progress and replace was not set. */
+	needsReplace?: boolean;
 }
 
 /** Pull the first text block out of a tool result (shape varies across slots). */
@@ -534,6 +540,49 @@ function renderGoalBlockResult(
 		return [
 			toolHeadline(false, false, "Blocker recorded", ""),
 			toolBranch(branch ? theme.fg("dim", branch) : ""),
+		];
+	});
+	return component;
+}
+
+/**
+ * Render the `goal_set` tool block.
+ *  - partial → `• Setting goal` (magenta) with the objective preview.
+ *  - set → `• Set goal` (green) + the objective branch.
+ *  - replaced → `• Replaced goal` (green) + the new objective branch.
+ *  - needsReplace → `• Goal already active` (green) + the active objective,
+ *    prompting the caller to pass `replace: true`.
+ */
+function renderGoalSetCall(args: any, _theme: any, context: any): Component {
+	if (!context?.isPartial) return new Container();
+	const component = reuseGoalToolLines(context);
+	const objectivePreview = oneLinePreview(args?.objective);
+	component.update(() => [toolHeadline(true, false, "Setting goal", objectivePreview)]);
+	return component;
+}
+
+function renderGoalSetResult(
+	result: { details?: GoalToolResultDetails } | undefined,
+	{ isPartial }: GoalRenderOptions,
+	theme: any,
+	context: any,
+): Component {
+	if (isPartial) return new Container();
+	const details = result?.details;
+	const component = reuseGoalToolLines(context);
+	const storedText = textFromResult(result);
+	const objective = extractObjectiveLine(storedText);
+	component.update(() => {
+		if (details?.needsReplace) {
+			return [
+				toolHeadline(false, false, "Goal already active", ""),
+				toolBranch(objective ? theme.fg("dim", objective) : ""),
+			];
+		}
+		const verb = details?.replaced ? "Replaced goal" : "Set goal";
+		return [
+			toolHeadline(false, false, verb, ""),
+			toolBranch(objective ? theme.fg("dim", objective) : ""),
 		];
 	});
 	return component;
@@ -1120,6 +1169,77 @@ export default function (pi: ExtensionAPI) {
 			return {
 				content: [{ type: "text", text: `Goal marked blocked after ${count} consecutive reports of the same blocker.\n\n${details}\n\nResume with /goal resume once unblocked.` }],
 				details: { ok: true, blocked: true, count, threshold: BLOCKED_AUDIT_THRESHOLD },
+			};
+		},
+	});
+
+	// ------------------------------------------------------------------------
+	// goal_set tool: lets the agent set (or replace) the session goal itself,
+	// without a user running /goal. Always available — it is intentionally NOT
+	// part of GOAL_TOOL_NAME_SET, so syncGoalToolAvailability never removes it.
+	// Replacing an active/paused/blocked goal requires an explicit replace:true
+	// so the agent cannot silently redefine an in-progress goal around an easier
+	// task; a completed goal is overwritten freely (it is done).
+	// ------------------------------------------------------------------------
+	pi.registerTool({
+		name: "goal_set",
+		label: "Set Session Goal",
+		description:
+			"Set (or replace) the durable session goal and start the auto-continuation loop. " +
+			"Use this to commit to a concrete, verifiable objective with explicit validation criteria, then work toward it until goal_complete or goal_block. " +
+			"If a goal is already active, paused, or blocked, call again with replace: true to overwrite it — do not silently redefine an in-progress goal around an easier task. " +
+			"Do not call this for ordinary single-step tasks; only for objectives worth a persistent self-driving loop.",
+		parameters: Type.Object({
+			objective: Type.String({ description: "The outcome that must become true. Concrete and verifiable, not a broad category of work." }),
+			validation: Type.Optional(Type.Array(Type.String(), { description: "Optional acceptance criteria that prove the objective is met." })),
+			replace: Type.Optional(Type.Boolean({ description: "Set to true to overwrite an existing active/paused/blocked goal. Required when a goal is already in progress." })),
+		}),
+		renderShell: "self",
+		renderCall: renderGoalSetCall,
+		renderResult: renderGoalSetResult,
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const objective = (typeof params.objective === "string" ? params.objective : "").trim();
+			if (!objective) {
+				return {
+					content: [{ type: "text", text: "goal_set requires a non-empty objective." }],
+					details: { ok: false, reason: "empty-objective" },
+				};
+			}
+			const validation = Array.isArray(params.validation)
+				? params.validation.map((item: unknown) => (typeof item === "string" ? item.trim() : "")).filter(Boolean)
+				: [];
+			// Guard against silently overwriting an in-progress goal. A completed
+			// goal is not "in progress", so it can be overwritten freely.
+			if (state && shouldConfirmReplacement(state) && !params.replace) {
+				return {
+					content: [{ type: "text", text: `A session goal is already ${state.status}.\nObjective: ${state.objective}\n\nTo overwrite it, call goal_set again with replace: true.` }],
+					details: { ok: false, needsReplace: true },
+				};
+			}
+			const replacing = Boolean(state);
+			const now = Date.now();
+			state = {
+				objective,
+				validation,
+				status: "active",
+				createdAt: now,
+				updatedAt: now,
+				activeSince: now,
+				accumulatedActiveMs: 0,
+				continuations: 0,
+			};
+			// Fresh goal: reset the anti-spin audit so the new objective starts a
+			// clean continuation count.
+			noToolContinuationStreak = 0;
+			saveAndEmit(ctx);
+			ctx.ui.notify(`${replacing ? "Replaced" : "Set"} session goal: ${objective}`, "info");
+			// Kick the auto-continuation loop. maybeContinue is a no-op unless the
+			// thread is idle, so during a tool call this typically just primes state;
+			// the agent_settled handler fires the first continuation at a safe boundary.
+			maybeContinue(ctx);
+			return {
+				content: [{ type: "text", text: `${replacing ? "Goal replaced" : "Goal set"}.\nObjective: ${objective}${validation.length ? `\nValidation:\n${validation.map((item) => `- ${item}`).join("\n")}` : ""}` }],
+				details: { ok: true, set: true, replaced: replacing },
 			};
 		},
 	});
