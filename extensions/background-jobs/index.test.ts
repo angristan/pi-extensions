@@ -27,7 +27,7 @@ afterEach(() => {
 	cleanupGroups.clear();
 });
 
-function createHarness(options: { killGraceMs?: number; betterNative?: boolean } = {}): Harness {
+function createHarness(options: { killGraceMs?: number } = {}): Harness {
 	const tools = new Map<string, any>();
 	const activeTools = new Set<string>();
 	const commands = new Map<string, any>();
@@ -62,7 +62,7 @@ function createHarness(options: { killGraceMs?: number; betterNative?: boolean }
 		events: { emit(name: string, payload: any) { events.push({ name, payload }); } },
 	};
 	registerBackgroundJobs(pi as any, options);
-	if (options.betterNative !== false) registerBetterNativeBash(pi as any);
+	registerBetterNativeBash(pi as any);
 	return { tools, activeTools, commands, handlers, statuses, selectCalls, notifications, events, ctx };
 }
 
@@ -132,12 +132,10 @@ describe("bounded terminal output", () => {
 });
 
 describe("terminal tools", () => {
-	test("registers unified and compatibility APIs", async () => {
+	test("registers only unified terminal APIs", async () => {
 		const harness = createHarness();
 		await startHarness(harness);
 		expect([...harness.tools.keys()]).toEqual([
-			"terminal_exec",
-			"background_bash",
 			"job_output",
 			"terminal_write",
 			"job_kill",
@@ -145,8 +143,6 @@ describe("terminal tools", () => {
 		]);
 		expect([...harness.commands.keys()]).toEqual(["jobs", "ps"]);
 		expect([...harness.activeTools]).toContain("bash");
-		expect([...harness.activeTools]).not.toContain("terminal_exec");
-		expect([...harness.activeTools]).not.toContain("background_bash");
 		const bash = harness.tools.get("bash");
 		expect(bash.parameters.properties.tty).toMatchObject({ type: "boolean" });
 		expect(bash.parameters.properties["yield-time_ms"]).toMatchObject({ minimum: 250, maximum: 30_000 });
@@ -158,19 +154,11 @@ describe("terminal tools", () => {
 		}
 	});
 
-	test("keeps compatibility execution tools active without better-native-pi", async () => {
-		const harness = createHarness({ betterNative: false });
-		await startHarness(harness);
-		expect([...harness.tools.keys()]).not.toContain("bash");
-		expect([...harness.activeTools]).toContain("terminal_exec");
-		expect([...harness.activeTools]).toContain("background_bash");
-	});
-
 	test("requires integer timeout seconds in schema and execution", async () => {
 		const harness = createHarness();
 		await startHarness(harness);
-		const tool = harness.tools.get("background_bash");
-		expect(tool.parameters.properties.timeoutSeconds).toMatchObject({
+		const tool = harness.tools.get("bash");
+		expect(tool.parameters.properties.timeout).toMatchObject({
 			type: "integer",
 			minimum: 1,
 			maximum: 86_400,
@@ -178,7 +166,7 @@ describe("terminal tools", () => {
 		await expect(tool.execute("start", {
 			command: "true",
 			reasoning: "validate timeout",
-			timeoutSeconds: 0.5,
+			timeout: 0.5,
 		}, undefined, undefined, harness.ctx)).rejects.toThrow("must be an integer between 1 and 86400");
 	});
 
@@ -306,15 +294,17 @@ describe("background terminal UX", () => {
 	test("shows recent output in /ps and supports stop all", async () => {
 		const harness = createHarness({ killGraceMs: 50 });
 		await startHarness(harness);
-		await harness.tools.get("background_bash").execute("one", {
+		await harness.tools.get("bash").execute("one", {
 			command: "printf 'recent-one\\n'; sleep 2",
 			description: "first terminal",
 			reasoning: "test dashboard",
+			"yield-time_ms": 250,
 		}, undefined, undefined, harness.ctx);
-		await harness.tools.get("background_bash").execute("two", {
+		await harness.tools.get("bash").execute("two", {
 			command: "printf 'recent-two\\n'; sleep 2",
 			description: "second terminal",
 			reasoning: "test dashboard",
+			"yield-time_ms": 250,
 		}, undefined, undefined, harness.ctx);
 		await Bun.sleep(50);
 
@@ -337,9 +327,10 @@ describe("background terminal UX", () => {
 		const harness = createHarness({ killGraceMs: 30 });
 		await startHarness(harness);
 		try {
-			await harness.tools.get("background_bash").execute("start", {
+			await harness.tools.get("bash").execute("start", {
 				command: `trap '' TERM; echo $$ > ${JSON.stringify(pidFile)}; while :; do sleep 1; done`,
 				reasoning: "test shutdown cleanup",
+				"yield-time_ms": 250,
 			}, undefined, undefined, harness.ctx);
 			const pid = await waitForPid(pidFile);
 			cleanupGroups.add(pid);
@@ -356,10 +347,11 @@ describe("background terminal UX", () => {
 		if (process.platform === "win32") return;
 		const harness = createHarness({ killGraceMs: 500 });
 		await startHarness(harness);
-		const started = await harness.tools.get("background_bash").execute("start", {
+		const started = await harness.tools.get("bash").execute("start", {
 			command: "trap '' TERM; while :; do sleep 1; done",
 			reasoning: "test timeout stop race",
-			timeoutSeconds: 1,
+			timeout: 1,
+			"yield-time_ms": 250,
 		}, undefined, undefined, harness.ctx);
 		try {
 			await Bun.sleep(1_100);
@@ -381,9 +373,10 @@ describe("background terminal UX", () => {
 		if (process.platform === "win32") return;
 		const harness = createHarness({ killGraceMs: 50 });
 		await startHarness(harness);
-		const started = await harness.tools.get("background_bash").execute("start", {
+		const started = await harness.tools.get("bash").execute("start", {
 			command: "trap '' TERM; while :; do sleep 1; done",
 			reasoning: "test duplicate stop requests",
+			"yield-time_ms": 250,
 		}, undefined, undefined, harness.ctx);
 		try {
 			await Bun.sleep(50);
@@ -436,10 +429,11 @@ describe("PTY terminals", () => {
 		const harness = createHarness({ killGraceMs: 40 });
 		await startHarness(harness);
 		try {
-			await harness.tools.get("background_bash").execute("pty", {
+			await harness.tools.get("bash").execute("pty", {
 				command: `trap '' TERM HUP; echo $$ > ${JSON.stringify(pidFile)}; while :; do sleep 1; done`,
 				reasoning: "test PTY shutdown cleanup",
 				tty: true,
+				"yield-time_ms": 250,
 			}, undefined, undefined, harness.ctx);
 			const pid = await waitForPid(pidFile);
 			cleanupGroups.add(pid);

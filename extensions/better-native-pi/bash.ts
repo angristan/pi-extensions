@@ -11,7 +11,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBashTool, createBashToolDefinition, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Container, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { getBackgroundTerminalService, markBackgroundTerminalBashIntegrated, type BackgroundTerminalService } from "../background-jobs/service.js";
+import { getBackgroundTerminalService, type BackgroundTerminalService } from "../background-jobs/service.js";
 import { renderCodeBox } from "../code-blocks/index.js";
 import { buildToolBlock, fitToolLine, formatShellCommandForDisplay, highlightedShellLine, withReasoning } from "./core.js";
 
@@ -67,6 +67,7 @@ function withTerminalParameters(parameters: any): any {
 		...base,
 		properties: {
 			...base.properties,
+			timeout: { type: "integer", minimum: 1, maximum: 86_400, description: "Optional hard timeout from 1 to 86400 seconds" },
 			cwd: { type: "string", description: "Working directory, relative to the current project unless absolute" },
 			tty: { type: "boolean", description: "Allocate a PTY for prompts, REPLs, and control characters", default: false },
 			"yield-time_ms": { type: "integer", minimum: 250, maximum: 30_000, description: "Wait before yielding a terminal ID (default 10000 ms)" },
@@ -291,7 +292,6 @@ export default function bash(pi: ExtensionAPI) {
 	const bashTool = createBashToolDefinition(process.cwd());
 	const terminalService = getBackgroundTerminalService();
 	const terminalEnabled = Boolean(terminalService);
-	if (terminalService) markBackgroundTerminalBashIntegrated(terminalService);
 	pi.registerTool({
 		name: "bash",
 		label: "bash",
