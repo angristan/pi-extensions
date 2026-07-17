@@ -12,9 +12,9 @@ import {
 	wrapTextWithAnsi,
 	type TUI,
 } from "@earendil-works/pi-tui";
-import { fitToolLine, highlightShellCommand } from "../better-native-pi/core.js";
+import { fitToolLine } from "../better-native-pi/core.js";
 import { BoundedOutput, CursorOutput, type CursorRead } from "./output.js";
-import { clearBackgroundTerminalService, isBackgroundTerminalBashIntegrated, setBackgroundTerminalService, type BackgroundTerminalService } from "./service.js";
+import { clearBackgroundTerminalService, setBackgroundTerminalService, type BackgroundTerminalService } from "./service.js";
 import { isPtySupported, spawnTerminal } from "./terminal-process.js";
 
 export { BoundedOutput, CursorOutput } from "./output.js";
@@ -290,14 +290,6 @@ class JobOutputViewer {
 	dispose(): void { this.stopRefreshing(); }
 }
 
-function jobEntry(data: JobSnapshot, expanded: boolean, theme: any): Text {
-	const color = statusColor(data.status);
-	const header = `${theme.fg(color, statusSymbol(data.status))} ${theme.bold(data.description)} · ${data.id} · ${data.status} in ${compactDuration(duration(data))}${data.tty ? " · tty" : ""}`;
-	const command = `  ${highlightShellCommand(compactCommand(data.command, 140), theme)}`;
-	if (!expanded) return new Text(`${header}\n${command}`, 0, 0);
-	return new Text(`${header}\n${command}\n${theme.fg("dim", formatSnapshotText(data))}`, 0, 0);
-}
-
 class TerminalInteractionComponent {
 	constructor(
 		private readonly details: JobToolDetails | undefined,
@@ -335,55 +327,6 @@ class TerminalInteractionComponent {
 	}
 
 	invalidate(): void {}
-}
-
-class LiveJobComponent {
-	private timer?: ReturnType<typeof setInterval>;
-
-	constructor(
-		private readonly id: string,
-		private fallback: JobSnapshot,
-		private expanded: boolean,
-		private readonly theme: any,
-		private readonly getJob: (id: string) => ManagedJob | undefined,
-		private readonly requestRender: () => void,
-	) {
-		this.syncTimer();
-	}
-
-	update(fallback: JobSnapshot, expanded: boolean): void {
-		this.fallback = fallback;
-		this.expanded = expanded;
-		this.syncTimer();
-	}
-
-	private current(): JobSnapshot {
-		const job = this.getJob(this.id);
-		return job ? snapshot(job, TOOL_OUTPUT_BYTES) : this.fallback;
-	}
-
-	private syncTimer(): void {
-		const current = this.current();
-		if ((current.status === "running" || current.status === "stopping") && !this.timer) {
-			this.timer = setInterval(() => this.requestRender(), 500);
-			this.timer.unref?.();
-		} else if (current.status !== "running" && current.status !== "stopping") {
-			this.dispose();
-		}
-	}
-
-	render(width: number): string[] {
-		const current = this.current();
-		if (current.status !== "running" && current.status !== "stopping") this.dispose();
-		return jobEntry(current, this.expanded, this.theme).render(width);
-	}
-
-	invalidate(): void {}
-
-	dispose(): void {
-		if (this.timer) clearInterval(this.timer);
-		this.timer = undefined;
-	}
 }
 
 export default function registerBackgroundJobs(pi: ExtensionAPI, options: BackgroundJobsOptions = {}) {
@@ -486,7 +429,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			}
 		}
 	};
-	const startJob = (params: { command: string; description?: string; cwd?: string; timeoutSeconds?: number; tty?: boolean; backgrounded?: boolean }, ctx: any): ManagedJob => {
+	const startJob = (params: { command: string; description?: string; cwd?: string; timeoutSeconds?: number; tty?: boolean }, ctx: any): ManagedJob => {
 		if (activeJobs().length >= MAX_CONCURRENT_JOBS) throw new Error(`At most ${MAX_CONCURRENT_JOBS} background jobs may run at once`);
 		const command = params.command.trim();
 		if (!command) throw new Error("Background command must not be empty");
@@ -519,7 +462,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			completion,
 			resolveCompletion,
 			finalized: false,
-			backgrounded: Boolean(params.backgrounded),
+			backgrounded: false,
 			suppressPersistence: false,
 			sessionGeneration,
 			activityListeners: new Set(),
@@ -663,16 +606,6 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		if (!ctx.hasUI && ctx.mode !== "tui") return false;
 		return ctx.ui.confirm("Stop background job?", `${job.id}\n${job.command}\n\nThis sends SIGTERM to the process tree, then SIGKILL after ${killGraceMs / 1000}s if needed.`);
 	};
-	const liveResult = (result: any, options: any, theme: any, context: any) => {
-		const data = result.details as JobSnapshot | undefined;
-		if (!data?.id) return new Text(result?.content?.[0]?.text ?? "", 0, 0);
-		let component = context.state.liveJob as LiveJobComponent | undefined;
-		if (!component) {
-			component = new LiveJobComponent(data.id, data, Boolean(options.expanded), theme, (id) => jobs.get(id), context.invalidate);
-			context.state.liveJob = component;
-		} else component.update(data, Boolean(options.expanded));
-		return component;
-	};
 	const executeUnified = async (_id: string, rawParams: any, signal: AbortSignal | undefined, onUpdate: any, ctx: any) => {
 		const params = {
 			...rawParams,
@@ -718,69 +651,12 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 				output: details.output ?? [details.stdout, details.stderr].filter(Boolean).join("\n"),
 			};
 		},
-		renderResult: liveResult,
 	};
 	setBackgroundTerminalService(terminalService);
 
 	// Completion entries persist final state but intentionally render nothing:
 	// the original tool card reads the live/restored job and updates in place.
 	pi.registerEntryRenderer<JobSnapshot>(ENTRY_TYPE, () => new Container());
-
-	pi.registerTool({
-		name: "terminal_exec",
-		label: "Terminal Exec",
-		description: "Run a shell command, returning normally if it finishes within the yield window or a managed terminal ID if it keeps running. Supports optional PTY interaction through terminal_write.",
-		promptSnippet: "Run shell commands that may be quick, long-running, or interactive",
-		promptGuidelines: ["Use terminal_exec when command duration is uncertain, when a process may stay running, or when terminal interaction may be needed. Quick commands return normally; long commands yield a terminal ID."],
-		parameters: {
-			type: "object",
-			properties: {
-				command: { type: "string", description: "Shell command to run" },
-				description: { type: "string", description: "Short human-readable terminal name" },
-				cwd: { type: "string", description: "Working directory, relative to the current project unless absolute" },
-				tty: { type: "boolean", description: "Allocate a PTY for prompts, REPLs, and control characters", default: false },
-				"yield-time_ms": { type: "integer", minimum: 250, maximum: 30_000, description: `Wait before yielding a terminal ID (default ${DEFAULT_YIELD_MS} ms)` },
-				timeoutSeconds: { type: "integer", minimum: 1, maximum: MAX_TIMEOUT_SECONDS, description: `Optional hard timeout from 1 to ${MAX_TIMEOUT_SECONDS} seconds` },
-				reasoning: { type: "string", description: "Goal or intent behind running this command" },
-			},
-			required: ["command", "reasoning"],
-		} as any,
-		executionMode: "sequential",
-		execute: executeUnified,
-		renderCall: (args: any, theme: any) => new Text(`${theme.fg("accent", "●")} ${theme.bold("Running terminal")} ${args.reasoning || highlightShellCommand(compactCommand(args.command || ""), theme)}`, 0, 0),
-		renderResult: liveResult,
-		renderShell: "self",
-	});
-
-	pi.registerTool({
-		name: "background_bash",
-		label: "Background Bash",
-		description: "Compatibility alias that starts an explicit shell command immediately in a managed background terminal. Prefer terminal_exec for new calls.",
-		parameters: {
-			type: "object",
-			properties: {
-				command: { type: "string", description: "Shell command to run" },
-				description: { type: "string", description: "Short human-readable job name" },
-				cwd: { type: "string", description: "Working directory, relative to the current project unless absolute" },
-				tty: { type: "boolean", description: "Allocate a PTY for interactive input", default: false },
-				timeoutSeconds: { type: "integer", minimum: 1, maximum: MAX_TIMEOUT_SECONDS, description: `Optional timeout from 1 to ${MAX_TIMEOUT_SECONDS} seconds` },
-				reasoning: { type: "string", description: "Goal or intent behind starting this background job" },
-			},
-			required: ["command", "reasoning"],
-		} as any,
-		promptGuidelines: ["Use background_bash only when immediate backgrounding is explicitly desired; otherwise prefer terminal_exec."],
-		executionMode: "sequential",
-		async execute(_id: string, params: any, _signal: AbortSignal, _update: any, ctx: any) {
-			const job = startJob({ ...params, backgrounded: true }, ctx);
-			return {
-				content: [{ type: "text", text: `Background terminal ${job.id} started in ${job.cwd}. Use terminal_write or job_output to inspect it.` }],
-				details: { managedTerminal: true, ...snapshot(job, PERSISTED_OUTPUT_BYTES) },
-			};
-		},
-		renderCall: (args: any, theme: any) => new Text(`${theme.fg("accent", "●")} ${theme.bold("Starting background terminal")} ${args.reasoning || highlightShellCommand(compactCommand(args.command || ""), theme)}`, 0, 0),
-		renderResult: liveResult,
-		renderShell: "self",
-	});
 
 	pi.registerTool({
 		name: "job_output",
@@ -933,13 +809,6 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	pi.on("session_start", (_event, ctx) => {
 		sessionGeneration += 1;
 		activeCtx = ctx;
-		if (isBackgroundTerminalBashIntegrated(terminalService)) {
-			const activeTools = pi.getActiveTools();
-			const aliases = new Set(["terminal_exec", "background_bash"]);
-			const normalizedTools = activeTools.filter((name) => !aliases.has(name));
-			if (normalizedTools.length !== activeTools.length && !normalizedTools.includes("bash")) normalizedTools.push("bash");
-			if (normalizedTools.length !== activeTools.length || normalizedTools.some((name, index) => name !== activeTools[index])) pi.setActiveTools(normalizedTools);
-		}
 		jobs.clear();
 		for (const entry of ctx.sessionManager.getEntries()) {
 			if (entry.type !== "custom" || entry.customType !== ENTRY_TYPE || !entry.data) continue;

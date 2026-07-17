@@ -13,9 +13,6 @@ sessions without blocking the agent or losing track of child processes.
 - `job_output` — read only output produced since the previous cursor
 - `job_kill` — stop one terminal after explicit confirmation
 
-`terminal_exec` and `background_bash` remain registered for resumed-session
-compatibility but are removed from the active tool set in favor of `bash`.
-
 For an interactive prompt, call `bash` with `tty: true`; if it yields, send the
 answer with `terminal_write`. `terminal_write` also accepts literal control
 characters, including `\u0003` for Ctrl+C. PTY mode uses the system `expect`
@@ -77,7 +74,7 @@ duplicate transcript entry.
 - Full UI output retains bounded head and tail sections for diagnostics.
 - Session shutdown waits for SIGTERM/SIGKILL escalation.
 - PTY wrapper and child process groups are both terminated to prevent orphans.
-- Completion notifications fire only after a command yields or starts explicitly in the background.
+- Completion notifications fire only after a command yields into the background.
 
 ## Dependencies
 
