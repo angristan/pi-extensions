@@ -353,13 +353,7 @@ export default function bash(pi: ExtensionAPI) {
 			: bashTool.description,
 		promptSnippet: bashTool.promptSnippet,
 		parameters: terminalEnabled ? withTerminalParameters(bashTool.parameters) : withReasoning(bashTool.parameters),
-		promptGuidelines: [
-			...(bashTool.promptGuidelines ?? []),
-			...(terminalEnabled ? [
-				"Bash automatically yields long-running commands as managed terminals; use terminal_write or job_output with the returned job ID.",
-				"Set bash tty=true for interactive prompts, REPLs, watch processes, or control characters such as Ctrl+C.",
-			] : []),
-		],
+		promptGuidelines: bashTool.promptGuidelines,
 		renderShell: "self",
 		execute: async (id: string, params: any, signal: AbortSignal, onUpdate: any, ctx: any) => {
 			const terminal = getBackgroundTerminalService();

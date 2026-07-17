@@ -26,6 +26,8 @@ const MAX_RETAINED_JOBS = 50;
 const TOOL_OUTPUT_BYTES = 24 * 1024;
 const PARTIAL_OUTPUT_BYTES = 4 * 1024;
 const PERSISTED_OUTPUT_BYTES = 8 * 1024;
+const TERMINAL_TOOL_NAMES = ["job_output", "terminal_write", "job_kill"] as const;
+const TERMINAL_TOOL_NAME_SET = new Set<string>(TERMINAL_TOOL_NAMES);
 
 // ---------------------------------------------------------------------------
 // Last-resort reaper: prevent orphaned managed terminals on ungraceful exit.
@@ -417,6 +419,21 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	let activeCtx: any;
 	let sessionGeneration = 0;
 
+	const deactivateTerminalTools = () => {
+		const active = pi.getActiveTools();
+		if (!active.some((name) => TERMINAL_TOOL_NAME_SET.has(name))) return;
+		pi.setActiveTools(active.filter((name) => !TERMINAL_TOOL_NAME_SET.has(name)));
+	};
+	const activateTerminalTools = () => {
+		const active = pi.getActiveTools();
+		const activeSet = new Set(active);
+		const added = TERMINAL_TOOL_NAMES.filter((name) => !activeSet.has(name));
+		if (added.length === 0) return;
+		// Keep activation purely additive so providers with deferred tool loading
+		// anchor these definitions at the yielded bash result without replacing or
+		// invalidating the stable initial tool prefix.
+		pi.setActiveTools([...active, ...added]);
+	};
 	const activeJobs = () => [...jobs.values()].filter(isActive);
 	const activeBackgroundJobs = () => activeJobs().filter((job) => job.backgrounded);
 	const updateStatus = () => {
@@ -731,8 +748,10 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		if (yielded) {
 			// Until the initial yield window expires, this is still foreground tool
 			// execution. Only advertise footer state once the agent can move on and
-			// the terminal is genuinely managed in the background.
+			// the terminal is genuinely managed in the background. Activate controls
+			// before returning so the next model turn can act on this terminal ID.
 			job.backgrounded = true;
+			activateTerminalTools();
 			updateStatus();
 		}
 		const outputBytes = outputBytesForTokens(params.max_output_tokens);
@@ -793,7 +812,6 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			},
 			required: ["reasoning", "job_id"],
 		} as any,
-		promptGuidelines: ["Always pass a reasoning phrase to job_output that states why the new terminal output matters."],
 		executionMode: "sequential",
 		async execute(_id: string, params: any, signal?: AbortSignal) {
 			const job = findJob(params.job_id);
@@ -830,7 +848,6 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			},
 			required: ["reasoning", "job_id"],
 		} as any,
-		promptGuidelines: ["Always pass a reasoning phrase to terminal_write that states the goal of waiting or interacting."],
 		executionMode: "sequential",
 		async execute(_id: string, params: any, signal?: AbortSignal) {
 			const job = findJob(params.job_id);
@@ -928,6 +945,10 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	});
 
 	pi.on("session_start", (_event, ctx) => {
+		// Tool registration makes every definition active by default. Most sessions
+		// never yield a command, so keep terminal controls out of the initial model
+		// context and add them only when executeUnified returns a live terminal ID.
+		deactivateTerminalTools();
 		sessionGeneration += 1;
 		activeCtx = ctx;
 		jobs.clear();

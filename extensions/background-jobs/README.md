@@ -13,6 +13,11 @@ sessions without blocking the agent or losing track of child processes.
 - `job_output` — read only output produced since the previous cursor
 - `job_kill` — stop one terminal after explicit confirmation
 
+The three terminal-control tools are registered but initially inactive, keeping
+their schemas out of ordinary requests. The first yielded `bash` call activates
+them additively for the rest of the session, and its result names the newly
+available tools and terminal ID.
+
 For an interactive prompt, call `bash` with `tty: true`; if it yields, send the
 answer with `terminal_write`. `terminal_write` also accepts literal control
 characters, including `\u0003` for Ctrl+C. PTY mode uses the system `expect`

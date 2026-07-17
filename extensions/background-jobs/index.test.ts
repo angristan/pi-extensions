@@ -185,15 +185,18 @@ describe("terminal tools", () => {
 			"bash",
 		]);
 		expect([...harness.commands.keys()]).toEqual(["jobs", "ps"]);
-		expect([...harness.activeTools]).toContain("bash");
+		expect([...harness.activeTools]).toEqual(["bash"]);
 		const bash = harness.tools.get("bash");
 		expect(bash.parameters.properties.tty).toMatchObject({ type: "boolean" });
 		expect(bash.parameters.properties["yield-time_ms"]).toMatchObject({ minimum: 250, maximum: 30_000 });
+		expect(bash.description).toContain("long-running commands yield a managed terminal ID");
 		expect(bash.description).toContain("prompts and REPLs");
+		expect(bash.promptGuidelines ?? []).toEqual([]);
 		for (const name of ["job_output", "terminal_write"]) {
 			const tool = harness.tools.get(name);
 			expect(Object.keys(tool.parameters.properties)[0]).toBe("reasoning");
 			expect(tool.parameters.required).toContain("reasoning");
+			expect(tool.promptGuidelines).toBeUndefined();
 		}
 	});
 
@@ -242,6 +245,7 @@ describe("terminal tools", () => {
 		expect(result.details.status).toBe("completed");
 		expect(result.content[0].text).toContain("quick-output");
 		expect(harness.statuses.get("background-jobs")).toBeUndefined();
+		expect([...harness.activeTools]).toEqual(["bash"]);
 		expect(harness.events).toHaveLength(0);
 		expect(harness.notifications).toHaveLength(0);
 		const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
@@ -275,6 +279,7 @@ describe("terminal tools", () => {
 	test("yields long commands without notifying", async () => {
 		const harness = createHarness();
 		await startHarness(harness);
+		harness.activeTools.add("other_tool");
 		const started = await harness.tools.get("bash").execute("exec", {
 			command: "printf 'first\\n'; sleep 0.4; printf 'second\\n'",
 			reasoning: "test unified yielding",
@@ -282,6 +287,8 @@ describe("terminal tools", () => {
 		}, undefined, undefined, harness.ctx);
 		expect(started.details.status).toBe("running");
 		expect(started.content[0].text).toContain("first");
+		expect(started.content[0].text).toContain(`Use terminal_write or job_output with job_id=${started.details.id}`);
+		expect([...harness.activeTools]).toEqual(["bash", "other_tool", "job_output", "terminal_write", "job_kill"]);
 		expect(harness.statuses.get("background-jobs")).toContain("1 background job running");
 
 		const finished = await harness.tools.get("terminal_write").execute("poll", {
@@ -299,6 +306,11 @@ describe("terminal tools", () => {
 			job_id: started.details.id,
 		});
 		expect(empty.content[0].text).toContain("no new output");
+		expect([...harness.activeTools]).toEqual(["bash", "other_tool", "job_output", "terminal_write", "job_kill"]);
+
+		// A fresh session returns to the lean initial tool set.
+		await startHarness(harness);
+		expect([...harness.activeTools]).toEqual(["bash", "other_tool"]);
 	});
 
 	test("never notifies when a yielded command finishes", async () => {
