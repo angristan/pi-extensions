@@ -147,6 +147,11 @@ describe("terminal tools", () => {
 		expect(bash.parameters.properties.tty).toMatchObject({ type: "boolean" });
 		expect(bash.parameters.properties["yield-time_ms"]).toMatchObject({ minimum: 250, maximum: 30_000 });
 		expect(bash.description).toContain("prompts and REPLs");
+		for (const name of ["job_output", "terminal_write"]) {
+			const tool = harness.tools.get(name);
+			expect(Object.keys(tool.parameters.properties)[0]).toBe("reasoning");
+			expect(tool.parameters.required).toContain("reasoning");
+		}
 	});
 
 	test("requires integer timeout seconds in schema and execution", async () => {
@@ -216,22 +221,24 @@ describe("terminal tools", () => {
 		expect(started.details.status).toBe("running");
 
 		const result = await harness.tools.get("terminal_write").execute("write", {
+			reasoning: "answer the test prompt",
 			job_id: started.details.id,
 			chars: "hello\n",
 			"yield-time_ms": 1_000,
 		});
 		expect(result.details.status).toBe("completed");
 		expect(result.content[0].text).toContain("got:hello");
-		const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+		const theme = { fg: (color: string, text: string) => `<${color}>${text}</${color}>`, bold: (text: string) => text };
 		const rendered = harness.tools.get("terminal_write").renderResult(
 			result,
 			{ expanded: false },
 			theme,
-			{ args: { job_id: started.details.id, chars: "hello\n" } },
+			{ args: { reasoning: "answer the test prompt", job_id: started.details.id, chars: "hello\n" } },
 		).render(120).join("\n");
-		expect(rendered).toContain("Interacted with");
-		expect(rendered).toContain("  │ got:hello");
-		expect(rendered).not.toContain(`✓ ${started.details.id} · completed`);
+		expect(rendered).toContain("<success>•</success> Interacted <accent>answer the test prompt</accent>");
+		expect(rendered).toContain("│ </dim>got:hello");
+		expect(rendered).not.toContain("↪");
+		expect(rendered).not.toContain("↳");
 	});
 
 	test("updates the original running card when the command completes", async () => {

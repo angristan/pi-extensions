@@ -32,6 +32,7 @@ const MAX_TIMEOUT_SECONDS = 24 * 60 * 60;
 const DEFAULT_YIELD_MS = 10_000;
 const DEFAULT_POLL_MS = 5_000;
 const MAX_POLL_MS = 5 * 60 * 1_000;
+const INTERACTION_REASONING_DESCRIPTION = "Short phrase stating the goal behind this terminal interaction, not the mechanics or command";
 
 export type JobStatus = "running" | "stopping" | "completed" | "failed" | "killed" | "timed_out";
 
@@ -309,11 +310,13 @@ class TerminalInteractionComponent {
 		const details = this.details;
 		if (!details) return [];
 		const wrote = this.action === "write" && typeof this.args?.chars === "string" && this.args.chars.length > 0;
-		const verb = this.action === "read" ? "Read output from" : wrote ? "Interacted with" : "Waited for";
+		const verb = this.action === "read" ? "Read" : wrote ? "Interacted" : "Waited";
 		const color = statusColor(details.status);
 		const name = details.description || details.id;
+		const reasoning = typeof this.args?.reasoning === "string" ? compactCommand(this.args.reasoning, 96) : "";
+		const intent = reasoning ? this.theme.fg("accent", reasoning) : this.theme.fg("dim", name);
 		const elapsed = compactDuration(duration(details));
-		const header = `${this.theme.fg(color, this.action === "read" ? "↳" : wrote ? "↪" : "↳")} ${this.theme.bold(verb)} ${name} ${this.theme.fg("dim", `· ${details.status} in ${elapsed}`)}`;
+		const header = `${this.theme.fg(color, "•")} ${verb} ${intent} ${this.theme.fg("dim", `· ${details.status} in ${elapsed}`)}`;
 		const output = details.output?.replace(/\s+$/, "") || "(no new output)";
 		const bodyWidth = Math.max(1, max - 4);
 		let rows = output.split("\n").flatMap((line) => wrapTextWithAnsi(line, bodyWidth));
@@ -324,7 +327,7 @@ class TerminalInteractionComponent {
 		return [
 			fitToolLine(header, max),
 			...rows.map((row) => truncateToWidth(`${this.theme.fg("dim", "  │ ")}${row}`, max, "…")),
-			fitToolLine(`  └ ${this.theme.fg(color, statusSymbol(details.status))} ${this.theme.fg("dim", `${details.id}${details.tty ? " · tty" : ""}`)}`, max),
+			fitToolLine(`  └ ${this.theme.fg(color, statusSymbol(details.status))} ${this.theme.fg("dim", `${compactCommand(name, 64)} · ${details.id}${details.tty ? " · tty" : ""}`)}`, max),
 		];
 	}
 
@@ -802,13 +805,15 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		parameters: {
 			type: "object",
 			properties: {
+				reasoning: { type: "string", description: INTERACTION_REASONING_DESCRIPTION },
 				job_id: { type: "string", description: "Full terminal ID or an unambiguous prefix" },
 				cursor: { type: "integer", minimum: 0, description: "Optional output cursor; defaults to this tool's last read position" },
 				waitMs: { type: "integer", minimum: 0, maximum: MAX_POLL_MS, description: "Wait this many milliseconds for new output" },
 				wait: { type: "boolean", description: "Compatibility option: wait until the terminal finishes", default: false },
 			},
-			required: ["job_id"],
+			required: ["reasoning", "job_id"],
 		} as any,
+		promptGuidelines: ["Always pass a reasoning phrase to job_output that states why the new terminal output matters."],
 		executionMode: "sequential",
 		async execute(_id: string, params: any, signal?: AbortSignal) {
 			const job = findJob(params.job_id);
@@ -836,13 +841,15 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		parameters: {
 			type: "object",
 			properties: {
+				reasoning: { type: "string", description: INTERACTION_REASONING_DESCRIPTION },
 				job_id: { type: "string", description: "Full terminal ID or an unambiguous prefix" },
 				chars: { type: "string", description: "Characters to write; empty polls without writing", default: "" },
 				"yield-time_ms": { type: "integer", minimum: 0, maximum: MAX_POLL_MS, description: `Wait for output after writing (default ${DEFAULT_POLL_MS} ms)` },
 				close_stdin: { type: "boolean", description: "Close stdin after writing", default: false },
 			},
-			required: ["job_id"],
+			required: ["reasoning", "job_id"],
 		} as any,
+		promptGuidelines: ["Always pass a reasoning phrase to terminal_write that states the goal of waiting or interacting."],
 		executionMode: "sequential",
 		async execute(_id: string, params: any, signal?: AbortSignal) {
 			const job = findJob(params.job_id);
