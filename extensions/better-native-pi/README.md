@@ -63,4 +63,4 @@ volatile-render churn for both.
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
 - **Depends on extensions:** [`background-jobs`](../background-jobs/), [`code-blocks`](../code-blocks/), [`hyperlinks`](../hyperlinks/).
-- **Used by extensions:** [`background-jobs`](../background-jobs/), [`mistral-web-search`](../mistral-web-search/).
+- **Used by extensions:** [`background-jobs`](../background-jobs/), [`web-search`](../web-search/).

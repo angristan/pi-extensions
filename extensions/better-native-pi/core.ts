@@ -5,7 +5,7 @@
  * This is the glue layer: it pulls shell highlighting (shell.ts) and diff
  * rendering (diff.ts) in to assemble a full tool block, and re-exports the
  * primitives the restylers (file-tools, bash) and sibling extensions
- * (background-jobs, mistral-web-search) consume.
+ * (background-jobs, web-search) consume.
  */
 
 import { basename, dirname } from "node:path";

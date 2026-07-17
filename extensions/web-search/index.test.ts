@@ -36,9 +36,13 @@ mock.module("../better-native-pi/render.js", () => ({
 const { default: webSearchExtension } = await import("./index");
 
 const tools: any[] = [];
+const commands: any[] = [];
 webSearchExtension({
 	registerTool(tool: any) {
 		tools.push(tool);
+	},
+	registerCommand(name: string, command: any) {
+		commands.push({ name, command });
 	},
 	on() {},
 	getActiveTools() {
@@ -79,10 +83,10 @@ function render(tool: any, toolResult: unknown, args: Record<string, unknown>, o
 	return component.render(1_000);
 }
 
-describe("mistral web search renderer", () => {
+describe("web search renderer", () => {
 	test("collapsed results use shared engine attribution and semantic colors", () => {
 		const toolResult = createSearchToolResult({
-			provider: "mistral-web-search-mcp",
+			provider: "mistral",
 			tool: "web_search",
 			query: "Kimi pricing",
 			startDate: "2026-04-01",
@@ -94,9 +98,28 @@ describe("mistral web search renderer", () => {
 		expect(render(webSearch, toolResult, { query: "Kimi pricing", startDate: "2026-04-01", endDate: "2026-04-30" })).toMatchSnapshot();
 	});
 
+	test("shows fallback provider trails and credits", () => {
+		const toolResult = createSearchToolResult({
+			provider: "firecrawl",
+			tool: "web_search",
+			query: "fallback",
+			limit: 1,
+			elapsedMs: 750,
+			creditsUsed: 2,
+			attempts: [
+				{ provider: "exa", status: "failed", elapsedMs: 200, error: "rate limited" },
+				{ provider: "firecrawl", status: "success", elapsedMs: 550, resultCount: 1, creditsUsed: 2 },
+			],
+			results: [result(1, "firecrawl")],
+		});
+		const lines = render(webSearch, toolResult, { query: "fallback" });
+		expect(lines[1]).toContain("via Exa → Firecrawl");
+		expect(lines[1]).toContain("2 credits");
+	});
+
 	test("expanded mixed-engine results retain per-result attribution", () => {
 		const toolResult = createSearchToolResult({
-			provider: "mistral-web-search-mcp",
+			provider: "mistral",
 			tool: "web_search",
 			query: "mixed sources",
 			limit: 2,
@@ -108,7 +131,7 @@ describe("mistral web search renderer", () => {
 
 	test("empty results remain distinct from failures", () => {
 		const toolResult = createSearchToolResult({
-			provider: "mistral-web-search-mcp",
+			provider: "mistral",
 			tool: "web_search",
 			query: "no matches",
 			limit: 5,
@@ -134,6 +157,15 @@ describe("mistral web search renderer", () => {
 			text: "title: JavaScript is disabled\nIn order to continue, verify that you're not a robot. This requires JavaScript.",
 		}] };
 		expect(render(openUrl, toolResult, { url: "https://guide.example.com/restaurants" }, { isError: true })).toMatchSnapshot();
+	});
+
+	test("registers a status command without exposing credential values", () => {
+		const status = commands.find((entry) => entry.name === "web-status")?.command;
+		let message = "";
+		status.handler("", { ui: { notify(value: string) { message = value; } } });
+		expect(message).toContain("web: exa");
+		expect(message).toContain("news: exa → firecrawl");
+		expect(message).not.toContain(process.env.MISTRAL_API_KEY ?? "never-match-this");
 	});
 
 	test("expanded open content strips terminal controls", () => {

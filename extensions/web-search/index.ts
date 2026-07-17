@@ -11,14 +11,11 @@ import {
 	detectOpenUrlFailure,
 	formatOpenUrlResult,
 	normalizeHttpUrl,
-	openMistralUrl,
 	parseSearchResultText,
 	sanitizeSearchText,
-	searchMistralNews,
-	searchMistralWeb,
-	type SearchDisplayDetails,
-	type SearchDisplayItem,
 } from "./client";
+import { openUrl, searchNews, searchWeb, webStatus } from "./router";
+import type { OpenDisplayDetails, ProviderAttempt, SearchDisplayDetails, SearchDisplayItem, WebProvider } from "./types";
 
 const FOUNDRY_OPENAI_PROVIDER = "foundry-openai";
 const TOOL_NAMES = ["web_search", "news_search", "open_url"] as const;
@@ -30,7 +27,7 @@ const webSearchSchema = Type.Object({
 	}),
 	startDate: Type.Optional(Type.String({ description: "Optional lower date bound in YYYY-MM-DD format." })),
 	endDate: Type.Optional(Type.String({ description: "Optional upper date bound in YYYY-MM-DD format." })),
-	limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20, default: 20, description: "Number of search results to return. Defaults to 20." })),
+	limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20, default: 10, description: "Number of search results to return. Defaults to 10." })),
 });
 
 const newsSearchSchema = Type.Object({
@@ -41,7 +38,7 @@ const newsSearchSchema = Type.Object({
 	startDate: Type.Optional(Type.String({ description: "Optional lower date bound in YYYY-MM-DD format. Defaults server-side if omitted." })),
 	endDate: Type.Optional(Type.String({ description: "Optional upper date bound in YYYY-MM-DD format. Defaults server-side if omitted." })),
 	lang: Type.Optional(Type.String({ description: "Optional language filter, for example 'en' or 'fr'." })),
-	limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 400, description: "Number of news results to return." })),
+	limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20, default: 10, description: "Number of news results to return. Defaults to 10." })),
 });
 
 const openUrlSchema = Type.Object({
@@ -81,14 +78,7 @@ const LEAD = "";
 const BRANCH = `${LEAD}  └ `;
 const INDENT = `${LEAD}    `;
 
-type OpenDetails = {
-	url?: string;
-	elapsedMs?: number;
-	truncated?: boolean;
-	originalBytes?: number;
-	originalLines?: number;
-	content?: string;
-};
+type OpenDetails = OpenDisplayDetails;
 
 function isFoundryOpenAIModel(model: { provider?: string } | undefined): boolean {
 	return model?.provider === FOUNDRY_OPENAI_PROVIDER;
@@ -203,12 +193,26 @@ function headlineRow(partial: boolean, isError: boolean, verb: string, detail: s
 
 // Colored summary that follows the `└ ` branch, matching tidy tools' shape:
 // `<count> <noun> · <elapsed>` (and a truncation note when content was clipped).
-function searchSummary(resultCount: number, elapsedMs: number | undefined, searchEngine: string | undefined, theme: Theme): string {
-	const count = resultCount === 0 ? "No results" : `${resultCount} ${resultCount === 1 ? "result" : "results"}`;
-	const elapsed = typeof elapsedMs === "number" ? formatElapsed(elapsedMs) : "done";
+function providerLabel(provider: WebProvider): string {
+	return provider === "exa" ? "Exa" : provider === "firecrawl" ? "Firecrawl" : "Mistral";
+}
+
+function routeLabel(provider: WebProvider | undefined, attempts: ProviderAttempt[] | undefined, searchEngine?: string): string | undefined {
+	const trail = attempts?.filter((attempt) => attempt.status !== "skipped").map((attempt) => providerLabel(attempt.provider));
+	const route = trail?.length ? trail.join(" → ") : provider ? providerLabel(provider) : undefined;
+	if (!searchEngine || searchEngine.toLowerCase() === provider?.toLowerCase()) return route ?? searchEngine;
+	return route ? `${route}/${searchEngine}` : searchEngine;
+}
+
+function searchSummary(details: SearchDisplayDetails, searchEngine: string | undefined, theme: Theme): string {
+	const count = details.resultCount === 0 ? "No results" : `${details.resultCount} ${details.resultCount === 1 ? "result" : "results"}`;
+	const elapsed = typeof details.elapsedMs === "number" ? formatElapsed(details.elapsedMs) : "done";
+	const route = routeLabel(details.provider, details.attempts, searchEngine);
+	const credits = details.creditsUsed ? `${details.creditsUsed} credit${details.creditsUsed === 1 ? "" : "s"}` : undefined;
 	return [
 		`${GREEN}${count}${RESET}`,
-		searchEngine ? theme.fg("muted", `via ${searchEngine}`) : undefined,
+		route ? theme.fg("muted", `via ${route}`) : undefined,
+		credits ? theme.fg("muted", credits) : undefined,
 		elapsed,
 	].filter(Boolean).join(theme.fg("dim", " · "));
 }
@@ -217,10 +221,12 @@ function openSummary(details: OpenDetails | undefined): string {
 	const lines = typeof details?.originalLines === "number" ? `${details.originalLines} line${details.originalLines === 1 ? "" : "s"}` : undefined;
 	const bytes = typeof details?.originalBytes === "number" ? `${details.originalBytes}b` : undefined;
 	const note = details?.truncated ? "truncated" : undefined;
+	const route = routeLabel(details?.provider, details?.attempts);
+	const credits = details?.creditsUsed ? `${details.creditsUsed} credit${details.creditsUsed === 1 ? "" : "s"}` : undefined;
 	const parts = [lines, bytes, note].filter(Boolean);
 	const detail = parts.length ? `${GREEN}${parts.join(" · ")}${RESET}` : `${GREEN}opened${RESET}`;
 	const elapsed = typeof details?.elapsedMs === "number" ? formatElapsed(details.elapsedMs) : "done";
-	return `${detail} · ${elapsed}`;
+	return [detail, route ? `via ${route}` : undefined, credits, elapsed].filter(Boolean).join(" · ");
 }
 
 function renderSearchCall(args: WebSearchArgs | NewsSearchArgs, _theme: Theme, context: ToolRenderContext) {
@@ -264,7 +270,7 @@ function renderSearchResult(
 	const searchEngine = sharedSearchEngine(details);
 	const max = expanded ? 10 : 5;
 	component.update(() => {
-		const lines = [headlineRow(false, false, "Searched", detail), `${BRANCH}${searchSummary(details.resultCount, details.elapsedMs, searchEngine, theme)}`];
+		const lines = [headlineRow(false, false, "Searched", detail), `${BRANCH}${searchSummary(details, searchEngine, theme)}`];
 		const shownResults = results.slice(0, max);
 		for (const [index, item] of shownResults.entries()) {
 			const label = sourceLabel(item);
@@ -356,8 +362,8 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 		name: "web_search",
 		label: "Web Search",
 		description:
-			"Search the web using Mistral's direct web_search MCP connector. Returns bounded structured results with URLs, titles, unique snippets, ranks, websites, and search-engine metadata; it does not generate a final answer.",
-		promptSnippet: "Search the web through Mistral's direct MCP connector and return structured results",
+			"Search the web through a quality-routed provider chain. Returns bounded structured results with URLs, titles, unique snippets, ranks, websites, provider attempts, and source metadata; it does not generate a final answer.",
+		promptSnippet: "Search the web through quality-routed providers and return structured results",
 		promptGuidelines: [
 			"Use web_search to discover current or potentially changed web information; it returns structured results, not a final answer.",
 			"Prefer official or primary-source results from web_search. Inspect important pages with local content tools like `ax`; use open_url only when local retrieval is unavailable or fails.",
@@ -366,7 +372,7 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 		parameters: webSearchSchema,
 		renderShell: "self",
 		async execute(_toolCallId, params: WebSearchArgs, signal) {
-			return createSearchToolResult(await searchMistralWeb(params, { signal }));
+			return createSearchToolResult(await searchWeb(params, { signal }));
 		},
 		renderCall: (args: WebSearchArgs, theme: Theme, context: ToolRenderContext) => renderSearchCall(args, theme, context),
 		renderResult: renderSearchResult,
@@ -376,16 +382,16 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 		name: "news_search",
 		label: "News Search",
 		description:
-			"Search news articles using Mistral's direct news_search MCP connector. Returns bounded structured results with unique snippets, dates, URLs or article IDs, ranks, websites, and search-engine metadata.",
-		promptSnippet: "Search recent news through Mistral's direct MCP connector and return structured results",
+			"Search recent news through relevance-first providers. Returns bounded structured results with snippets, dates, URLs, ranks, provider attempts, and source metadata. Date and language constraints are best-effort when a provider lacks native filters.",
+		promptSnippet: "Search recent news through relevance-first providers and return structured results",
 		promptGuidelines: [
 			"Use news_search for recent events, journalism, or date-bounded news queries; it returns structured results, not a final answer.",
-			"When news_search returns a URL or article ID that matters, inspect it with local content tools like `ax`; use open_url only when local retrieval is unavailable or fails.",
+			"When news_search returns a URL that matters, inspect it with local content tools like `ax`; use open_url only when local retrieval is unavailable or fails.",
 		],
 		parameters: newsSearchSchema,
 		renderShell: "self",
 		async execute(_toolCallId, params: NewsSearchArgs, signal) {
-			return createSearchToolResult(await searchMistralNews(params, { signal }));
+			return createSearchToolResult(await searchNews(params, { signal }));
 		},
 		renderCall: (args: NewsSearchArgs, theme: Theme, context: ToolRenderContext) => renderSearchCall(args, theme, context),
 		renderResult: renderSearchResult,
@@ -395,8 +401,8 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 		name: "open_url",
 		label: "Open URL",
 		description:
-			"Fallback for opening a URL or news article ID through Mistral's direct open_url MCP connector when local content retrieval with tools like `ax` is unavailable or fails. Returns readable page text.",
-		promptSnippet: "Fallback opener for a URL or news article ID when local content retrieval with tools like `ax` fails",
+			"Fallback for opening an HTTP(S) URL through Exa, Firecrawl, or Mistral after local content retrieval fails. Large PDFs never fall back to Firecrawl unless explicitly enabled. Mistral article IDs remain supported when configured.",
+		promptSnippet: "Fallback opener for a URL when local content retrieval with tools like `ax` fails",
 		promptGuidelines: [
 			"Use open_url only as a fallback when local content retrieval with tools like `ax` is unavailable, blocked, or fails.",
 			"Cite URLs from open_url or search results when making claims based on web content.",
@@ -404,7 +410,7 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 		parameters: openUrlSchema,
 		renderShell: "self",
 		async execute(_toolCallId, params: OpenUrlArgs, signal) {
-			const result = await openMistralUrl(params.url, { signal });
+			const result = await openUrl(params.url, { signal });
 			return {
 				content: [{ type: "text", text: formatOpenUrlResult(result) }],
 				details: result,
@@ -412,6 +418,22 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 		},
 		renderCall: renderOpenCall,
 		renderResult: renderOpenResult,
+	});
+
+	pi.registerCommand("web-status", {
+		description: "Show web search provider routing and availability",
+		handler: (_args, ctx) => {
+			const status = webStatus();
+			const access = Object.entries(status.providers).map(([name, provider]) => `${name}: ${provider.available ? provider.keyed ? "keyed" : "anonymous" : "unavailable"}`).join(" · ");
+			const routes = [
+				`web: ${status.routes.web.join(" → ") || "none"}`,
+				`news: ${status.routes.news.join(" → ") || "none"}`,
+				`open: ${status.routes.open.join(" → ") || "none"}`,
+				`pdf: ${status.routes.pdf.join(" → ") || "none"}`,
+			];
+			const circuits = status.circuits.length ? `\nrate limited: ${status.circuits.map((item) => item.key).join(", ")}` : "";
+			ctx.ui.notify(`${routes.join("\n")}\n${access}${circuits}`, "info");
+		},
 	});
 
 	pi.on("session_start", (_event, ctx) => syncToolAvailability(pi, ctx.model));
