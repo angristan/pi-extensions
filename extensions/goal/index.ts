@@ -1,7 +1,12 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { Container, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { registerOverlayCard } from "../overlay-stack/index.js";
+// Reuse better-native-pi's palette + line-fitting helpers so the goal tools
+// render as the same compact 2-line transcript blocks as the native and web
+// tools (same bullets, colors, and tree prefixes).
+import { fitToolLine } from "../better-native-pi/core.js";
+import { BOLD, GREEN, MAGENTA, RED, RESET } from "../better-native-pi/render.js";
 
 // ============================================================================
 // Constants
@@ -329,8 +334,210 @@ export function renderGoalOverlayBody(
 	return rows.slice(0, rowBudget).map((line) => truncateToWidth(line, contentWidth, "…"));
 }
 
+// ============================================================================
+// Tool rendering: compact 2-line transcript blocks matching the native and web
+// tools (same `• verb` headline + `└ summary` branch as better-native-pi and
+// web-search), so the goal tools do not render with pi's default verbose tool
+// shell while every other tool uses the tidy block. All helpers are
+// self-contained: they only read args/result/context/theme, never the
+// extension closure, so they stay pure and testable like web-search's.
+// ============================================================================
 
+// Tree prefixes matching better-native-pi's transcript hierarchy exactly.
+const TOOL_LEAD = "";
+const TOOL_BRANCH = `${TOOL_LEAD}  └ `;
 
+/** Compact one-line preview of a free-text field (blocker/summary/next input). */
+function oneLinePreview(value: string | undefined, max = 96): string {
+	const collapsed = (value ?? "").replace(/\s+/g, " ").trim();
+	return collapsed ? truncateToWidth(collapsed, max, "…") : "";
+}
+
+/** `{bullet} {verb}{ detail}` headline row; bullet color encodes the outcome. */
+function toolHeadline(partial: boolean, isError: boolean, verb: string, detail: string): string {
+	const mark = partial ? `${MAGENTA}•${RESET}` : isError ? `${RED}•${RESET}` : `${GREEN}•${RESET}`;
+	return `${TOOL_LEAD}${mark} ${BOLD}${verb}${RESET}${detail ? ` ${detail}` : ""}`;
+}
+
+/** `{branch} {summary}` row for the second line of the block. */
+function toolBranch(summary: string): string {
+	return `${TOOL_BRANCH}${summary}`;
+}
+
+/**
+ * Width-aware component mirroring better-native-pi's WidthAwareLines so goal
+ * tool blocks reflow on resize and fit the live viewport width exactly like the
+ * native tools. The source is re-evaluated each render so partial→settled
+ * transitions update without leaking stale ANSI.
+ */
+class GoalToolLines implements Component {
+	private cachedWidth?: number;
+	private cachedLines?: string[];
+	constructor(private source: () => string[] = () => []) {}
+	update(source: () => string[]): void {
+		this.source = source;
+		this.invalidate();
+	}
+	invalidate(): void {
+		this.cachedWidth = undefined;
+		this.cachedLines = undefined;
+	}
+	render(width: number): string[] {
+		const max = Math.max(1, width);
+		if (this.cachedLines && this.cachedWidth === max) return this.cachedLines;
+		const lines = this.source().flatMap((line) =>
+			visibleWidth(line) <= max ? [line] : [fitToolLine(line, max)],
+		);
+		this.cachedLines = lines;
+		this.cachedWidth = max;
+		return lines;
+	}
+}
+
+/** Reuse the component attached to this render context, or create a fresh one. */
+function reuseGoalToolLines(context: any): GoalToolLines {
+	const existing = context?.lastComponent;
+	return existing instanceof GoalToolLines ? existing : new GoalToolLines();
+}
+
+/** Minimal render-context option shape shared by both render slots. */
+interface GoalRenderOptions {
+	isPartial: boolean;
+	expanded?: boolean;
+}
+
+/** Result detail shape produced by the goal tools' `execute`. */
+interface GoalToolResultDetails {
+	ok?: boolean;
+	ignored?: boolean;
+	blocked?: boolean;
+	duplicateTurn?: boolean;
+	count?: number;
+	threshold?: number;
+	reason?: string;
+}
+
+/** Pull the first text block out of a tool result (shape varies across slots). */
+function textFromResult(result: any): string {
+	const content = result?.content ?? result?.partialResult?.content;
+	if (Array.isArray(content)) {
+		const block = content.find((item: any) => item?.type === "text");
+		if (block?.text) return block.text;
+	}
+	return typeof result?.output === "string" ? result.output : "";
+}
+
+/** `Objective: <text>` line from a goal_complete result body. */
+function extractObjectiveLine(text: string | undefined): string | undefined {
+	const match = (text ?? "").match(/^Objective:\s*(.+)$/m);
+	return match ? oneLinePreview(match[1]) : undefined;
+}
+
+/** `Summary: <text>` line from a goal_complete result body. */
+function extractSummaryLine(text: string | undefined): string | undefined {
+	const match = (text ?? "").match(/^Summary:\s*(.+)$/m);
+	return match ? oneLinePreview(match[1]) : undefined;
+}
+
+/** `Blocker: <text>` line from a goal_block result body. */
+function extractBlockerLine(text: string | undefined): string | undefined {
+	const match = (text ?? "").match(/^Blocker:\s*(.+)$/m);
+	return match ? oneLinePreview(match[1]) : undefined;
+}
+
+/** `Next input needed: <text>` line from a goal_block result body. */
+function extractNextInputLine(text: string | undefined): string | undefined {
+	const match = (text ?? "").match(/^Next input needed:\s*(.+)$/m);
+	return match ? oneLinePreview(match[1]) : undefined;
+}
+
+/**
+ * Render the `goal_complete` tool block.
+ *  - partial → `• Completing goal` (magenta) with the summary preview.
+ *  - settled/ok → `• Completed goal` (green) + the objective (or summary) branch.
+ *  - ignored (no active goal) → invisible Container, matching the empty
+ *    content the execute path returns for stale calls.
+ */
+function renderGoalCompleteCall(args: any, _theme: any, context: any): Component {
+	if (!context?.isPartial) return new Container();
+	const component = reuseGoalToolLines(context);
+	const summaryPreview = oneLinePreview(args?.summary);
+	component.update(() => [toolHeadline(true, false, "Completing goal", summaryPreview)]);
+	return component;
+}
+
+function renderGoalCompleteResult(
+	result: { details?: GoalToolResultDetails } | undefined,
+	{ isPartial }: GoalRenderOptions,
+	theme: any,
+	context: any,
+): Component {
+	if (isPartial) return new Container();
+	if (result?.details?.ignored) return new Container();
+	const component = reuseGoalToolLines(context);
+	const storedText = textFromResult(result);
+	const branch = extractSummaryLine(storedText) || extractObjectiveLine(storedText);
+	component.update(() => [
+		toolHeadline(false, false, "Completed goal", ""),
+		toolBranch(branch ? theme.fg("dim", branch) : ""),
+	]);
+	return component;
+}
+
+/**
+ * Render the `goal_block` tool block.
+ *  - partial → `• Reporting blocker` (magenta) with the blocker preview.
+ *  - blocked → `• Goal blocked` (red) + the blocker (and next input).
+ *  - duplicateTurn → `• Blocker already recorded` (green) + a note.
+ *  - recorded (below threshold) → `• Blocker recorded` (green) + count/threshold.
+ *  - ignored (no active goal) → invisible Container.
+ */
+function renderGoalBlockCall(args: any, _theme: any, context: any): Component {
+	if (!context?.isPartial) return new Container();
+	const component = reuseGoalToolLines(context);
+	const blockerPreview = oneLinePreview(args?.blocker);
+	component.update(() => [toolHeadline(true, false, "Reporting blocker", blockerPreview)]);
+	return component;
+}
+
+function renderGoalBlockResult(
+	result: { details?: GoalToolResultDetails } | undefined,
+	{ isPartial }: GoalRenderOptions,
+	theme: any,
+	context: any,
+): Component {
+	if (isPartial) return new Container();
+	const details = result?.details;
+	if (details?.ignored) return new Container();
+	const component = reuseGoalToolLines(context);
+	const storedText = textFromResult(result);
+	const blockerText = extractBlockerLine(storedText);
+	const nextInput = extractNextInputLine(storedText);
+
+	component.update(() => {
+		if (details?.blocked) {
+			const branch = [blockerText, nextInput ? `next: ${nextInput}` : ""].filter(Boolean).join(" · ");
+			return [
+				toolHeadline(false, true, "Goal blocked", ""),
+				toolBranch(branch ? theme.fg("dim", branch) : ""),
+			];
+		}
+		if (details?.duplicateTurn) {
+			return [
+				toolHeadline(false, false, "Blocker already recorded", ""),
+				toolBranch(theme.fg("dim", "already counted this goal turn")),
+			];
+		}
+		const count = details?.count ?? 1;
+		const threshold = details?.threshold ?? BLOCKED_AUDIT_THRESHOLD;
+		const branch = [blockerText, "goal remains active", `${count}/${threshold}`].filter(Boolean).join(" · ");
+		return [
+			toolHeadline(false, false, "Blocker recorded", ""),
+			toolBranch(branch ? theme.fg("dim", branch) : ""),
+		];
+	});
+	return component;
+}
 
 // ============================================================================
 // Extension
@@ -840,7 +1047,9 @@ export default function (pi: ExtensionAPI) {
 		parameters: Type.Object({
 			summary: Type.Optional(Type.String({ description: "Optional concise summary of what was accomplished." })),
 		}),
-		renderCall: () => new Text("", 0, 0),
+		renderShell: "self",
+		renderCall: renderGoalCompleteCall,
+		renderResult: renderGoalCompleteResult,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			if (!state) return inactiveGoalToolResult("no-goal");
 			if (state.status !== "active") return inactiveGoalToolResult(`goal-${state.status}`);
@@ -864,6 +1073,9 @@ export default function (pi: ExtensionAPI) {
 			evidence: Type.Optional(Type.String({ description: "Optional supporting detail for the blocker." })),
 			next_input: Type.Optional(Type.String({ description: "Optional input or external change that would unlock progress." })),
 		}),
+		renderShell: "self",
+		renderCall: renderGoalBlockCall,
+		renderResult: renderGoalBlockResult,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			if (!state) return inactiveGoalToolResult("no-goal");
 			if (state.status !== "active") return inactiveGoalToolResult(`goal-${state.status}`);
