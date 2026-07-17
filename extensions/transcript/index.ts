@@ -11,7 +11,7 @@ function displayText(value: string): string {
 }
 
 function contentText(content: any): string {
-	if (typeof content === "string") return content;
+	if (typeof content === "string") return displayText(content);
 	if (!Array.isArray(content)) return "";
 	return content.map((item) => {
 		if (item?.type === "text" || item?.type === "thinking") {
