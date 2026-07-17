@@ -265,6 +265,58 @@ function goalOverlayStats(ctx: any, state: GoalState): GoalOverlayStats | undefi
 	return totals;
 }
 
+export interface GoalCompletionStats {
+	activeTimeMs: number;
+	continuations: number;
+	validationCount: number;
+	tokens?: GoalOverlayStats;
+}
+
+/**
+ * Snapshot the goal's lifetime stats at completion: accumulated active time,
+ * continuation count, validation check count, and tokens spent while the goal
+ * was active. Computed at execute time (the render slots are pure and cannot
+ * reach the extension closure) and stashed in the tool result `details` so the
+ * completion block can render the same numbers the overlay card was showing.
+ */
+function completionStats(ctx: any, state: GoalState): GoalCompletionStats {
+	return {
+		activeTimeMs: elapsedMs(state),
+		continuations: state.continuations,
+		validationCount: state.validation.length,
+		tokens: goalOverlayStats(ctx, state),
+	};
+}
+
+/**
+ * Compact one-line summary of goal completion stats, mirroring the overlay
+ * card's active-time / continuation / token breakdown so the transcript record
+ * matches the card that just hid itself on completion.
+ */
+function formatCompletionStats(stats: GoalCompletionStats, theme: any): string {
+	const parts: string[] = [`${formatDuration(stats.activeTimeMs)} active`];
+	parts.push(`${stats.continuations} ${pluralize(stats.continuations, "continuation")}`);
+	if (stats.validationCount > 0) {
+		parts.push(`${stats.validationCount} ${pluralize(stats.validationCount, "validation check")}`);
+	}
+	const tokens = stats.tokens;
+	if (tokens) {
+		const total = tokens.inputTokens + tokens.outputTokens + tokens.cacheReadTokens + tokens.cacheWriteTokens;
+		if (total > 0) {
+			// Same ↓↑RW breakdown as the overlay's goalTokenUsageLine so the two
+			// views never drift apart.
+			const breakdown = [
+				tokens.inputTokens > 0 ? `↓${compactNumber(tokens.inputTokens)}` : undefined,
+				tokens.outputTokens > 0 ? `↑${compactNumber(tokens.outputTokens)}` : undefined,
+				tokens.cacheReadTokens > 0 ? `R${compactNumber(tokens.cacheReadTokens)}` : undefined,
+				tokens.cacheWriteTokens > 0 ? `W${compactNumber(tokens.cacheWriteTokens)}` : undefined,
+			].filter(Boolean);
+			parts.push(`${compactNumber(total)} tokens spent${breakdown.length ? ` · ${breakdown.join(" ")}` : ""}`);
+		}
+	}
+	return theme.fg("dim", parts.join(" · "));
+}
+
 function fullGoalLines(state: GoalDisplayState, theme: any): string[] {
 	const lines = [
 		...state.objective.split("\n"),
@@ -421,6 +473,8 @@ interface GoalToolResultDetails {
 	replaced?: boolean;
 	/** goal_set refused because a goal is in progress and replace was not set. */
 	needsReplace?: boolean;
+	/** goal_complete: lifetime stats snapshot for the completion block. */
+	completion?: GoalCompletionStats;
 }
 
 /** Pull the first text block out of a tool result (shape varies across slots). */
@@ -483,10 +537,18 @@ function renderGoalCompleteResult(
 	const component = reuseGoalToolLines(context);
 	const storedText = textFromResult(result);
 	const branch = extractSummaryLine(storedText) || extractObjectiveLine(storedText);
-	component.update(() => [
-		toolHeadline(false, false, "Completed goal", ""),
-		toolBranch(branch ? theme.fg("dim", branch) : ""),
-	]);
+	const completion = result?.details?.completion;
+	component.update(() => {
+		const lines = [
+			toolHeadline(false, false, "Completed goal", ""),
+			toolBranch(branch ? theme.fg("dim", branch) : ""),
+		];
+		// The overlay card hides on completion, so the completion block carries
+		// the final stats (active time, continuations, tokens spent) as the
+		// persistent transcript record of what the goal cost.
+		if (completion) lines.push(toolBranch(formatCompletionStats(completion, theme)));
+		return lines;
+	});
 	return component;
 }
 
@@ -873,9 +935,18 @@ export default function (pi: ExtensionAPI) {
 				case "blocked":
 					if (!setStatus("blocked", ctx)) ctx.ui.notify("No session goal to block.", "warning");
 					return;
-				case "complete":
-					if (!setStatus("complete", ctx)) ctx.ui.notify("No session goal to complete.", "warning");
+				case "complete": {
+					if (!setStatus("complete", ctx)) {
+						ctx.ui.notify("No session goal to complete.", "warning");
+						return;
+					}
+					const stats = completionStats(ctx, state!);
+					ctx.ui.notify(
+						`Goal complete: ${state!.objective}\n${formatCompletionStats(stats, ctx.ui.theme)}`,
+						"info",
+					);
 					return;
+				}
 				case "clear": {
 					if (!state) { ctx.ui.notify("No session goal to clear.", "info"); return; }
 					const confirmed = await ctx.ui.confirm("Clear session goal?", "The append-only history remains, but the goal will no longer be active or shown.");
@@ -1103,10 +1174,16 @@ export default function (pi: ExtensionAPI) {
 			if (!state) return inactiveGoalToolResult("no-goal");
 			if (state.status !== "active") return inactiveGoalToolResult(`goal-${state.status}`);
 			setStatus("complete", ctx);
-			ctx.ui.notify(`Goal complete: ${params.summary ?? state.objective}`, "info");
+			// Surface how long/how much the goal took now that the overlay card
+			// hides on completion; the completion block becomes the persistent record.
+			const stats = completionStats(ctx, state);
+			ctx.ui.notify(
+				`Goal complete: ${params.summary ?? state.objective}\n${formatCompletionStats(stats, ctx.ui.theme)}`,
+				"info",
+			);
 			return {
 				content: [{ type: "text", text: `Goal marked complete.\nObjective: ${state.objective}${params.summary ? `\nSummary: ${params.summary}` : ""}` }],
-				details: { ok: true },
+				details: { ok: true, completion: stats },
 			};
 		},
 	});

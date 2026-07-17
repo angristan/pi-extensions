@@ -292,17 +292,35 @@ test("goal_complete renders a compact completed block and hides stale calls", as
 	await h.commands.goal.handler("reduce p95 latency below 120ms", h.ctx);
 
 	const result = await h.tools.goal_complete.execute("call", { summary: "shipped the fix" }, undefined, undefined, h.ctx);
+	expect(result.details.completion).toBeDefined();
+	expect(result.details.completion.activeTimeMs).toBeGreaterThanOrEqual(0);
+	expect(result.details.completion.validationCount).toBe(0);
 	const block = h.tools.goal_complete.renderResult(result, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
 	const lines = renderBlock(block);
 	expect(lines[0]).toContain("Completed goal");
 	expect(lines[1]).toContain("└");
 	// The branch shows the summary (preferred) or the objective.
 	expect(lines[1]).toContain("shipped the fix");
+	// The completion block surfaces lifetime stats since the overlay card hid.
+	expect(lines.length).toBeGreaterThanOrEqual(3);
+	expect(lines[2]).toContain("└");
+	expect(lines[2]).toMatch(/active.*continuation/i);
 
 	// A stale call against no active goal renders nothing.
 	const stale = { ...result, details: { ok: false, ignored: true, reason: "no-goal" } };
 	const staleBlock = h.tools.goal_complete.renderResult(stale, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
 	expect(renderBlock(staleBlock)).toEqual([]);
+});
+
+test("/goal complete surfaces lifetime stats in the notification", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("reduce p95 latency below 120ms", h.ctx);
+
+	await h.commands.goal.handler("complete", h.ctx);
+	expect(latestGoalState(h).status).toBe("complete");
+	const note = h.notifications.at(-1)!;
+	expect(note.message).toContain("Goal complete:");
+	expect(note.message).toMatch(/active.*continuation/i);
 });
 
 test("goal_block renders recorded, blocked, and duplicate outcomes", async () => {

@@ -104,7 +104,10 @@ All sections except `# Goal` are optional.
   `replace: true`, so an in-progress goal cannot be silently redefined around
   an easier task.
 - **`goal_complete`** — active only while a `/goal` is active; marks the goal
-  complete and accepts an optional `summary`.
+  complete and accepts an optional `summary`. The completion block also shows
+  the goal's lifetime stats (active time, continuations, tokens spent), since
+  the overlay card hides once the goal is complete. `/goal complete` surfaces
+  the same stats via a notification.
 - **`goal_block`** — active only while a `/goal` is active; records a blocker.
   Optional fields can describe the blocker, attempted work, supporting detail,
   and next input; marks the goal `blocked` only after the same blocker repeats
@@ -130,6 +133,7 @@ blocker) over a dim `└ summary` branch. Example settled blocks:
   └ make all tests pass
 • Completed goal
   └ Reduce p95 checkout latency below 120ms
+  └ 2m 14s active · 4 continuations · 45K tokens spent
 • Goal blocked
   └ flaky CI on macOS · next: re-run after runner image bumped
 • Blocker recorded
