@@ -352,8 +352,29 @@ export default function bash(pi: ExtensionAPI) {
 			}, theme);
 		},
 		renderResult: (result: any, options: any, theme: any, context: any) => {
-			if (options?.isPartial) return new Container();
 			const terminal = getBackgroundTerminalService();
+			// Stream partial output for managed terminals: executeUnified pushes
+			// onUpdate every 100ms while the job runs, but without this branch the
+			// card rendered nothing until the yield window closed and isPartial
+			// flipped to false. Render the live ManagedCommandComponent instead so
+			// stdout appears in the card as it arrives.
+			if (options?.isPartial && terminal && result?.details?.managedTerminal) {
+				let component = context.state.managedCommand as ManagedCommandComponent | undefined;
+				if (!component) {
+					component = new ManagedCommandComponent(
+						context.args ?? { command: result.details.command, reasoning: result.details.description },
+						result,
+						Boolean(options.expanded),
+						theme,
+						context.cwd,
+						terminal,
+						context.invalidate,
+					);
+					context.state.managedCommand = component;
+				} else component.update(result, Boolean(options.expanded));
+				return component;
+			}
+			if (options?.isPartial) return new Container();
 			if (terminal && result?.details?.managedTerminal) {
 				let component = context.state.managedCommand as ManagedCommandComponent | undefined;
 				if (!component) {
