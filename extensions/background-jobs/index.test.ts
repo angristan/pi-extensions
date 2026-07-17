@@ -234,8 +234,9 @@ describe("terminal tools", () => {
 			{ expanded: false },
 			theme,
 			{ args: { reasoning: "answer the test prompt", job_id: started.details.id, chars: "hello\n" } },
-		).render(120).join("\n");
-		expect(rendered).toContain("<success>•</success> Interacted <accent>answer the test prompt</accent>");
+		).render(200).join("\n");
+		expect(rendered).toContain("<success>•</success> Interacted with <dim>");
+		expect(rendered).toContain("</dim> <dim>to</dim> <accent>answer the test prompt</accent>");
 		expect(rendered).toContain("│ </dim>got:hello");
 		expect(rendered).not.toContain("↪");
 		expect(rendered).not.toContain("↳");
