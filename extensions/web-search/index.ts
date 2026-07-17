@@ -307,7 +307,7 @@ function renderSearchResult(
 			const meta = [
 				website ? theme.fg("accent", website) : undefined,
 				via ? theme.fg("muted", via) : undefined,
-				itemDate ? theme.fg("accent", itemDate) : undefined,
+				itemDate ? theme.fg("mdLink", itemDate) : undefined,
 			].filter(Boolean).join(theme.fg("dim", " · "));
 			lines.push(`${INDENT}${theme.fg("syntaxNumber", `${index + 1}.`)} ${rendered}${meta ? ` ${theme.fg("dim", "—")} ${meta}` : ""}`);
 			const evidence = item.snippets?.[0] ?? item.description;
