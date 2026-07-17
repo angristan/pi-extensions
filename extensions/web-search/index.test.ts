@@ -63,6 +63,7 @@ webSearchExtension({
 } as any);
 
 const webSearch = tools.find((tool) => tool.name === "web_search");
+const newsSearch = tools.find((tool) => tool.name === "news_search");
 const openUrl = tools.find((tool) => tool.name === "open_url");
 const theme = {
 	fg: (name: string, text: string) => `<${name}>${text}</${name}>`,
@@ -93,6 +94,26 @@ function render(tool: any, toolResult: unknown, args: Record<string, unknown>, o
 	);
 	return component.render(options.width ?? 1_000);
 }
+
+describe("web tool prompt guidance", () => {
+	test("stays concise without dropping routing and evidence behavior", () => {
+		const guidelines = [webSearch, newsSearch, openUrl].flatMap((tool) => tool.promptGuidelines ?? []);
+		const text = guidelines.join("\n");
+
+		expect(guidelines).toHaveLength(5);
+		expect(new Set(guidelines).size).toBe(guidelines.length);
+		expect(text.length).toBeLessThanOrEqual(600);
+		expect(text).toContain("official or primary sources");
+		expect(text).toContain("recent events");
+		expect(text).toContain("local content retrieval");
+		expect(text).toContain("protocol-level HTTP diagnostics");
+		expect(text).toContain("cite the URLs used");
+		expect(text).not.toContain("provider unset");
+		for (const tool of [webSearch, newsSearch, openUrl]) {
+			expect(tool.parameters.provider.description).toContain("Leave unset unless a provider-specific retry is needed");
+		}
+	});
+});
 
 describe("web search renderer", () => {
 	test("collapsed results use shared engine attribution and semantic colors", () => {
