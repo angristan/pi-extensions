@@ -1238,7 +1238,7 @@ export default function (pi: ExtensionAPI) {
 			// the agent_settled handler fires the first continuation at a safe boundary.
 			maybeContinue(ctx);
 			return {
-				content: [{ type: "text", text: `${replacing ? "Goal replaced" : "Goal set"}.\nObjective: ${objective}${validation.length ? `\nValidation:\n${validation.map((item) => `- ${item}`).join("\n")}` : ""}` }],
+				content: [{ type: "text", text: `${replacing ? "Goal replaced" : "Goal set"}.\nObjective: ${objective}${validation.length ? `\nValidation:\n${validation.map((item: string) => `- ${item}`).join("\n")}` : ""}` }],
 				details: { ok: true, set: true, replaced: replacing },
 			};
 		},
