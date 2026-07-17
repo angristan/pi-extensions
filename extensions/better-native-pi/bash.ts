@@ -274,6 +274,7 @@ class ManagedCommandComponent {
 		const text = view.output.replace(/\s+$/, "");
 		let output = text ? wrappedOutput(text, max) : [barLine(active ? "(waiting for output)" : "(no output)")];
 		if (!this.expanded) output = boundedRows(output);
+		if (!details.backgrounded) return [...block, ...command, ...output];
 		const color = terminalStatusColor(status);
 		const metadata = [details.id, status, details.tty ? "tty" : undefined, active ? "/ps" : undefined].filter(Boolean).join(" · ");
 		const footer = fitToolLine(`  └ ${this.theme.fg(color, terminalStatusSymbol(status))} ${this.theme.fg("dim", metadata)}`, max);
