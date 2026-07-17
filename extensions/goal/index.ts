@@ -207,11 +207,11 @@ function contextUsageLine(stats: GoalOverlayStats | undefined, theme: any): stri
 	if (typeof stats?.contextTokens !== "number") return undefined;
 	const used = compactNumber(stats.contextTokens);
 	if (typeof stats.contextWindow !== "number" || stats.contextWindow <= 0) {
-		return theme.fg("dim", `ctx ${used} tokens`);
+		return theme.fg("dim", `tokens ${used}`);
 	}
 	const window = compactNumber(stats.contextWindow);
 	const percent = Math.min(100, Math.max(0, (stats.contextTokens / stats.contextWindow) * 100));
-	return theme.fg("dim", `ctx ${used}/${window} (${percent.toFixed(0)}%)`);
+	return theme.fg("dim", `tokens ${used}/${window} (${percent.toFixed(0)}%)`);
 }
 
 function goalOverlayStats(ctx: any): GoalOverlayStats | undefined {
