@@ -1,3 +1,9 @@
+/**
+ * Dependency graph:
+ * Direct: `@earendil-works/pi-agent-core`, `@earendil-works/pi-coding-agent`,
+ *   `@earendil-works/pi-tui`.
+ * Used by: `Pi extension loader`.
+ */
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { estimateTokens } from "@earendil-works/pi-coding-agent";

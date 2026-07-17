@@ -1,5 +1,12 @@
 # wakatime
 
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.
+- **System/service:** `wakatime-cli` on `PATH` and a configured WakaTime API key.
+
 Tracks file activity from Pi with an existing
 [`wakatime-cli`](https://github.com/wakatime/wakatime-cli) installation.
 

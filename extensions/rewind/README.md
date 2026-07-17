@@ -1,5 +1,11 @@
 # rewind
 
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.
+
 Fork from an earlier user prompt and restore it to the editor.
 
 Opens a picker of your previous user prompts in the current session; selecting one forks the session at that point and restores the prompt so you can take a different path.

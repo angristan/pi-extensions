@@ -1,5 +1,11 @@
 # cached-line-resets
 
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.
+
 Caches pi's per-line ANSI reset application so rendering large transcript
 regions stays fast.
 

@@ -1,3 +1,8 @@
+/**
+ * Dependency graph:
+ * Direct: `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`.
+ * Used by: `Pi extension loader`.
+ */
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import {
 	sliceByColumn,

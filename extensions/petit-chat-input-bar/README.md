@@ -1,5 +1,11 @@
 # petit-chat-input-bar
 
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.
+
 A tiny static companion sprite that sits above the editor (a la Vibe's petit
 chat). Purely cosmetic — no commands, no config.
 

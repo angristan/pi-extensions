@@ -1,3 +1,8 @@
+/**
+ * Dependency graph:
+ * Direct: `./heartbeat.js`, `node:fs/promises`, `node:path`.
+ * Used by: `extensions/wakatime/index.ts`, `extensions/wakatime/tracker.test.ts`.
+ */
 import { readFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import type { Heartbeat } from "./heartbeat.js";

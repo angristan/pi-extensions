@@ -1,3 +1,9 @@
+/**
+ * Dependency graph:
+ * Direct: None.
+ * Used by: `extensions/auto-session-title/context.test.ts`,
+ *   `extensions/auto-session-title/index.ts`.
+ */
 export const TITLE_STATE_TYPE = "auto-session-title-state-v2";
 export const MAX_TITLE_CONTEXT_CHARS = 8_000;
 export const MAX_CURRENT_USER_CHARS = 2_000;

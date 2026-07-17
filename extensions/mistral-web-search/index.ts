@@ -1,3 +1,9 @@
+/**
+ * Dependency graph:
+ * Direct: `../better-native-pi/core.js`, `../better-native-pi/render.js`, `./client`,
+ *   `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, `typebox`.
+ * Used by: `extensions/mistral-web-search/index.test.ts`, `Pi extension loader`.
+ */
 import { type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Container, hyperlink, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";

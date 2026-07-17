@@ -1,3 +1,8 @@
+/**
+ * Dependency graph:
+ * Direct: `@earendil-works/pi-tui`.
+ * Used by: `extensions/background-jobs/index.ts`, `extensions/better-native-pi/bash.ts`.
+ */
 import type { Component } from "@earendil-works/pi-tui";
 
 export interface BackgroundTerminalView {

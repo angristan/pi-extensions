@@ -1,5 +1,11 @@
 # history-search
 
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.
+
 Incremental search across your previous user prompts, inline in the editor.
 
 `Ctrl+R` begins a reverse-i-search; typing filters all past user messages in

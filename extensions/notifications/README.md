@@ -1,5 +1,11 @@
 # notifications
 
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.
+
 Desktop notifications for agent activity, so you can context-switch away and
 get pinged when there's something to look at.
 

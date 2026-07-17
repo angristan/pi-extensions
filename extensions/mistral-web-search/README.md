@@ -1,5 +1,12 @@
 # mistral-web-search
 
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** [`better-native-pi`](../better-native-pi/).
+- **Used by extensions:** None.
+- **System/service:** A configured Mistral provider for remote search requests.
+
 Web search via Mistral's web-search connector, rendered as compact transcript
 rows that match better-native-pi's tool-block grammar.
 
@@ -36,8 +43,3 @@ pages render as `Open blocked`.
 
 Reads provider config (API key, base URL) from your `models.json` Mistral
 provider entry. Tools auto-enable/disable based on the active model.
-
-## Depends on
-
-Reuses `better-native-pi`'s `fitToolLine` / `formatElapsed` and palette so
-search rows are visually identical to the built-in tool blocks.

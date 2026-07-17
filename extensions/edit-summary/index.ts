@@ -1,3 +1,9 @@
+/**
+ * Dependency graph:
+ * Direct: `../overlay-stack/index.js`, `@earendil-works/pi-coding-agent`,
+ *   `@earendil-works/pi-tui`, `node:fs/promises`, `node:path`.
+ * Used by: `Pi extension loader`.
+ */
 import { readFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import {

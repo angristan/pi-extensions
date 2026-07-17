@@ -1,5 +1,11 @@
 # turn-stats
 
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.
+
 Per-turn timing and token-usage entries appended to the transcript after each
 agent run.
 

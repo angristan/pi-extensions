@@ -1,3 +1,8 @@
+/**
+ * Dependency graph:
+ * Direct: `@earendil-works/pi-coding-agent`.
+ * Used by: `Pi extension loader`.
+ */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 function contentText(content: any): string {

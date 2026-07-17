@@ -1,5 +1,11 @@
 # context-inspector
 
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.
+
 Inspect where your context window is being spent.
 
 `/context` opens a breakdown of every token category in the current session so

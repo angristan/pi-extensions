@@ -1,3 +1,9 @@
+/**
+ * Dependency graph:
+ * Direct: `@earendil-works/pi-coding-agent`, `node:fs`, `node:os`, `node:path`.
+ * Used by: `extensions/doctor/index.ts`, `extensions/overlay-stack/index.ts`, `Pi extension
+ *   loader`.
+ */
 import { CustomEditor, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";

@@ -1,4 +1,9 @@
 /**
+ * Dependency graph:
+ * Direct: `@earendil-works/pi-coding-agent`.
+ * Used by: `Pi extension loader`.
+ */
+/**
  * working-timer — adds elapsed time to Pi's built-in "Working..." row.
  *
  * The first agent_start anchors a user-visible run. The timer remains anchored

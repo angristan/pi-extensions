@@ -1,5 +1,11 @@
 # transcript
 
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** None.
+- **Used by extensions:** None.
+
 Open a full, scrollable view of the entire session transcript.
 
 `/transcript` (or `Ctrl+Shift+T`) opens a near-fullscreen overlay (95% width,

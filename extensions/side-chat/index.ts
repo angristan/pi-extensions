@@ -1,3 +1,9 @@
+/**
+ * Dependency graph:
+ * Direct: `@earendil-works/pi-ai/compat`, `@earendil-works/pi-coding-agent`,
+ *   `@earendil-works/pi-tui`.
+ * Used by: `Pi extension loader`.
+ */
 import type { Message } from "@earendil-works/pi-ai/compat";
 import { complete } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";

@@ -1,5 +1,11 @@
 # plan-progress
 
+## Dependencies
+
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Depends on extensions:** [`overlay-stack`](../overlay-stack/).
+- **Used by extensions:** None.
+
 Track a multi-step plan as a collapsible overlay above the editor, and expose a
 tool the agent can call to maintain it.
 

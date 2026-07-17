@@ -1,3 +1,8 @@
+/**
+ * Dependency graph:
+ * Direct: `./cli`, `bun:test`, `node:fs`, `node:os`, `node:path`.
+ * Used by: `Bun test runner`.
+ */
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

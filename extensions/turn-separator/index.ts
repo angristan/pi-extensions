@@ -1,4 +1,9 @@
 /**
+ * Dependency graph:
+ * Direct: `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`.
+ * Used by: `Pi extension loader`.
+ */
+/**
  * turn-separator — dim full-width rule between assistant messages that follow
  * tool work, so each step of a multi-step turn is visually separated.
  *

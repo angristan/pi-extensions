@@ -1,3 +1,10 @@
+/**
+ * Dependency graph:
+ * Direct: `../better-native-pi/core.js`, `./output.js`, `./service.js`,
+ *   `./terminal-process.js`, `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`,
+ *   `node:child_process`, `node:crypto`, `node:fs`, `node:path`.
+ * Used by: `extensions/background-jobs/index.test.ts`, `Pi extension loader`.
+ */
 import { randomBytes } from "node:crypto";
 import type { ChildProcess } from "node:child_process";
 import { statSync } from "node:fs";

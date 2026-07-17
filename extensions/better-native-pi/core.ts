@@ -1,4 +1,12 @@
 /**
+ * Dependency graph:
+ * Direct: `../hyperlinks/index.js`, `./diff.js`, `./render.js`, `./shell.js`,
+ *   `@earendil-works/pi-tui`, `node:path`.
+ * Used by: `extensions/background-jobs/index.ts`, `extensions/better-native-pi/bash.ts`,
+ *   `extensions/better-native-pi/core.test.ts`, `extensions/better-native-pi/diff.ts`,
+ *   `extensions/better-native-pi/file-tools.ts`, `extensions/mistral-web-search/index.ts`.
+ */
+/**
  * core — the compact 2-line tool block builder plus shared fitting/reasoning
  * helpers. Pure library: no `pi.*` calls, no factory.
  *
