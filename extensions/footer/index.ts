@@ -167,7 +167,15 @@ function terminalThreadTitle(ctx: any): string {
 
 function modelWithReasoning(ctx: any, thinkingLevel: string): string {
 	const name = ctx.model?.name ?? ctx.model?.id ?? "no model";
-	return `${name} ${thinkingLevel || "default"}`;
+	// Hide the thinking-level suffix when the model can't reason at all, or when
+	// reasoning is explicitly turned off. Showing "off" on reasoning-capable models
+	// or any suffix on non-reasoning models just adds noise.
+	const modelReasoning = ctx.model?.reasoning === true;
+	const level = thinkingLevel?.trim();
+	if (!modelReasoning || level === "off" || level === "" || level === undefined) {
+		return name;
+	}
+	return `${name} ${level}`;
 }
 
 function rgb(text: string, color: readonly [number, number, number]): string {
