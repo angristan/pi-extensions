@@ -353,11 +353,13 @@ export default function (pi: ExtensionAPI) {
 		if (typeof ctx.hasPendingMessages === "function" && ctx.hasPendingMessages()) return false;
 
 		// Interruption → pause is detected in message_end below.
+		// Any goal turn that does not report a blocker breaks the consecutive
+		// blocker audit. This keeps the threshold tied to repeated blocker reports,
+		// not merely repeated turns.
+		if (!lastTurnCalledGoalBlock && state.blockedAudit) state.blockedAudit = undefined;
+
 		if (lastTurnHadToolCall) {
 			noToolContinuationStreak = 0;
-			// A successful tool-using turn that did not report a blocker breaks the
-			// consecutive blocked audit for the same blocking condition.
-			if (!lastTurnCalledGoalBlock && state.blockedAudit) state.blockedAudit = undefined;
 		} else if (lastTurnWasContinuation) {
 			noToolContinuationStreak += 1;
 			if (noToolContinuationStreak >= BLOCKED_AUDIT_THRESHOLD) {
