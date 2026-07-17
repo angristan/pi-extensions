@@ -18,7 +18,8 @@ another tab.
 - Window-title spinner (OSC 0) while the agent is running
 - Softened Catppuccin-Mocha-derived palette that adapts to the active theme
 - Purple `fast` status beside the model when the bundled OpenAI Codex Fast mode is enabled
-- Responsive layout that hides cache details first, then git, then the directory
+- Responsive layout that removes cache details, git, cost, output, input,
+  directory, model, and context in that order; the session title remains
 
 ## Dependencies
 

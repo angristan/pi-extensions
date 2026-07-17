@@ -24,7 +24,12 @@ test("computes context usage after the reserved baseline", () => {
 	expect(contextRemainingPercent(999_000, 112_000)).toBe(100);
 });
 
-test("hides cache details, git, then directory as space narrows", () => {
+test("uses the intended responsive removal order as space narrows", () => {
+	expect(Object.entries(FOOTER_GROUP_PRIORITY)
+		.sort(([, left], [, right]) => right - left)
+		.map(([name]) => name))
+		.toEqual(["cache", "git", "cost", "output", "input", "path", "model", "context", "thread"]);
+
 	const segment = (accent: "thread" | "path" | "branch" | "model" | "usage", text: string) => ({ accent, text });
 	const groups: Parameters<typeof renderAdaptiveRow>[0] = [
 		{ segments: [segment("thread", "thread")], priority: FOOTER_GROUP_PRIORITY.thread, required: true },
@@ -48,8 +53,10 @@ test("hides cache details, git, then directory as space narrows", () => {
 	expect(plain(46)).not.toContain("cache");
 	expect(plain(40)).toContain("directory │ model │ input");
 	expect(plain(40)).not.toContain("git");
-	expect(plain(34)).toContain("thread │ model │ input");
-	expect(plain(34)).not.toContain("directory");
+	expect(plain(34)).toContain("thread │ directory │ model");
+	expect(plain(34)).not.toContain("input");
+	expect(plain(26)).toContain("thread │ model");
+	expect(plain(26)).not.toContain("directory");
 });
 
 test("aggregates assistant usage and resolves missing historical costs", () => {

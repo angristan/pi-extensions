@@ -70,11 +70,11 @@ interface FooterGroup {
 export const FOOTER_GROUP_PRIORITY = {
 	thread: 0,
 	context: 1,
-	cost: 2,
-	input: 3,
-	output: 4,
-	model: 7,
-	path: 8,
+	model: 4,
+	path: 5,
+	input: 6,
+	output: 7,
+	cost: 8,
 	git: 9,
 	cache: 10,
 } as const;
