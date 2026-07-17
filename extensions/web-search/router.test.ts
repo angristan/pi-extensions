@@ -99,8 +99,6 @@ describe("provider router", () => {
 			searchProvider: process.env.PI_WEB_SEARCH_PROVIDER,
 			newsProvider: process.env.PI_WEB_NEWS_PROVIDER,
 			openProvider: process.env.PI_WEB_OPEN_PROVIDER,
-			mistralNews: process.env.PI_WEB_SEARCH_ENABLE_MISTRAL_NEWS,
-			pdf: process.env.PI_WEB_ALLOW_FIRECRAWL_PDF,
 		};
 		try {
 			process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -109,8 +107,6 @@ describe("provider router", () => {
 			delete process.env.PI_WEB_SEARCH_PROVIDER;
 			delete process.env.PI_WEB_NEWS_PROVIDER;
 			delete process.env.PI_WEB_OPEN_PROVIDER;
-			delete process.env.PI_WEB_SEARCH_ENABLE_MISTRAL_NEWS;
-			delete process.env.PI_WEB_ALLOW_FIRECRAWL_PDF;
 
 			expect(webProviderOrder()).toEqual(["exa"]);
 			expect(newsProviderOrder()).toEqual(["exa"]);
@@ -118,6 +114,7 @@ describe("provider router", () => {
 			expect(openProviderOrder("mistral-news-article-id")).toEqual([]);
 			expect(webStatus().providers.firecrawl).toEqual({ available: false, keyed: false });
 			expect(webStatus().providers.mistral).toEqual({ available: false, keyed: false });
+			expect(webStatus().routes).not.toHaveProperty("pdf");
 		} finally {
 			restoreEnv("PI_CODING_AGENT_DIR", previous.agentDir);
 			restoreEnv("FIRECRAWL_API_KEY", previous.firecrawlKey);
@@ -125,39 +122,64 @@ describe("provider router", () => {
 			restoreEnv("PI_WEB_SEARCH_PROVIDER", previous.searchProvider);
 			restoreEnv("PI_WEB_NEWS_PROVIDER", previous.newsProvider);
 			restoreEnv("PI_WEB_OPEN_PROVIDER", previous.openProvider);
-			restoreEnv("PI_WEB_SEARCH_ENABLE_MISTRAL_NEWS", previous.mistralNews);
-			restoreEnv("PI_WEB_ALLOW_FIRECRAWL_PDF", previous.pdf);
 			rmSync(agentDir, { recursive: true, force: true });
 		}
 	});
 
-	test("keeps Mistral news opt-in and Firecrawl PDF fallback opt-in", () => {
+	test("uses one credential-gated order for web, news, open, and PDFs", () => {
 		const previous = {
 			firecrawlKey: process.env.FIRECRAWL_API_KEY,
 			mistralKey: process.env.MISTRAL_API_KEY,
-			news: process.env.PI_WEB_SEARCH_ENABLE_MISTRAL_NEWS,
+			searchProvider: process.env.PI_WEB_SEARCH_PROVIDER,
 			newsProvider: process.env.PI_WEB_NEWS_PROVIDER,
-			pdf: process.env.PI_WEB_ALLOW_FIRECRAWL_PDF,
-			open: process.env.PI_WEB_OPEN_PROVIDER,
+			openProvider: process.env.PI_WEB_OPEN_PROVIDER,
 		};
 		try {
 			process.env.FIRECRAWL_API_KEY = "test-firecrawl";
 			process.env.MISTRAL_API_KEY = "test-mistral";
-			delete process.env.PI_WEB_SEARCH_ENABLE_MISTRAL_NEWS;
+			delete process.env.PI_WEB_SEARCH_PROVIDER;
 			delete process.env.PI_WEB_NEWS_PROVIDER;
-			delete process.env.PI_WEB_ALLOW_FIRECRAWL_PDF;
-			process.env.PI_WEB_OPEN_PROVIDER = "firecrawl";
-			expect(newsProviderOrder()).toEqual(["exa", "firecrawl"]);
-			expect(openProviderOrder("https://example.com/manual.pdf")).not.toContain("firecrawl");
-			process.env.PI_WEB_ALLOW_FIRECRAWL_PDF = "1";
-			expect(openProviderOrder("https://example.com/manual.pdf")[0]).toBe("firecrawl");
+			delete process.env.PI_WEB_OPEN_PROVIDER;
+
+			const route = ["exa", "firecrawl", "mistral"];
+			expect(webProviderOrder()).toEqual(route);
+			expect(newsProviderOrder()).toEqual(route);
+			expect(openProviderOrder("https://example.com/docs")).toEqual(route);
+			expect(openProviderOrder("https://example.com/manual.pdf")).toEqual(route);
 		} finally {
 			restoreEnv("FIRECRAWL_API_KEY", previous.firecrawlKey);
 			restoreEnv("MISTRAL_API_KEY", previous.mistralKey);
-			restoreEnv("PI_WEB_SEARCH_ENABLE_MISTRAL_NEWS", previous.news);
+			restoreEnv("PI_WEB_SEARCH_PROVIDER", previous.searchProvider);
 			restoreEnv("PI_WEB_NEWS_PROVIDER", previous.newsProvider);
-			restoreEnv("PI_WEB_ALLOW_FIRECRAWL_PDF", previous.pdf);
-			restoreEnv("PI_WEB_OPEN_PROVIDER", previous.open);
+			restoreEnv("PI_WEB_OPEN_PROVIDER", previous.openProvider);
+		}
+	});
+
+	test("lets a per-call provider preference take precedence over env overrides", () => {
+		const previous = {
+			firecrawlKey: process.env.FIRECRAWL_API_KEY,
+			mistralKey: process.env.MISTRAL_API_KEY,
+			searchProvider: process.env.PI_WEB_SEARCH_PROVIDER,
+			newsProvider: process.env.PI_WEB_NEWS_PROVIDER,
+			openProvider: process.env.PI_WEB_OPEN_PROVIDER,
+		};
+		try {
+			process.env.FIRECRAWL_API_KEY = "test-firecrawl";
+			process.env.MISTRAL_API_KEY = "test-mistral";
+			process.env.PI_WEB_SEARCH_PROVIDER = "mistral";
+			process.env.PI_WEB_NEWS_PROVIDER = "mistral";
+			process.env.PI_WEB_OPEN_PROVIDER = "mistral";
+
+			expect(webProviderOrder("firecrawl")).toEqual(["firecrawl", "mistral", "exa"]);
+			expect(newsProviderOrder("firecrawl")).toEqual(["firecrawl", "mistral", "exa"]);
+			expect(openProviderOrder("https://example.com/docs", "firecrawl")).toEqual(["firecrawl", "mistral", "exa"]);
+			expect(webProviderOrder("unknown")).toEqual(["mistral", "exa", "firecrawl"]);
+		} finally {
+			restoreEnv("FIRECRAWL_API_KEY", previous.firecrawlKey);
+			restoreEnv("MISTRAL_API_KEY", previous.mistralKey);
+			restoreEnv("PI_WEB_SEARCH_PROVIDER", previous.searchProvider);
+			restoreEnv("PI_WEB_NEWS_PROVIDER", previous.newsProvider);
+			restoreEnv("PI_WEB_OPEN_PROVIDER", previous.openProvider);
 		}
 	});
 });

@@ -103,6 +103,8 @@ export interface WebSearchArgs {
 	startDate?: string;
 	endDate?: string;
 	limit?: number;
+	/** Optional provider to try first before continuing through the normal fallback route. */
+	provider?: string;
 }
 
 export interface NewsSearchArgs extends WebSearchArgs {
@@ -111,6 +113,8 @@ export interface NewsSearchArgs extends WebSearchArgs {
 
 export interface OpenUrlArgs {
 	url: string;
+	/** Optional provider to try first before continuing through the normal fallback route. */
+	provider?: string;
 }
 
 export interface ProviderOptions {

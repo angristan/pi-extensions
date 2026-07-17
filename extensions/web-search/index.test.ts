@@ -188,8 +188,10 @@ describe("web search renderer", () => {
 			const status = commands.find((entry) => entry.name === "web-status")?.command;
 			let message = "";
 			status.handler("", { ui: { notify(value: string) { message = value; } } });
-			expect(message).toContain("web: exa");
-			expect(message).toContain("news: exa → firecrawl");
+			expect(message).toContain("web: exa → firecrawl → mistral");
+			expect(message).toContain("news: exa → firecrawl → mistral");
+			expect(message).toContain("open: exa → firecrawl → mistral");
+			expect(message).not.toContain("pdf:");
 			expect(message).not.toContain("test-firecrawl-key");
 			expect(message).not.toContain("test-mistral-key");
 		} finally {

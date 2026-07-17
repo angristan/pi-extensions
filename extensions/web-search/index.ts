@@ -18,8 +18,9 @@ import {
 import { openUrl, searchNews, searchWeb, webStatus } from "./router";
 import type { OpenDisplayDetails, ProviderAttempt, SearchDisplayDetails, SearchDisplayItem, WebProvider } from "./types";
 
-const FOUNDRY_OPENAI_PROVIDER = "foundry-openai";
-const TOOL_NAMES = ["web_search", "news_search", "open_url"] as const;
+const providerPreferenceSchema = Type.Optional(Type.String({
+	description: "Optional provider to try first: 'exa', 'firecrawl', or 'mistral'. Leave unset unless a provider-specific retry is needed; unavailable providers are skipped and fallback continues.",
+}));
 
 const webSearchSchema = Type.Object({
 	query: Type.String({
@@ -29,6 +30,7 @@ const webSearchSchema = Type.Object({
 	startDate: Type.Optional(Type.String({ description: "Optional lower date bound in YYYY-MM-DD format." })),
 	endDate: Type.Optional(Type.String({ description: "Optional upper date bound in YYYY-MM-DD format." })),
 	limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20, default: 10, description: "Number of search results to return. Defaults to 10." })),
+	provider: providerPreferenceSchema,
 });
 
 const newsSearchSchema = Type.Object({
@@ -40,6 +42,7 @@ const newsSearchSchema = Type.Object({
 	endDate: Type.Optional(Type.String({ description: "Optional upper date bound in YYYY-MM-DD format. Defaults server-side if omitted." })),
 	lang: Type.Optional(Type.String({ description: "Optional language filter, for example 'en' or 'fr'." })),
 	limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20, default: 10, description: "Number of news results to return. Defaults to 10." })),
+	provider: providerPreferenceSchema,
 });
 
 const openUrlSchema = Type.Object({
@@ -47,6 +50,7 @@ const openUrlSchema = Type.Object({
 		minLength: 1,
 		description: "URL or news article ID returned by web_search or news_search.",
 	}),
+	provider: providerPreferenceSchema,
 });
 
 type WebSearchArgs = Static<typeof webSearchSchema>;
@@ -81,25 +85,6 @@ const INDENT = `${LEAD}    `;
 
 type OpenDetails = OpenDisplayDetails;
 
-function isFoundryOpenAIModel(model: { provider?: string } | undefined): boolean {
-	return model?.provider === FOUNDRY_OPENAI_PROVIDER;
-}
-
-function syncToolAvailability(pi: ExtensionAPI, model: { provider?: string } | undefined): void {
-	const active = new Set(pi.getActiveTools());
-	const before = active.size;
-
-	if (isFoundryOpenAIModel(model)) {
-		for (const name of TOOL_NAMES) active.delete(name);
-	} else {
-		for (const name of TOOL_NAMES) active.add(name);
-	}
-
-	if (active.size !== before || TOOL_NAMES.some((name) => pi.getActiveTools().includes(name) !== active.has(name))) {
-		pi.setActiveTools([...active]);
-	}
-}
-
 function compactQuery(query: unknown): string {
 	return typeof query === "string" && query.trim() ? truncateToWidth(sanitizeSearchText(query, 2_000), 96, "…") : "";
 }
@@ -108,11 +93,20 @@ function compactFilter(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim() ? sanitizeSearchText(value, 200) : undefined;
 }
 
+function providerPreference(value: unknown): string | undefined {
+	const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+	if (normalized === "exa") return "try Exa first";
+	if (normalized === "firecrawl") return "try Firecrawl first";
+	if (normalized === "mistral") return "try Mistral first";
+	return undefined;
+}
+
 function searchDetail(args: (WebSearchArgs | NewsSearchArgs) | undefined, details?: SearchDisplayDetails): string {
 	const query = compactQuery(args?.query ?? details?.query);
 	const dates = [compactFilter(args?.startDate ?? details?.startDate), compactFilter(args?.endDate ?? details?.endDate)].filter(Boolean).join(" → ");
 	const lang = compactFilter(args && "lang" in args ? args.lang : details?.lang);
-	return [query ? `“${query}”` : undefined, dates || undefined, lang ? `lang ${lang}` : undefined].filter(Boolean).join(" · ");
+	const provider = providerPreference(args?.provider);
+	return [query ? `“${query}”` : undefined, dates || undefined, lang ? `lang ${lang}` : undefined, provider].filter(Boolean).join(" · ");
 }
 
 function compactError(text: string, fallback: string): string {
@@ -311,7 +305,8 @@ function renderOpenTarget(value: string, theme: Theme): string {
 function renderOpenCall(args: OpenUrlArgs, _theme: Theme, context: ToolRenderContext) {
 	if (!context.isPartial) return new Container();
 	const component = reuseOrCreate(context);
-	const detail = truncateToWidth(sanitizeSearchText(args.url, 2_048), 110, "…");
+	const target = truncateToWidth(sanitizeSearchText(args.url, 2_048), 110, "…");
+	const detail = [target, providerPreference(args.provider)].filter(Boolean).join(" · ");
 	component.update(() => [headlineRow(true, false, "Opening", detail)]);
 	return component;
 }
@@ -369,6 +364,7 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 		promptGuidelines: [
 			"Use web_search to discover current or potentially changed web information; it returns structured results, not a final answer.",
 			"Prefer official or primary-source results from web_search. Inspect important pages with local content tools like `ax`; use open_url only when local retrieval is unavailable or fails.",
+			"Leave web_search provider unset unless the user asks for a provider-specific retry or a previous provider produced poor results.",
 			"Do not use web_search for local codebase search; use grep/read/ls/find for local files.",
 		],
 		parameters: webSearchSchema,
@@ -389,6 +385,7 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 		promptGuidelines: [
 			"Use news_search for recent events, journalism, or date-bounded news queries; it returns structured results, not a final answer.",
 			"When news_search returns a URL that matters, inspect it with local content tools like `ax`; use open_url only when local retrieval is unavailable or fails.",
+			"Leave news_search provider unset unless the user asks for a provider-specific retry or a previous provider produced poor results.",
 		],
 		parameters: newsSearchSchema,
 		renderShell: "self",
@@ -403,16 +400,17 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 		name: "open_url",
 		label: "Open URL",
 		description:
-			"Fallback for opening an HTTP(S) URL through Exa, Firecrawl, or Mistral after local content retrieval fails. Large PDFs never fall back to Firecrawl unless explicitly enabled. Mistral article IDs remain supported when configured.",
+			"Fallback for opening an HTTP(S) URL through Exa, Firecrawl, or Mistral after local content retrieval fails. Mistral article IDs remain supported when configured.",
 		promptSnippet: "Fallback opener for a URL when local content retrieval with tools like `ax` fails",
 		promptGuidelines: [
 			"Use open_url only as a fallback when local content retrieval with tools like `ax` is unavailable, blocked, or fails.",
+			"Leave open_url provider unset unless the user asks for a provider-specific retry or a previous provider produced poor content.",
 			"Cite URLs from open_url or search results when making claims based on web content.",
 		],
 		parameters: openUrlSchema,
 		renderShell: "self",
 		async execute(_toolCallId, params: OpenUrlArgs, signal) {
-			const result = await openUrl(params.url, { signal });
+			const result = await openUrl(params.url, { signal }, params.provider);
 			return {
 				content: [{ type: "text", text: formatOpenUrlResult(result) }],
 				details: result,
@@ -431,13 +429,9 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 				`web: ${status.routes.web.join(" → ") || "none"}`,
 				`news: ${status.routes.news.join(" → ") || "none"}`,
 				`open: ${status.routes.open.join(" → ") || "none"}`,
-				`pdf: ${status.routes.pdf.join(" → ") || "none"}`,
 			];
 			const circuits = status.circuits.length ? `\nrate limited: ${status.circuits.map((item) => item.key).join(", ")}` : "";
 			ctx.ui.notify(`${routes.join("\n")}\n${access}${circuits}`, "info");
 		},
 	});
-
-	pi.on("session_start", (_event, ctx) => syncToolAvailability(pi, ctx.model));
-	pi.on("model_select", (event) => syncToolAvailability(pi, event.model));
 }

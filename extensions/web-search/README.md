@@ -15,15 +15,14 @@ Requests use sequential fallbacks. Providers are never raced, avoiding duplicate
 requests and unnecessary Firecrawl credits.
 
 ```text
-web_search   Exa → Mistral (when configured) → Firecrawl (when configured)
-news_search  Exa → Firecrawl (when configured)
+web_search   Exa → Firecrawl (when configured) → Mistral (when configured)
+news_search  Exa → Firecrawl (when configured) → Mistral (when configured)
 open_url     Exa → Firecrawl (when configured) → Mistral (when configured)
-PDFs         Exa → Mistral (when configured; Firecrawl disabled by default)
 ```
 
-Mistral news search is disabled by default because its topical matching is not
-reliable enough for technical and company news. Mistral remains useful as an
-optional web fallback and for opening Mistral news article IDs.
+The same default provider order is used for web search, news search, and URL
+opening. Mistral article IDs are still opened with Mistral directly when
+configured.
 
 Fallbacks happen after timeouts, rate limits, server failures, blocked pages,
 empty content, or empty search results. A provider that returns HTTP 429 is
@@ -44,12 +43,11 @@ Optional routing overrides:
 - `PI_WEB_SEARCH_PROVIDER=exa|mistral|firecrawl`
 - `PI_WEB_NEWS_PROVIDER=exa|mistral|firecrawl`
 - `PI_WEB_OPEN_PROVIDER=exa|mistral|firecrawl`
-- `PI_WEB_SEARCH_ENABLE_MISTRAL_NEWS=1` — add Mistral as the final news fallback
-- `PI_WEB_ALLOW_FIRECRAWL_PDF=1` — permit Firecrawl PDF fallback
 
-Firecrawl charges per processed page. A long PDF can consume hundreds of
-credits, so Firecrawl PDF opening is opt-in even when Firecrawl is the configured
-primary opener.
+Each tool also accepts an optional `provider` argument (`exa`, `firecrawl`, or
+`mistral`) to try that provider first for a single call. Per-call preferences
+win over environment overrides, but unavailable providers are skipped and the
+normal fallback route continues.
 
 Use `/web-status` to inspect effective routes, keyed availability, and providers
 temporarily paused after rate limiting. Credential values are never shown.
