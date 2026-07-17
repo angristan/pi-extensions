@@ -4,18 +4,10 @@ import { Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component }
 type Status = "pending" | "in_progress" | "completed";
 interface PlanItem { step: string; status: Status }
 interface PlanState { explanation?: string; items: PlanItem[] }
-interface GoalOverlayState {
-	objective: string;
-	status: "active" | "paused" | "complete";
-	tokenBudget?: number;
-	usedTokens?: number;
-}
-
 const LEGACY_OVERLAY_HOST_KEY = "plan-overlay-host";
 const LEGACY_WIDGET_KEY = "plan";
 const OVERLAY_WIDTH = 58;
 const MAX_EXPLANATION_ROWS = 3;
-const MAX_GOAL_ROWS = 3;
 
 import { registerOverlayCard } from "../overlay-stack/index.js";
 
@@ -272,26 +264,12 @@ function itemRows(item: PlanItem, contentWidth: number, theme: any): string[] {
 
 function renderPlanBody(
 	state: PlanState,
-	goal: GoalOverlayState | undefined,
 	theme: any,
 	width: number,
 	maxRows: number,
 ): string[] {
 	const contentWidth = Math.max(1, width);
 	const body: string[] = [];
-	if (goal && goal.status !== "complete") {
-		const marker = goal.status === "active"
-			? theme.fg("success", theme.bold("● Goal "))
-			: theme.fg("warning", theme.bold("◐ Goal "));
-		const objective = theme.fg(goal.status === "active" ? "text" : "muted", goal.objective);
-		const wrapped = boundedWrap(objective, Math.max(1, contentWidth - 7), MAX_GOAL_ROWS, theme);
-		body.push(...wrapped.map((line, index) => `${index === 0 ? marker : "       "}${line}`));
-		if (goal.tokenBudget) {
-			const used = Math.max(0, goal.usedTokens ?? 0);
-			body.push(theme.fg("dim", `  budget ${Math.round((used / goal.tokenBudget) * 100)}% · ${used.toLocaleString()}/${goal.tokenBudget.toLocaleString()} tokens`));
-		}
-		if (state.items.length || state.explanation?.trim()) body.push("");
-	}
 	if (state.explanation?.trim()) {
 		body.push(...boundedWrap(
 			theme.fg("dim", theme.italic(state.explanation.trim())),
@@ -303,7 +281,7 @@ function renderPlanBody(
 	}
 
 	for (const item of state.items) body.push(...itemRows(item, contentWidth, theme));
-	if (!state.items.length && !(goal && goal.status !== "complete")) body.push(theme.fg("dim", "No active TODOs"));
+	if (!state.items.length) body.push(theme.fg("dim", "No active TODOs"));
 
 	const hiddenRows = Math.max(0, body.length - maxRows);
 	const visibleBody = hiddenRows > 0
@@ -315,7 +293,6 @@ function renderPlanBody(
 
 export default function (pi: ExtensionAPI) {
 	let state: PlanState = { items: [] };
-	let goalState: GoalOverlayState | undefined;
 	let activeCtx: any;
 	let planOverlayActive = false;
 
@@ -329,16 +306,13 @@ export default function (pi: ExtensionAPI) {
 		visible: () => {
 			const stats = planStats(state.items);
 			const activePlan = planOverlayActive && state.items.length > 0 && stats.completed < state.items.length;
-			return activePlan || Boolean(goalState && goalState.status !== "complete");
+			return activePlan;
 		},
 		title: (theme) => {
 			const stats = planStats(state.items);
-			const label = goalState && goalState.status !== "complete"
-				? ` Goal · Plan ${stats.completed}/${state.items.length} `
-				: ` Plan ${stats.completed}/${state.items.length} `;
-			return theme.bold(label);
+			return theme.bold(` Plan ${stats.completed}/${state.items.length} `);
 		},
-		renderBody: (width, maxHeight, theme) => renderPlanBody(state, goalState, theme, width, maxHeight),
+		renderBody: (width, maxHeight, theme) => renderPlanBody(state, theme, width, maxHeight),
 	});
 	const persist = () => pi.appendEntry("plan-progress", state);
 	const clearLegacyUi = (ctx: any) => {
@@ -412,15 +386,10 @@ export default function (pi: ExtensionAPI) {
 		updateUi(ctx);
 	});
 
-	pi.events.on("goal:changed", (goal: unknown) => {
-		goalState = goal && typeof goal === "object" ? goal as GoalOverlayState : undefined;
-		if (activeCtx) updateUi(activeCtx);
-	});
 	const restoreState = (ctx: any) => {
 		activeCtx = ctx;
 		clearLegacyUi(ctx);
 		state = { items: [] };
-		goalState = undefined;
 		planOverlayActive = false;
 		const entries = typeof ctx.sessionManager.getBranch === "function"
 			? ctx.sessionManager.getBranch()
@@ -438,7 +407,6 @@ export default function (pi: ExtensionAPI) {
 		clearLegacyUi(ctx);
 		ctx.ui.setStatus("plan", undefined);
 		activeCtx = undefined;
-		goalState = undefined;
 		planOverlayActive = false;
 		overlayCard.unregister();
 	});
