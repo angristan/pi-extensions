@@ -3,6 +3,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Text, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { fitToolLine, formatElapsed, withReasoning } from "../better-native-pi/core.js";
+import { BOLD, GREEN, MAGENTA, RED, RESET } from "../better-native-pi/render.js";
 import { registerOverlayCard } from "../overlay-stack/index.js";
 import { createContextFork, type ContextFork } from "./context.js";
 import {
@@ -158,7 +159,7 @@ function statusSymbol(status: AgentStatus): string {
 }
 
 function statusColor(status: AgentStatus): string {
-	if (status === "starting" || status === "running") return "warning";
+	if (status === "starting" || status === "running") return "accent";
 	if (status === "completed") return "success";
 	if (status === "failed") return "error";
 	return "muted";
@@ -332,10 +333,9 @@ function reuseAgentToolLines(context: ToolRenderContext | undefined): AgentToolL
 	return context?.lastComponent instanceof AgentToolLines ? context.lastComponent : new AgentToolLines();
 }
 
-function toolHeadline(partial: boolean, isError: boolean, verb: string, detail: string, theme: any): string {
-	const color = partial ? "accent" : isError ? "error" : "success";
-	const mark = theme.fg(color, "•");
-	return `${mark} ${theme.fg("toolTitle", theme.bold(verb))}${detail ? ` ${detail}` : ""}`;
+function toolHeadline(partial: boolean, isError: boolean, verb: string, detail: string): string {
+	const mark = partial ? `${MAGENTA}•${RESET}` : isError ? `${RED}•${RESET}` : `${GREEN}•${RESET}`;
+	return `${mark} ${BOLD}${verb}${RESET}${detail ? ` ${detail}` : ""}`;
 }
 
 function actionVerb(action: unknown, partial: boolean, details?: ToolDetails): string {
@@ -385,7 +385,7 @@ type DetailLabel = "prompt" | "result" | "usage" | "error";
 
 function detailPrefix(label: DetailLabel, theme: any, indent = TOOL_INDENT, failed = false): string {
 	const labelColor = label === "prompt"
-		? "accent"
+		? "muted"
 		: label === "result"
 			? (failed ? "error" : "success")
 			: label === "error"
@@ -450,7 +450,7 @@ function renderAgentCall(args: Record<string, unknown>, theme: any, context: Too
 	component.update((width) => {
 		const detail = actionDetail(args);
 		return [
-			toolHeadline(true, false, actionVerb(args.action, true), reasoningDetail(args, theme, true), theme),
+			toolHeadline(true, false, actionVerb(args.action, true), reasoningDetail(args, theme, true)),
 			...(detail ? [args.action === "spawn"
 				? detailLine("prompt", detail, width, theme, theme.fg("dim", TOOL_BRANCH))
 				: `${TOOL_BRANCH}${theme.fg("text", detail)}`] : []),
@@ -469,14 +469,14 @@ function renderAgentResult(result: any, options: ToolRenderOptions, theme: any, 
 	component.update((width) => {
 		if (context?.isError) {
 			return [
-				toolHeadline(false, true, "Agent action failed", reasoningDetail(args, theme, false), theme),
+				toolHeadline(false, true, "Agent action failed", reasoningDetail(args, theme, false)),
 				`${TOOL_BRANCH}${theme.fg("error", compact(fallback || "Unknown agent error", 240))}`,
 			];
 		}
 		const alreadyReported = new Set(details?.alreadyReportedAgentIds ?? []);
 		const visibleAgents = details?.agents?.filter((agent) => !alreadyReported.has(agent.id)) ?? [];
 		if (action === "wait" && details?.agents?.length && visibleAgents.length === 0) return [];
-		const lines = [toolHeadline(false, false, actionVerb(action, false, details), reasoningDetail(args, theme, false), theme)];
+		const lines = [toolHeadline(false, false, actionVerb(action, false, details), reasoningDetail(args, theme, false))];
 		if (visibleAgents.length === 0) {
 			lines.push(`${TOOL_BRANCH}${theme.fg("dim", action === "wait" ? "no running agents" : "no agents in this session")}`);
 			return lines;
@@ -505,7 +505,7 @@ class CompletionComponent implements Component {
 	private readonly component: AgentToolLines;
 	constructor(agent: AgentSnapshot, expanded: boolean, theme: any) {
 		this.component = new AgentToolLines((width) => [
-			toolHeadline(false, agent.status === "failed", agent.status === "failed" ? "Agent failed" : "Agent completed", "", theme),
+			toolHeadline(false, agent.status === "failed", agent.status === "failed" ? "Agent failed" : "Agent completed", ""),
 			...agentBodyLines(agent, width, theme, {
 				prompt: agent.task,
 				showResult: true,

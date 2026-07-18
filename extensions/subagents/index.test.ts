@@ -279,6 +279,7 @@ describe("subagents", () => {
 			"• Spawning agent Delegate repository inspection",
 			"  └ prompt  Inspect the repository",
 		]);
+		expect(call.render(100)[0]).toContain("\x1b[35m•\x1b[0m \x1b[1mSpawning agent\x1b[0m");
 		expect(rendered(harness.tool.renderCall(args, renderTheme, { isPartial: false, args }))).toEqual([]);
 
 		const result = await harness.tool.execute("spawn", args, undefined, undefined, harness.ctx);
@@ -290,6 +291,7 @@ describe("subagents", () => {
 		expect(settled).toBe(call);
 		const lines = rendered(settled);
 		expect(lines[0]).toBe("• Spawned agent Delegate repository inspection");
+		expect(settled.render(100)[0]).toContain("\x1b[32m•\x1b[0m \x1b[1mSpawned agent\x1b[0m");
 		expect(lines[1]).toContain(`└ ● ${result.details.agents[0].id} · forked context · running`);
 		expect(lines[2]).toBe("    prompt  Inspect the repository");
 		expect(lines.join("\n")).not.toMatch(/\b\d+ms\b/);
@@ -350,7 +352,7 @@ describe("subagents", () => {
 		expect(compactLines[4]).toContain("    usage   1 turn · ↑10 · ↓5 · R2 · W3 · $0.0100 · test-provider/test-model");
 		const styledLines = renderer(message, { expanded: false }, semanticTheme).render(100);
 		expect(styledLines[1]).toContain("\x1b[39mreview-renderer-");
-		expect(styledLines[2]).toContain("\x1b[35mprompt\x1b[0m  \x1b[2mReview renderer\x1b[0m");
+		expect(styledLines[2]).toContain("\x1b[90mprompt\x1b[0m  \x1b[2mReview renderer\x1b[0m");
 		expect(styledLines[3]).toContain("\x1b[32mresult\x1b[0m  \x1b[39mRenderer matches the shared design.\x1b[0m");
 		expect(styledLines[4]).toContain("\x1b[90musage \x1b[0m  \x1b[2m1 turn");
 		const waitArgs = { reasoning: "Collect reported result", action: "wait", agent_ids: [message.details.id], timeout_ms: 1_000 };
@@ -424,9 +426,9 @@ describe("subagents", () => {
 		const styled = harness.tool.renderResult(started, { isPartial: false, expanded: false }, semanticTheme, {
 			args: { action: "spawn", task: "Review the renderer", name: "renderer review" },
 		}).render(100);
-		expect(styled[1]).toContain("\x1b[33m●\x1b[0m \x1b[39mrenderer review\x1b[0m");
-		expect(styled[1]).toContain("\x1b[33mrunning\x1b[0m");
-		expect(styled[2]).toContain("\x1b[35mprompt\x1b[0m  \x1b[2mReview the renderer\x1b[0m");
+		expect(styled[1]).toContain("\x1b[35m●\x1b[0m \x1b[39mrenderer review\x1b[0m");
+		expect(styled[1]).toContain("\x1b[35mrunning\x1b[0m");
+		expect(styled[2]).toContain("\x1b[90mprompt\x1b[0m  \x1b[2mReview the renderer\x1b[0m");
 		const sendArgs = { reasoning: "Refine delegated review", action: "send", agent_id: agent.id, message: "Check tests too" };
 		const sent = await harness.tool.execute("send", sendArgs, undefined, undefined, harness.ctx);
 		expect(harness.clients[0].steering).toEqual(["Check tests too"]);
