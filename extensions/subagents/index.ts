@@ -158,7 +158,7 @@ function statusSymbol(status: AgentStatus): string {
 }
 
 function statusColor(status: AgentStatus): string {
-	if (status === "starting" || status === "running") return "accent";
+	if (status === "starting" || status === "running") return "warning";
 	if (status === "completed") return "success";
 	if (status === "failed") return "error";
 	return "muted";
@@ -375,8 +375,8 @@ function reasoningDetail(args: Record<string, unknown> | undefined, theme: any, 
 function agentSummary(agent: AgentSnapshot, theme: any): string {
 	const mark = theme.fg(statusColor(agent.status), statusSymbol(agent.status));
 	const identity = agent.name
-		? `${theme.fg("accent", theme.bold(agent.name))} ${theme.fg("dim", `· ${compactAgentId(agent.id, 20)}`)}`
-		: theme.fg("accent", theme.bold(agent.id));
+		? `${theme.fg("text", theme.bold(agent.name))} ${theme.fg("dim", `· ${compactAgentId(agent.id, 20)}`)}`
+		: theme.fg("text", theme.bold(agent.id));
 	const metadata = `${theme.fg("muted", `${agent.contextMode} context`)} · ${theme.fg(statusColor(agent.status), agent.status)}`;
 	return `${mark} ${identity} · ${metadata}`;
 }

@@ -168,7 +168,7 @@ const renderTheme = {
 
 const semanticTheme = {
 	fg(color: string, text: string) {
-		const codes: Record<string, number> = { accent: 35, success: 32, error: 31, muted: 90, dim: 2, text: 39, toolTitle: 36 };
+		const codes: Record<string, number> = { accent: 35, success: 32, error: 31, warning: 33, muted: 90, dim: 2, text: 39, toolTitle: 36 };
 		return `\x1b[${codes[color] ?? 39}m${text}\x1b[0m`;
 	},
 	bold: (text: string) => text,
@@ -349,7 +349,7 @@ describe("subagents", () => {
 		expect(compactLines[3]).toBe("    result  Renderer matches the shared design.");
 		expect(compactLines[4]).toContain("    usage   1 turn · ↑10 · ↓5 · R2 · W3 · $0.0100 · test-provider/test-model");
 		const styledLines = renderer(message, { expanded: false }, semanticTheme).render(100);
-		expect(styledLines[1]).toContain("\x1b[35mreview-renderer-");
+		expect(styledLines[1]).toContain("\x1b[39mreview-renderer-");
 		expect(styledLines[2]).toContain("\x1b[35mprompt\x1b[0m  \x1b[2mReview renderer\x1b[0m");
 		expect(styledLines[3]).toContain("\x1b[32mresult\x1b[0m  \x1b[39mRenderer matches the shared design.\x1b[0m");
 		expect(styledLines[4]).toContain("\x1b[90musage \x1b[0m  \x1b[2m1 turn");
@@ -424,7 +424,8 @@ describe("subagents", () => {
 		const styled = harness.tool.renderResult(started, { isPartial: false, expanded: false }, semanticTheme, {
 			args: { action: "spawn", task: "Review the renderer", name: "renderer review" },
 		}).render(100);
-		expect(styled[1]).toContain("\x1b[35mrenderer review\x1b[0m");
+		expect(styled[1]).toContain("\x1b[33m●\x1b[0m \x1b[39mrenderer review\x1b[0m");
+		expect(styled[1]).toContain("\x1b[33mrunning\x1b[0m");
 		expect(styled[2]).toContain("\x1b[35mprompt\x1b[0m  \x1b[2mReview the renderer\x1b[0m");
 		const sendArgs = { reasoning: "Refine delegated review", action: "send", agent_id: agent.id, message: "Check tests too" };
 		const sent = await harness.tool.execute("send", sendArgs, undefined, undefined, harness.ctx);

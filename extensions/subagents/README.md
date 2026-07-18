@@ -47,10 +47,11 @@ reported.
 
 ## UI
 
-Calls use semantic theme colors: the state symbol and status reflect lifecycle,
-the agent name and `prompt` label use the theme accent, IDs and context recede,
-prompt text and usage values stay dim, and the `result` label carries success or
-error color while result text remains readable. Identity and status come first,
+Calls use semantic theme colors: running state is warning-colored, completion is
+success-colored, and failure is error-colored. Agent names use normal bold text;
+the theme accent is reserved for tool titles, reasoning, and the `prompt` label.
+IDs and context recede, prompt text and usage values stay dim, and the `result`
+label carries success or error color while result text remains readable. Identity and status come first,
 followed by prompt, result preview, and usage. Waited and automatic completions share the exact same body.
 
 ```text
