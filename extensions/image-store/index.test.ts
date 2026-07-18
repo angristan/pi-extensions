@@ -112,12 +112,16 @@ describe("extension hooks", () => {
 
 		const stored = new ContentAddressedImageStore(directory);
 		const theme = { fg: (_color: string, text: string) => text };
-		const live = renderStoredImagePreviews(result.details, stored, theme, false);
-		expect(live).toBeDefined();
+		const pending = renderStoredImagePreviews(result.details, stored, theme, false);
+		expect(pending).toBeDefined();
 		const previousCapabilities = getCapabilities();
-		setCapabilities({ images: null, trueColor: true, hyperlinks: true });
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
 		try {
-			expect(live!.render(100).join("\n")).toContain("[Image");
+			// Working-message timer ticks must not replay image payloads while the
+			// agent is active. The normal agent-settled redraw reveals it once.
+			expect(pending!.render(100)).toEqual([]);
+			await handlers.get("agent_settled")?.({}, {});
+			expect(pending!.render(100).join("\n")).toContain("\x1b_G");
 		} finally {
 			setCapabilities(previousCapabilities);
 		}

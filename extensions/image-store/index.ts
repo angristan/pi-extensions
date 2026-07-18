@@ -488,6 +488,7 @@ function formatBytes(bytes: number): string {
 export default function imageStoreExtension(pi: ExtensionAPI) {
 	const agentDirectory = configDirectory();
 	const store = new ContentAddressedImageStore(agentDirectory);
+	const pendingLiveDigests = new Set<string>();
 
 	const appendPreview = (ref: StoredImageRef, label?: string) => {
 		markLive(ref.digest);
@@ -495,11 +496,22 @@ export default function imageStoreExtension(pi: ExtensionAPI) {
 	};
 
 	pi.on("session_start", () => {
+		pendingLiveDigests.clear();
 		clearLive();
 		store.clearCache();
 	});
 
+	pi.on("agent_settled", () => {
+		// The working row changes once per second while an agent runs. A Kitty
+		// image below that row expands Pi's changed range through the image and
+		// retransmits its full base64 payload on every tick. Reveal new tool images
+		// only after the run settles, when autonomous redraws have stopped.
+		for (const digest of pendingLiveDigests) markLive(digest);
+		pendingLiveDigests.clear();
+	});
+
 	pi.on("session_shutdown", () => {
+		pendingLiveDigests.clear();
 		clearLive();
 		store.clearCache();
 	});
@@ -529,7 +541,7 @@ export default function imageStoreExtension(pi: ExtensionAPI) {
 	pi.on("tool_result", async (event, ctx) => {
 		if (!event.content.some((block) => block.type === "image")) return;
 		const { content, refs } = await externalizeContent(event.content, store);
-		for (const ref of refs) markLive(ref.digest);
+		for (const ref of refs) pendingLiveDigests.add(ref.digest);
 		if (refs.length === 0) {
 			ctx.ui.notify("Could not externalize tool image", "warning");
 			return;

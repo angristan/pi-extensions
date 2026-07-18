@@ -15,7 +15,8 @@ still receives the original image.
 
 ## Terminal behavior
 
-- The three newest tool images render inline in their native `read` rows.
+- The three newest tool images render inline in their native `read` rows after
+  the agent settles, avoiding repeated image transfers during working-row redraws.
 - Older and resumed tool images stay unloaded until expanded with `Ctrl+O`.
 - Pasted images use compact transcript references and expand on demand.
 - Decoded images use a bounded in-memory cache; collapsed history is not loaded.
