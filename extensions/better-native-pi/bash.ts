@@ -214,6 +214,7 @@ class ManagedCommandComponent {
 	private fallback: any;
 	private expanded: boolean;
 	private lastRevision = "";
+	private observedAt: number;
 	// Width-keyed render cache, mirroring CommandComponent above. Without this,
 	// every render tick re-runs sanitizeTerminalOutput (regex), wrapTextWithAnsi
 	// (ICU grapheme segmentation), and visibleWidth across every line — for
@@ -233,11 +234,13 @@ class ManagedCommandComponent {
 	) {
 		this.fallback = result?.details ?? {};
 		this.expanded = expanded;
+		this.observedAt = Number.isFinite(this.fallback.observedAt) ? this.fallback.observedAt : Date.now();
 		this.syncTimer();
 	}
 
 	update(result: any, expanded: boolean): void {
 		this.fallback = result?.details ?? this.fallback;
+		if (Number.isFinite(result?.details?.observedAt)) this.observedAt = result.details.observedAt;
 		// Expansion changes which output bytes are fetched and how rows are
 		// bounded, so the cache must not survive a toggle.
 		if (this.expanded !== expanded) this.invalidate();
@@ -273,6 +276,7 @@ class ManagedCommandComponent {
 		const active = view.details.status === "running" || view.details.status === "stopping";
 		if (!active) this.dispose();
 		if (!changed) return;
+		this.observedAt = Number.isFinite(view.details.observedAt) ? view.details.observedAt : Date.now();
 		this.invalidate();
 		this.requestRender();
 	}
@@ -300,7 +304,10 @@ class ManagedCommandComponent {
 		// always correct. Active jobs stream new output on the 500ms timer, so
 		// they must recompute to show fresh rows.
 		if (!active && this.cachedLines && this.cachedWidth === max) return this.cachedLines;
-		const elapsedMs = Math.max(0, (details.endedAt ?? Date.now()) - (details.startedAt ?? Date.now()));
+		// Active cards update their observation time only when output or status
+		// changes. Unrelated model-stream renders must remain byte-identical or an
+		// off-screen card can force a full transcript redraw and move the viewport.
+		const elapsedMs = Math.max(0, (details.endedAt ?? this.observedAt) - (details.startedAt ?? this.observedAt));
 		const failed = status === "failed" || status === "killed" || status === "timed_out";
 		const summaryText = details.exitCode === undefined ? status : `Command exited with code ${details.exitCode}`;
 		const summaryResult = { content: [{ type: "text", text: summaryText }] };

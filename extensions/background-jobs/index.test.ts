@@ -486,7 +486,17 @@ describe("terminal tools", () => {
 			cwd: harness.ctx.cwd,
 			invalidate() { invalidations += 1; },
 		});
-		component.render(120);
+		const firstRender = component.render(120);
+
+		// Unrelated streaming renders must not advance elapsed time in this
+		// off-screen card when the managed command itself has not changed.
+		const originalNow = Date.now;
+		Date.now = () => originalNow() + 60_000;
+		try {
+			expect(component.render(120)).toEqual(firstRender);
+		} finally {
+			Date.now = originalNow;
+		}
 
 		// The first poll sees the same active status and output cursor.
 		await Bun.sleep(600);
