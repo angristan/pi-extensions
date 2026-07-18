@@ -2,7 +2,7 @@
 
 exports[`web search renderer collapsed results use shared engine attribution and semantic colors 1`] = `
 [
-  "<green>•</> <bold>Searched</> “Kimi pricing” · 2026-04-01 → 2026-04-30",
+  "<green>•</> <bold>Searched</> <dim>“</dim><accent>Kimi pricing</accent><dim>”</dim> · 2026-04-01 → 2026-04-30",
   "  └ <green>6 results</><dim> · </dim><muted>via Mistral/Brave</muted><dim> · </dim>1.2s",
   "    <syntaxNumber>1.</syntaxNumber> <link:https://www.example1.com/article><text>https://www.example1.com/article</text></link> <dim>·</dim> <muted>2026-04-21</muted>",
   "    <syntaxNumber>2.</syntaxNumber> <link:https://www.example2.com/article><text>https://www.example2.com/article</text></link> <dim>·</dim> <muted>2026-04-21</muted>",
@@ -15,7 +15,7 @@ exports[`web search renderer collapsed results use shared engine attribution and
 
 exports[`web search renderer expanded mixed-engine results retain per-result attribution 1`] = `
 [
-  "<green>•</> <bold>Searched</> “mixed sources”",
+  "<green>•</> <bold>Searched</> <dim>“</dim><accent>mixed sources</accent><dim>”</dim>",
   "  └ <green>2 results</><dim> · </dim><muted>via Mistral</muted><dim> · </dim><1s",
   "    <syntaxNumber>1.</syntaxNumber> <link:https://www.example1.com/article><text>https://www.example1.com/article</text></link> <dim>·</dim> <muted>via Brave</muted><dim> · </dim><muted>2026-04-21</muted>",
   "    <syntaxNumber>2.</syntaxNumber> <link:https://www.example2.com/article><text>https://www.example2.com/article</text></link> <dim>·</dim> <muted>via Bing</muted><dim> · </dim><muted>2026-04-21</muted>",
@@ -24,14 +24,14 @@ exports[`web search renderer expanded mixed-engine results retain per-result att
 
 exports[`web search renderer empty results remain distinct from failures 1`] = `
 [
-  "<green>•</> <bold>Searched</> “no matches”",
+  "<green>•</> <bold>Searched</> <dim>“</dim><accent>no matches</accent><dim>”</dim>",
   "  └ <green>No results</><dim> · </dim><muted>via Mistral</muted><dim> · </dim><1s",
 ]
 `;
 
 exports[`web search renderer search failures show sanitized reasons 1`] = `
 [
-  "<red>•</> <bold>Search failed</> “pricingquery”",
+  "<red>•</> <bold>Search failed</> <dim>“</dim><accent>pricingquery</accent><dim>”</dim>",
   "  └ <error>Request timed out after 10s</error>",
 ]
 `;

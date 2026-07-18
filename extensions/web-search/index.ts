@@ -101,12 +101,13 @@ function providerPreference(value: unknown): string | undefined {
 	return undefined;
 }
 
-function searchDetail(args: (WebSearchArgs | NewsSearchArgs) | undefined, details?: SearchDisplayDetails): string {
+function searchDetail(args: (WebSearchArgs | NewsSearchArgs) | undefined, theme: Theme, details?: SearchDisplayDetails): string {
 	const query = compactQuery(args?.query ?? details?.query);
 	const dates = [compactFilter(args?.startDate ?? details?.startDate), compactFilter(args?.endDate ?? details?.endDate)].filter(Boolean).join(" → ");
 	const lang = compactFilter(args && "lang" in args ? args.lang : details?.lang);
 	const provider = providerPreference(args?.provider);
-	return [query ? `“${query}”` : undefined, dates || undefined, lang ? `lang ${lang}` : undefined, provider].filter(Boolean).join(" · ");
+	const quotedQuery = query ? `${theme.fg("dim", "“")}${theme.fg("accent", query)}${theme.fg("dim", "”")}` : undefined;
+	return [quotedQuery, dates || undefined, lang ? `lang ${lang}` : undefined, provider].filter(Boolean).join(" · ");
 }
 
 function compactError(text: string, fallback: string): string {
@@ -239,12 +240,12 @@ function openSummary(details: OpenDetails | undefined): string {
 	return [detail, route ? `via ${route}` : undefined, credits, elapsed].filter(Boolean).join(" · ");
 }
 
-function renderSearchCall(args: WebSearchArgs | NewsSearchArgs, _theme: Theme, context: ToolRenderContext) {
+function renderSearchCall(args: WebSearchArgs | NewsSearchArgs, theme: Theme, context: ToolRenderContext) {
 	// The call slot owns the running row. Once settled, hand off to the result
 	// slot (return an empty container) so the verb isn't shown twice.
 	if (!context.isPartial) return new Container();
 	const component = reuseOrCreate(context);
-	const detail = searchDetail(args);
+	const detail = searchDetail(args, theme);
 	component.update(() => [headlineRow(true, false, "Searching", detail)]);
 	return component;
 }
@@ -266,7 +267,7 @@ function renderSearchResult(
 	const args = context.args as WebSearchArgs | NewsSearchArgs | undefined;
 
 	if (context.isError) {
-		const detail = searchDetail(args);
+		const detail = searchDetail(args, theme);
 		component.update(() => [
 			headlineRow(false, true, "Search failed", detail),
 			`${BRANCH}${theme.fg("error", compactError(storedText, "Unknown search error"))}`,
@@ -276,7 +277,7 @@ function renderSearchResult(
 
 	const details = result?.details ?? parseSearchResultText(storedText);
 	const results = details.results;
-	const detail = searchDetail(args, details);
+	const detail = searchDetail(args, theme, details);
 	const searchEngine = sharedSearchEngine(details);
 	const max = expanded ? 10 : 5;
 	component.update(() => {

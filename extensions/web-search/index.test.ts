@@ -129,6 +129,7 @@ describe("web search renderer", () => {
 			results: [result(1, "exa")],
 		});
 		const output = render(webSearch, toolResult, { query: "static sites" }).join("\n");
+		expect(output).toContain("<dim>“</dim><accent>static sites</accent><dim>”</dim>");
 		expect(output).toContain("<link:https://www.example1.com/article><text>https://www.example1.com/article</text></link>");
 		expect(output).toContain("<muted>2026-04-21</muted>");
 		expect(output).not.toContain("Result 1");
