@@ -19,6 +19,8 @@ describe("withReasoning", () => {
 		expect(Object.keys(schema.properties)).toEqual(["reasoning", "path"]);
 		expect(schema.required).toEqual(["reasoning", "path"]);
 		expect(schema.properties.reasoning.description).toBe(REASONING_DESCRIPTION);
+		expect(REASONING_DESCRIPTION).toContain("≤8-word");
+		expect(REASONING_DESCRIPTION).toContain("No period");
 		expect(REASONING_DESCRIPTION.length).toBeLessThanOrEqual(100);
 	});
 });

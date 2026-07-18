@@ -218,7 +218,7 @@ function summarize(
 }
 
 /** Kept compact because this text is repeated in every restyled tool schema. */
-export const REASONING_DESCRIPTION = "≤12-word present-tense intent: why this call is needed, not what it does. Emit first.";
+export const REASONING_DESCRIPTION = "≤8-word present-tense intent phrase: why needed, not what it does. No period. Emit first.";
 
 /** Clone a JSON-schema params object and inject a REQUIRED, first `reasoning` prop. */
 export function withReasoning(parameters: any): any {

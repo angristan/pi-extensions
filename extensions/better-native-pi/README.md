@@ -27,7 +27,8 @@ Re-registers pi's built-in tools under their native names (`read`, `write`,
   line per tool), draws a tight block inline
 - a **required `reasoning` parameter** injected into each tool's schema; the
   model states the intent of the call, which renders as the line-1 headline.
-  Its description stays compact because it is repeated across all seven schemas
+  The schema requests a present-tense phrase of at most eight words with no
+  period and stays compact because it is repeated across all seven schemas
 - `execute` delegates to the real built-in tool (reasoning stripped first); when
   `background-jobs` is loaded, `bash` instead uses its managed terminal service
   so quick commands, yielded processes, and `tty: true` prompts share one tool
