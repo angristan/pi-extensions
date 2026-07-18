@@ -269,7 +269,7 @@ describe("subagents", () => {
 		const call = harness.tool.renderCall(args, renderTheme, { isPartial: true, args });
 		expect(rendered(call)).toEqual([
 			"• Spawning agent Delegate repository inspection",
-			"  └ Inspect the repository",
+			"  └ prompt  Inspect the repository",
 		]);
 		expect(rendered(harness.tool.renderCall(args, renderTheme, { isPartial: false, args }))).toEqual([]);
 
@@ -283,7 +283,7 @@ describe("subagents", () => {
 		const lines = rendered(settled);
 		expect(lines[0]).toBe("• Spawned agent Delegate repository inspection");
 		expect(lines[1]).toContain(`└ ● ${result.details.agents[0].id} · forked context · running`);
-		expect(lines[2]).toBe("    Inspect the repository");
+		expect(lines[2]).toBe("    prompt  Inspect the repository");
 		expect(lines.join("\n")).not.toMatch(/\b\d+ms\b/);
 		expect(lines.every((line) => visibleWidth(line) <= 100)).toBe(true);
 	});
@@ -296,7 +296,8 @@ describe("subagents", () => {
 		const waited = await harness.tool.execute("wait", waitArgs, undefined, undefined, harness.ctx);
 		const collapsed = rendered(harness.tool.renderResult(waited, { isPartial: false, expanded: false }, renderTheme, { args: waitArgs }));
 		expect(collapsed[0]).toBe("• Waited for agents Collect delegated review");
-		expect(collapsed.join("\n")).not.toContain("API review complete");
+		expect(collapsed[2]).toBe("    prompt  Inspect API");
+		expect(collapsed[3]).toBe("    result  API review complete.");
 		const expanded = rendered(harness.tool.renderResult(waited, { isPartial: false, expanded: true }, renderTheme, { args: waitArgs }), 60);
 		expect(expanded.join("\n")).toContain("API review complete.");
 		expect(expanded.join("\n")).toContain("1 turn");
@@ -331,8 +332,8 @@ describe("subagents", () => {
 		const renderer = harness.messageRenderers.get("subagent-result")!;
 		const compactLines = rendered(renderer(message, { expanded: false }, renderTheme));
 		expect(compactLines[0]).toContain("• Agent completed");
-		expect(compactLines[2]).toContain("Review renderer");
-		expect(compactLines.join("\n")).not.toContain("shared design");
+		expect(compactLines[2]).toBe("    prompt  Review renderer");
+		expect(compactLines[3]).toBe("    result  Renderer matches the shared design.");
 		const expandedLines = rendered(renderer(message, { expanded: true }, renderTheme));
 		expect(expandedLines.join("\n")).toContain("Renderer matches the shared design.");
 	});
@@ -396,7 +397,7 @@ describe("subagents", () => {
 		}));
 		expect(lines[0]).toBe("• Spawned agent");
 		expect(lines[1]).toContain("└ ● renderer review · renderer-rev");
-		expect(lines[2]).toBe("    Review the renderer");
+		expect(lines[2]).toBe("    prompt  Review the renderer");
 		const dimTheme = {
 			fg: (color: string, text: string) => color === "dim" ? `\x1b[2m${text}\x1b[0m` : text,
 			bold: (text: string) => text,
@@ -404,7 +405,7 @@ describe("subagents", () => {
 		const styled = harness.tool.renderResult(started, { isPartial: false, expanded: false }, dimTheme, {
 			args: { action: "spawn", task: "Review the renderer", name: "renderer review" },
 		}).render(100);
-		expect(styled[2]).toContain("\x1b[2mReview the renderer\x1b[0m");
+		expect(styled[2]).toContain("prompt  \x1b[2mReview the renderer\x1b[0m");
 		await harness.tool.execute("send", { action: "send", agent_id: agent.id, message: "Check tests too" }, undefined, undefined, harness.ctx);
 		expect(harness.clients[0].steering).toEqual(["Check tests too"]);
 	});

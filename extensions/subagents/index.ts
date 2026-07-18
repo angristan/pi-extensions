@@ -28,6 +28,7 @@ const TOOL_OUTPUT_BYTES = 48 * 1024;
 const MAX_TASK_CHARS = 16_000;
 const MAX_MESSAGE_CHARS = 16_000;
 const MAX_AGENT_NAME_CHARS = 80;
+const RESULT_PREVIEW_CHARS = 180;
 const TOOL_BRANCH = "  └ ";
 const TOOL_INDENT = "    ";
 const OVERLAY_WIDTH = 58;
@@ -378,6 +379,21 @@ function agentSummary(agent: AgentSnapshot, theme: any): string {
 	return `${mark} ${identity} · ${metadata}`;
 }
 
+function detailLine(
+	label: "prompt" | "result",
+	content: string,
+	width: number,
+	theme: any,
+	indent = TOOL_INDENT,
+	failed = false,
+): string {
+	const labelColor = label === "prompt" ? "muted" : failed ? "error" : "success";
+	const contentColor = label === "prompt" ? "dim" : "text";
+	const prefix = `${indent}${theme.fg(labelColor, label.padEnd(6))}  `;
+	const contentWidth = Math.max(1, width - visibleWidth(prefix));
+	return `${prefix}${theme.fg(contentColor, truncateToWidth(content, contentWidth, "…"))}`;
+}
+
 function expandedAgentLines(agent: AgentSnapshot, width: number, theme: any, includeUsage = true): string[] {
 	const lines: string[] = [];
 	const usage = includeUsage ? usageText(agent) : "";
@@ -399,11 +415,13 @@ function resultText(result: any): string {
 function renderAgentCall(args: Record<string, unknown>, theme: any, context: ToolRenderContext) {
 	if (!context?.isPartial) return new Container();
 	const component = reuseAgentToolLines(context);
-	component.update(() => {
+	component.update((width) => {
 		const detail = actionDetail(args);
 		return [
 			toolHeadline(true, false, actionVerb(args.action, true), reasoningDetail(args, theme, true), theme),
-			...(detail ? [`${TOOL_BRANCH}${theme.fg(args.action === "spawn" ? "dim" : "text", detail)}`] : []),
+			...(detail ? [args.action === "spawn"
+				? detailLine("prompt", detail, width, theme, TOOL_BRANCH)
+				: `${TOOL_BRANCH}${theme.fg("text", detail)}`] : []),
 		];
 	});
 	return component;
@@ -429,9 +447,11 @@ function renderAgentResult(result: any, options: ToolRenderOptions, theme: any, 
 			return lines;
 		}
 		for (const agent of details.agents) {
-			const taskWidth = Math.max(1, width - visibleWidth(TOOL_INDENT));
 			lines.push(`${TOOL_BRANCH}${agentSummary(agent, theme)}`);
-			lines.push(`${TOOL_INDENT}${theme.fg("dim", truncateToWidth(compact(agent.task, 240), taskWidth, "…"))}`);
+			lines.push(detailLine("prompt", compact(agent.task, 240), width, theme));
+			if (!options?.expanded && agent.output) {
+				lines.push(detailLine("result", compact(agent.output, RESULT_PREVIEW_CHARS), width, theme, TOOL_INDENT, agent.status === "failed"));
+			}
 			if (options?.expanded) lines.push(...expandedAgentLines(agent, width, theme));
 		}
 		return lines;
@@ -446,12 +466,14 @@ class CompletionComponent implements Component {
 			const failed = agent.status === "failed";
 			const detail = theme.fg("accent", theme.bold(agent.name ?? agent.id));
 			const metadata = [`${agent.contextMode} context`, agent.status, usageText(agent)].filter(Boolean).join(" · ");
-			const task = truncateToWidth(compact(agent.task, 240), Math.max(1, width - visibleWidth(TOOL_BRANCH)), "…");
 			const lines = [
 				toolHeadline(false, failed, failed ? "Agent failed" : "Agent completed", detail, theme),
 				`${TOOL_BRANCH}${theme.fg("muted", metadata)}`,
-				`${TOOL_INDENT}${theme.fg("dim", task)}`,
+				detailLine("prompt", compact(agent.task, 240), width, theme),
 			];
+			if (!expanded && agent.output) {
+				lines.push(detailLine("result", compact(agent.output, RESULT_PREVIEW_CHARS), width, theme, TOOL_INDENT, failed));
+			}
 			if (agent.error) lines.push(`${TOOL_INDENT}${theme.fg("error", compact(agent.error, 240))}`);
 			if (expanded && agent.output) lines.push(...expandedAgentLines({ ...agent, error: undefined }, width, theme, false));
 			return lines;

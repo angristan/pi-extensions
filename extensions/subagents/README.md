@@ -46,13 +46,14 @@ for the children being awaited, so their results appear only once.
 ## UI
 
 Calls use semantic theme colors: an accent progress headline becomes a success
-or error headline when settled. Identity and status come first; the child prompt
-is the final, dimmed line.
+or error headline when settled. Identity and status come first, followed by an
+explicit dimmed prompt and, once available, a short emphasized result preview.
 
 ```text
-• Spawned agent Delegate API review
-  └ ● api review · api-review-a1b2c3 · forked context · running
-    Inspect the API changes
+• Waited for agents Collect delegated review
+  └ ✓ api review · api-review-a1b2c3 · forked context · completed
+    prompt  Inspect the API changes
+    result  The API is sound; one missing edge-case test was identified.
 ```
 
 In TUI mode, actively running children also appear in the shared top-right
@@ -85,8 +86,9 @@ The footer still reports active children:
 2 subagents running · /agents to view
 ```
 
-Collapsed rows show the child name or generated ID and identify whether it received `forked context` or a `fresh context`.
-Use `/agents` to list children and inspect their latest result. Child completion
+Collapsed rows show the child name or generated ID, context mode, status, prompt,
+and a one-line result preview when available. Prompt always precedes result. Use
+`/agents` to list children and inspect their latest result. Child completion
 messages use the same card design and show task, context mode, status, model,
 turns, tokens, and cost. Expand `wait` or `list` results and completion messages
 with `Ctrl+O` to see the child's rendered output.
