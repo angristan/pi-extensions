@@ -25,8 +25,8 @@ const CONTEXT_MESSAGE_TYPE = "image-store-context-v1";
 export const DETAILS_KEY = "__pi_image_store";
 const STORE_DIRECTORY = "image-store";
 const MAX_CACHE_BYTES = 32 * 1024 * 1024;
-const MAX_LIVE_PREVIEWS = 3;
-const LIVE_REGISTRY = Symbol.for("pi.image-store.live-registry");
+const LIVE_REGISTRY = Symbol.for("pi.image-store.live-registry.v2");
+export const IMAGE_PREVIEW_VISIBLE_EVENT = "image-store:preview-visible";
 const MARKER_SOURCE = String.raw`\[image [0-9a-f]{8}\]\(pi-image:\/\/sha256\/([0-9a-f]{64})\?mime=([^&)\s]+)&bytes=([0-9]+)\)`;
 const JSON_DIGEST_SOURCE = String.raw`"digest"\s*:\s*"([0-9a-f]{64})"`;
 const BLOB_FILENAME = /^([0-9a-f]{64})\.[a-z0-9]+$/;
@@ -55,31 +55,42 @@ interface StoredBlob {
 }
 
 interface LiveRegistry {
-	order: string[];
-	digests: Set<string>;
+	current: Set<string>;
+	previous: Set<string>;
+	runActive: boolean;
 }
 
 function liveRegistry(): LiveRegistry {
 	const globals = globalThis as typeof globalThis & { [LIVE_REGISTRY]?: LiveRegistry };
-	return globals[LIVE_REGISTRY] ??= { order: [], digests: new Set() };
+	return globals[LIVE_REGISTRY] ??= { current: new Set(), previous: new Set(), runActive: false };
+}
+
+function beginLiveRun(): void {
+	const registry = liveRegistry();
+	if (registry.runActive) return;
+	registry.previous = registry.current;
+	registry.current = new Set();
+	registry.runActive = true;
+}
+
+function endLiveRun(): void {
+	liveRegistry().runActive = false;
 }
 
 function markLive(digest: string): void {
-	const registry = liveRegistry();
-	const previous = registry.order.indexOf(digest);
-	if (previous >= 0) registry.order.splice(previous, 1);
-	registry.order.push(digest);
-	registry.digests.add(digest);
-	while (registry.order.length > MAX_LIVE_PREVIEWS) registry.digests.delete(registry.order.shift()!);
+	liveRegistry().current.add(digest);
 }
 
 function clearLive(): void {
-	liveRegistry().order.length = 0;
-	liveRegistry().digests.clear();
+	const registry = liveRegistry();
+	registry.current.clear();
+	registry.previous.clear();
+	registry.runActive = false;
 }
 
 export function isStoredImageLive(digest: string): boolean {
-	return liveRegistry().digests.has(digest);
+	const registry = liveRegistry();
+	return registry.current.has(digest) || registry.previous.has(digest);
 }
 
 function markerPattern(): RegExp {
@@ -488,7 +499,6 @@ function formatBytes(bytes: number): string {
 export default function imageStoreExtension(pi: ExtensionAPI) {
 	const agentDirectory = configDirectory();
 	const store = new ContentAddressedImageStore(agentDirectory);
-	const pendingLiveDigests = new Set<string>();
 
 	const appendPreview = (ref: StoredImageRef, label?: string) => {
 		markLive(ref.digest);
@@ -496,22 +506,14 @@ export default function imageStoreExtension(pi: ExtensionAPI) {
 	};
 
 	pi.on("session_start", () => {
-		pendingLiveDigests.clear();
 		clearLive();
 		store.clearCache();
 	});
 
-	pi.on("agent_settled", () => {
-		// The working row changes once per second while an agent runs. A Kitty
-		// image below that row expands Pi's changed range through the image and
-		// retransmits its full base64 payload on every tick. Reveal new tool images
-		// only after the run settles, when autonomous redraws have stopped.
-		for (const digest of pendingLiveDigests) markLive(digest);
-		pendingLiveDigests.clear();
-	});
+	pi.on("agent_start", () => beginLiveRun());
+	pi.on("agent_settled", () => endLiveRun());
 
 	pi.on("session_shutdown", () => {
-		pendingLiveDigests.clear();
 		clearLive();
 		store.clearCache();
 	});
@@ -541,7 +543,7 @@ export default function imageStoreExtension(pi: ExtensionAPI) {
 	pi.on("tool_result", async (event, ctx) => {
 		if (!event.content.some((block) => block.type === "image")) return;
 		const { content, refs } = await externalizeContent(event.content, store);
-		for (const ref of refs) pendingLiveDigests.add(ref.digest);
+		for (const ref of refs) markLive(ref.digest);
 		if (refs.length === 0) {
 			ctx.ui.notify("Could not externalize tool image", "warning");
 			return;
@@ -552,6 +554,7 @@ export default function imageStoreExtension(pi: ExtensionAPI) {
 				: block
 		);
 		const details = event.details && typeof event.details === "object" ? event.details : {};
+		pi.events.emit(IMAGE_PREVIEW_VISIBLE_EVENT, undefined);
 		return {
 			content: persistedContent,
 			details: { ...details, [DETAILS_KEY]: { version: 1, refs } satisfies StoredImageDetails },

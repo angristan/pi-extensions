@@ -40,8 +40,8 @@ Long commands wrap at top-level shell operators and quote-aware word boundaries;
 the box spans the full available transcript width.
 `Ctrl+O` (`app.tools.expand`) reveals full commands, raw output, or full written
 content without duplicating an already-shown diff. Read results backed by
-`image-store` render their live sidecar inline in the same tool row after the
-agent settles; resumed images stay unloaded until expanded.
+`image-store` render their live sidecar inline immediately for the current
+user-visible run and the previous one; resumed images stay unloaded until expanded.
 
 Exploration groups wait until a tool actually starts executing before rendering
 live rows. This avoids flashing streamed JSON fragments such as half-written

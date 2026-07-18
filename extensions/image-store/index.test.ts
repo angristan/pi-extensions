@@ -83,17 +83,21 @@ describe("content-addressed storage", () => {
 });
 
 describe("extension hooks", () => {
-	test("externalizes tool images, renders a lazy preview, and restores provider context", async () => {
+	test("externalizes tool images, renders an immediate preview, and restores provider context", async () => {
 		const directory = await temporaryDirectory();
 		process.env.PI_CODING_AGENT_DIR = directory;
 		const handlers = new Map<string, (...args: any[]) => any>();
+		const emitted: string[] = [];
 		const pi = {
 			on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
+			events: { emit(name: string) { emitted.push(name); } },
 			appendEntry() {},
 			registerEntryRenderer() {},
 			registerCommand() {},
 		};
 		imageStoreExtension(pi as any);
+		await handlers.get("session_start")?.({}, {});
+		await handlers.get("agent_start")?.({}, {});
 		const data = Buffer.from("tool image").toString("base64");
 		const result = await handlers.get("tool_result")?.({
 			content: [{ type: "image", data, mimeType: "image/png" }],
@@ -101,6 +105,7 @@ describe("extension hooks", () => {
 		}, { ui: { notify() {} } });
 
 		expect(JSON.stringify(result)).not.toContain(data);
+		expect(emitted).toEqual(["image-store:preview-visible"]);
 
 		const context = await handlers.get("context")?.({
 			messages: [{ role: "toolResult", content: result.content, details: result.details }],
@@ -112,16 +117,12 @@ describe("extension hooks", () => {
 
 		const stored = new ContentAddressedImageStore(directory);
 		const theme = { fg: (_color: string, text: string) => text };
-		const pending = renderStoredImagePreviews(result.details, stored, theme, false);
-		expect(pending).toBeDefined();
+		const live = renderStoredImagePreviews(result.details, stored, theme, false);
+		expect(live).toBeDefined();
 		const previousCapabilities = getCapabilities();
 		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
 		try {
-			// Working-message timer ticks must not replay image payloads while the
-			// agent is active. The normal agent-settled redraw reveals it once.
-			expect(pending!.render(100)).toEqual([]);
-			await handlers.get("agent_settled")?.({}, {});
-			expect(pending!.render(100).join("\n")).toContain("\x1b_G");
+			expect(live!.render(100).join("\n")).toContain("\x1b_G");
 		} finally {
 			setCapabilities(previousCapabilities);
 		}
@@ -133,6 +134,51 @@ describe("extension hooks", () => {
 		const expanded = renderStoredImagePreviews(result.details, stored, theme, true);
 		expect(collapsed!.render(100)).toEqual([]);
 		expect(expanded!.render(100).join("\n")).toContain("sidecar unavailable");
+	});
+
+	test("keeps immediate images from the current and previous visible runs", async () => {
+		const directory = await temporaryDirectory();
+		process.env.PI_CODING_AGENT_DIR = directory;
+		const handlers = new Map<string, (...args: any[]) => any>();
+		const pi = {
+			on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
+			events: { emit() {} },
+			appendEntry() {},
+			registerEntryRenderer() {},
+			registerCommand() {},
+		};
+		imageStoreExtension(pi as any);
+		await handlers.get("session_start")?.({}, {});
+		const store = new ContentAddressedImageStore(directory);
+		const theme = { fg: (_color: string, text: string) => text };
+		const render = (result: any) => renderStoredImagePreviews(result.details, store, theme, false)!.render(100);
+		const addImage = (label: string) => handlers.get("tool_result")?.({
+			content: [{ type: "image", data: Buffer.from(label).toString("base64"), mimeType: "image/png" }],
+			input: { path: `${label}.png` },
+		}, { ui: { notify() {} } });
+		const previousCapabilities = getCapabilities();
+		setCapabilities({ images: null, trueColor: true, hyperlinks: true });
+		try {
+			await handlers.get("agent_start")?.({}, {});
+			const first = await addImage("first");
+			await handlers.get("agent_start")?.({}, {}); // retry: same visible run
+			await handlers.get("agent_settled")?.({}, {});
+
+			await handlers.get("agent_start")?.({}, {});
+			const second = await addImage("second");
+			expect(render(first).join("\n")).toContain("[Image");
+			expect(render(second).join("\n")).toContain("[Image");
+			await handlers.get("agent_settled")?.({}, {});
+
+			await handlers.get("agent_start")?.({}, {});
+			const third = await addImage("third");
+			expect(render(first)).toEqual([]);
+			expect(render(second).join("\n")).toContain("[Image");
+			expect(render(third).join("\n")).toContain("[Image");
+		} finally {
+			setCapabilities(previousCapabilities);
+			await handlers.get("session_shutdown")?.({}, {});
+		}
 	});
 
 	test("externalizes pasted images without retaining base64", async () => {
