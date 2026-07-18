@@ -26,7 +26,6 @@ export const DETAILS_KEY = "__pi_image_store";
 const STORE_DIRECTORY = "image-store";
 const MAX_CACHE_BYTES = 32 * 1024 * 1024;
 const LIVE_REGISTRY = Symbol.for("pi.image-store.live-registry.v2");
-export const IMAGE_PREVIEW_VISIBLE_EVENT = "image-store:preview-visible";
 const MARKER_SOURCE = String.raw`\[image [0-9a-f]{8}\]\(pi-image:\/\/sha256\/([0-9a-f]{64})\?mime=([^&)\s]+)&bytes=([0-9]+)\)`;
 const JSON_DIGEST_SOURCE = String.raw`"digest"\s*:\s*"([0-9a-f]{64})"`;
 const BLOB_FILENAME = /^([0-9a-f]{64})\.[a-z0-9]+$/;
@@ -554,7 +553,6 @@ export default function imageStoreExtension(pi: ExtensionAPI) {
 				: block
 		);
 		const details = event.details && typeof event.details === "object" ? event.details : {};
-		pi.events.emit(IMAGE_PREVIEW_VISIBLE_EVENT, undefined);
 		return {
 			content: persistedContent,
 			details: { ...details, [DETAILS_KEY]: { version: 1, refs } satisfies StoredImageDetails },

@@ -18,8 +18,8 @@ still receives the original image.
 - Tool images render immediately in their native `read` rows for the current
   user-visible run and the previous one.
 - Older and resumed tool images stay unloaded until expanded with `Ctrl+O`.
-- The elapsed working timer freezes after a live tool image appears, avoiding
-  repeated image transfers while normal tool and model updates continue.
+- Stable Kitty image positions are cached, so unrelated redraws do not retransmit
+  image payloads and the elapsed working timer continues updating normally.
 - Pasted images use compact transcript references and expand on demand.
 - Decoded images use a bounded in-memory cache; collapsed history is not loaded.
 - Supported terminals are the same as pi's built-in image component: Kitty,
@@ -57,4 +57,4 @@ deleting anything.
 - **Runtime:** Pi extension and TUI APIs.
 - **npm packages:** None.
 - **Depends on extensions:** None.
-- **Used by extensions:** [`better-native-pi`](../better-native-pi/), [`working-timer`](../working-timer/).
+- **Used by extensions:** [`better-native-pi`](../better-native-pi/).

@@ -21,7 +21,7 @@ item with a glyph:
  ✓ No duplicate extension commands or shortcuts
 
  Runtime patches and caches
- ✓ TUI line-reset cache   4,221 entries; 3,221 hits / 38 misses
+ ✓ TUI line-reset cache   4,221 entries; 3,221 hits / 38 misses; Kitty 82 stable / 4 redrawn
  · better-native-pi   1,204 renders · 87.3% hit · 312 volatile
 
  Models and provider configuration

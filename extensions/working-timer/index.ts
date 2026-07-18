@@ -11,7 +11,6 @@ import {
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { IMAGE_PREVIEW_VISIBLE_EVENT } from "../image-store/index.js";
 
 const UPDATE_INTERVAL_MS = 1_000;
 
@@ -31,26 +30,15 @@ function formatElapsed(elapsedMs: number): string {
 export default function workingTimer(pi: ExtensionAPI) {
 	let startedAt: number | undefined;
 	let timer: ReturnType<typeof setInterval> | undefined;
-	let pausedForImage = false;
 
-	const clearTimer = () => {
-		if (!timer) return;
-		clearInterval(timer);
-		timer = undefined;
-	};
 	const stop = (ctx?: ExtensionContext) => {
-		clearTimer();
+		if (timer) {
+			clearInterval(timer);
+			timer = undefined;
+		}
 		startedAt = undefined;
-		pausedForImage = false;
 		if (ctx?.mode === "tui") ctx.ui.setWorkingMessage();
 	};
-	const stopImagePreviewListener = pi.events.on(IMAGE_PREVIEW_VISIBLE_EVENT, () => {
-		// Pi expands a changed range through Kitty images below it. Freeze the
-		// elapsed label after a live image appears so its base64 payload is not
-		// replayed every second; normal tool and model updates still render.
-		pausedForImage = true;
-		clearTimer();
-	});
 
 	pi.on("agent_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
@@ -58,7 +46,7 @@ export default function workingTimer(pi: ExtensionAPI) {
 		// Preserve the first start across retries, compaction, and automatic
 		// continuations so this measures the complete user-visible run.
 		startedAt ??= Date.now();
-		if (timer || pausedForImage) return;
+		if (timer) return;
 
 		const interruptKey = keyText("app.interrupt");
 		const interruptHint = interruptKey ? ` • ${interruptKey} to interrupt` : "";
@@ -74,8 +62,5 @@ export default function workingTimer(pi: ExtensionAPI) {
 	});
 
 	pi.on("agent_settled", (_event, ctx) => stop(ctx));
-	pi.on("session_shutdown", (_event, ctx) => {
-		stop(ctx);
-		stopImagePreviewListener();
-	});
+	pi.on("session_shutdown", (_event, ctx) => stop(ctx));
 }

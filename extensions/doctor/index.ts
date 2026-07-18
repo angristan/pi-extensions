@@ -475,7 +475,7 @@ function runtimePatchChecks(tui: TUI): RuntimePatchCheck[] {
 			active: Boolean(lineState),
 			reversible: Boolean(lineState?.original && (tui as any).applyLineResets !== lineState.original),
 			detail: lineState
-				? `${lineState.cache?.size ?? 0} entries; ${compactNumber(lineState.hits ?? 0)} hits / ${compactNumber(lineState.misses ?? 0)} misses; original retained`
+				? `${lineState.cache?.size ?? 0} entries; ${compactNumber(lineState.hits ?? 0)} hits / ${compactNumber(lineState.misses ?? 0)} misses; Kitty ${compactNumber(lineState.imagePositionHits ?? 0)} stable / ${compactNumber(lineState.imagePositionMisses ?? 0)} redrawn; original retained`
 				: "patch sentinel absent",
 		},
 	];

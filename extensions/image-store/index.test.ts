@@ -87,10 +87,8 @@ describe("extension hooks", () => {
 		const directory = await temporaryDirectory();
 		process.env.PI_CODING_AGENT_DIR = directory;
 		const handlers = new Map<string, (...args: any[]) => any>();
-		const emitted: string[] = [];
 		const pi = {
 			on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
-			events: { emit(name: string) { emitted.push(name); } },
 			appendEntry() {},
 			registerEntryRenderer() {},
 			registerCommand() {},
@@ -105,7 +103,6 @@ describe("extension hooks", () => {
 		}, { ui: { notify() {} } });
 
 		expect(JSON.stringify(result)).not.toContain(data);
-		expect(emitted).toEqual(["image-store:preview-visible"]);
 
 		const context = await handlers.get("context")?.({
 			messages: [{ role: "toolResult", content: result.content, details: result.details }],
@@ -142,7 +139,6 @@ describe("extension hooks", () => {
 		const handlers = new Map<string, (...args: any[]) => any>();
 		const pi = {
 			on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
-			events: { emit() {} },
 			appendEntry() {},
 			registerEntryRenderer() {},
 			registerCommand() {},
