@@ -13,7 +13,7 @@ import {
 	type Focusable,
 	type TUI,
 } from "@earendil-works/pi-tui";
-import { fitToolLine } from "../better-native-pi/core.js";
+import { fitToolLine, renderCommandOutput } from "../better-native-pi/core.js";
 import { BoundedOutput, CursorOutput, sanitizeTerminalOutput, type CursorRead } from "./output.js";
 import {
 	CoalescedRefresh,
@@ -355,7 +355,6 @@ function viewerRevision(snapshot: JobViewerSnapshot): string {
 }
 
 function boundedViewerOutput(text: string, width: number, maxRows: number): string[] {
-	if (!text.trim()) return ["(no output)"];
 	const rowLimit = Math.max(1, maxRows);
 	const inputLimit = Math.max(1_024, width * rowLimit * 4);
 	let bounded = text;
@@ -364,14 +363,11 @@ function boundedViewerOutput(text: string, width: number, maxRows: number): stri
 		bounded = sanitizeTerminalOutput(bounded.slice(-inputLimit));
 		omitted = true;
 	}
-	let rows = bounded.replace(/\s+$/, "").split("\n")
-		.flatMap((line) => wrapTextWithAnsi(line, Math.max(1, width)));
-	if (rows.length > rowLimit) {
-		rows = rowLimit === 1 ? rows.slice(-1) : rows.slice(-(rowLimit - 1));
-		omitted = true;
-	}
-	if (omitted && rowLimit > 1) rows = ["… earlier output omitted …", ...rows].slice(-rowLimit);
-	return rows.length > 0 ? rows : ["(no output)"];
+	return renderCommandOutput(bounded, width, {
+		maxRows: rowLimit,
+		forceOmission: omitted,
+		omissionText: () => "… earlier output omitted …",
+	});
 }
 
 export class JobOutputViewer implements Focusable {
@@ -524,16 +520,14 @@ class TerminalInteractionComponent {
 		const goal = reasoning ? ` ${this.theme.fg("dim", "to")} ${this.theme.fg("accent", reasoning)}` : "";
 		const elapsed = compactDuration(duration(details, this.observedAt));
 		const header = `${this.theme.fg(color, "•")} ${verb} ${terminal}${goal} ${this.theme.fg("dim", `· ${details.status} in ${elapsed}`)}`;
-		const output = details.output?.replace(/\s+$/, "") || "(no new output)";
-		const bodyWidth = Math.max(1, max - 4);
-		let rows = output.split("\n").flatMap((line) => wrapTextWithAnsi(line, bodyWidth));
-		if (!this.expanded && rows.length > 5) {
-			const omitted = rows.length - 4;
-			rows = [...rows.slice(0, 2), `… +${omitted} lines (Ctrl+O)`, ...rows.slice(-2)];
-		}
+		const output = details.output?.replace(/\s+$/, "") ?? "";
+		const rows = renderCommandOutput(output, max, {
+			maxRows: this.expanded ? undefined : 5,
+			emptyText: "(no new output)",
+		});
 		return [
 			fitToolLine(header, max),
-			...rows.map((row) => truncateToWidth(`${this.theme.fg("dim", "  │ ")}${row}`, max, "…")),
+			...rows,
 			fitToolLine(`  └ ${this.theme.fg(color, statusSymbol(details.status))} ${this.theme.fg("dim", `${details.id}${details.tty ? " · tty" : ""}`)}`, max),
 		];
 	}

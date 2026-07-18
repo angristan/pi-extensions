@@ -9,7 +9,7 @@
  */
 
 import { basename, dirname } from "node:path";
-import { Container, visibleWidth, truncateToWidth } from "@earendil-works/pi-tui";
+import { Container, visibleWidth, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { hyperlinkPath } from "../hyperlinks/index.js";
 import {
 	BOLD,
@@ -55,6 +55,38 @@ export function fitToolLine(line: string, width: number): string {
 	if (tailWidth >= max) return truncateToWidth(tail, max, "…");
 	const head = line.slice(0, separatorIndex).trimEnd();
 	return `${truncateToWidth(head, max - tailWidth - 1, "…")} ${tail}`;
+}
+
+const COMMAND_OUTPUT_PREFIX = "  │ ";
+
+interface CommandOutputOptions {
+	maxRows?: number;
+	emptyText?: string;
+	forceOmission?: boolean;
+	omissionText?: (omittedRows: number) => string;
+}
+
+/** Render shell output with the same dim gutter and tail-first collapse everywhere. */
+export function renderCommandOutput(text: string, width: number, options: CommandOutputOptions = {}): string[] {
+	const max = Math.max(1, width);
+	const bodyWidth = Math.max(1, max - COMMAND_OUTPUT_PREFIX.length);
+	const line = (content: string) => `${DIM}${COMMAND_OUTPUT_PREFIX}${content}${RESET}`;
+	const normalized = text.replace(/\t/g, "   ").replace(/\s+$/, "");
+	let rows = normalized.trim()
+		? normalized.split("\n").flatMap((row) => wrapTextWithAnsi(row, bodyWidth))
+		: [options.emptyText ?? "(no output)"];
+	const maxRows = options.maxRows === undefined ? undefined : Math.max(1, options.maxRows);
+	if (maxRows !== undefined && maxRows === 1) return [line(rows.at(-1) ?? "")];
+
+	const overflow = maxRows !== undefined && rows.length > maxRows;
+	if (overflow || options.forceOmission) {
+		const visibleRows = maxRows === undefined ? rows.length : Math.max(0, maxRows - 1);
+		const omittedRows = overflow ? rows.length - visibleRows : 0;
+		const marker = options.omissionText?.(omittedRows)
+			?? `… +${omittedRows} earlier lines (Ctrl+O for full output)`;
+		rows = [marker, ...rows.slice(-visibleRows)];
+	}
+	return rows.map(line);
 }
 
 function readRangeSuffix(args: Record<string, unknown>): string {

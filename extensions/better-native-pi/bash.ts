@@ -10,25 +10,16 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBashTool, createBashToolDefinition, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { Container, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { Container, truncateToWidth } from "@earendil-works/pi-tui";
 import { getBackgroundTerminalService, type BackgroundTerminalService } from "../background-jobs/service.js";
 import { renderCodeBox } from "../code-blocks/index.js";
-import { buildToolBlock, fitToolLine, formatShellCommandForDisplay, highlightedShellLine, withReasoning } from "./core.js";
+import { buildToolBlock, fitToolLine, formatShellCommandForDisplay, highlightedShellLine, renderCommandOutput, withReasoning } from "./core.js";
 
 const OUTPUT_ROWS = 5;
 const COMMAND_ROWS = 8;
 const EXPANDED_OUTPUT_BYTES = 256 * 1024;
 const COLLAPSED_OUTPUT_BYTES = 4 * 1024;
 const COMMAND_INDENT = "  ";
-const DIM = "\x1b[2m";
-const RESET = "\x1b[0m";
-// The command box and output bar share the same left edge, keeping input and
-// output visually connected while preserving the blockquote-style output.
-const BAR = "│";
-const OUTPUT_PREFIX = `${COMMAND_INDENT}${BAR} `;
-function barLine(text: string): string {
-	return `${DIM}${OUTPUT_PREFIX}${text}${RESET}`;
-}
 const RENDER_STATS_KEY = Symbol.for("pi.renderer-cache.stats");
 
 interface RendererCacheStats {
@@ -122,23 +113,6 @@ function renderedCommand(command: string, width: number, expanded: boolean, them
 		.map((line) => fitToolLine(line, max));
 }
 
-function wrappedOutput(text: string, width: number): string[] {
-	const bodyWidth = Math.max(1, width - OUTPUT_PREFIX.length);
-	const rows = text.replace(/\t/g, "   ").replace(/\s+$/, "").split("\n")
-		.flatMap((line) => wrapTextWithAnsi(line, bodyWidth));
-	return rows.map((row) => barLine(row));
-}
-
-function boundedRows(rows: string[]): string[] {
-	if (rows.length <= OUTPUT_ROWS) return rows;
-	const tailRows = OUTPUT_ROWS - 1;
-	const omitted = rows.length - tailRows;
-	return [
-		barLine(`… +${omitted} earlier lines (Ctrl+O for full output)`),
-		...rows.slice(-tailRows),
-	];
-}
-
 function terminalStatusColor(status: string): string {
 	if (status === "running") return "accent";
 	if (status === "stopping" || status === "timed_out") return "warning";
@@ -198,8 +172,9 @@ class CommandComponent {
 		}
 
 		const text = resultText(this.result);
-		let output = text.trim() ? wrappedOutput(text, max) : [barLine("(no output)")];
-		if (!this.options.expanded) output = boundedRows(output);
+		const output = renderCommandOutput(text, max, {
+			maxRows: this.options.expanded ? undefined : OUTPUT_ROWS,
+		});
 		const fittedBlock = block.map((line) => fitToolLine(line, max));
 		this.cachedLines = [...fittedBlock, ...command, ...output];
 		this.cachedWidth = max;
@@ -303,8 +278,10 @@ class ManagedCommandComponent {
 			? renderedCommand(this.args.command, max, this.expanded, this.theme)
 			: [];
 		const text = view.output.replace(/\s+$/, "");
-		let output = text ? wrappedOutput(text, max) : [barLine(active ? "(waiting for output)" : "(no output)")];
-		if (!this.expanded) output = boundedRows(output);
+		const output = renderCommandOutput(text, max, {
+			maxRows: this.expanded ? undefined : OUTPUT_ROWS,
+			emptyText: active ? "(waiting for output)" : "(no output)",
+		});
 		if (!details.backgrounded) {
 			const result = [...block, ...command, ...output];
 			this.cachedLines = result;

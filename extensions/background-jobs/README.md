@@ -42,9 +42,10 @@ without mixing metadata into command output:
 ```
 
 `terminal_write` and `job_output` use the same colored `•` headline, dim
-terminal name, accent reasoning, `│` output gutter, and `└` metadata hierarchy:
-`Interacted with <terminal> to <goal>`, `Waited for <terminal> to <goal>`, or
-`Read from <terminal> to <goal>`.
+terminal name, accent reasoning, dim `│` command-output gutter, tail-first
+collapse, and `└` metadata hierarchy: `Interacted with <terminal> to <goal>`,
+`Waited for <terminal> to <goal>`, or `Read from <terminal> to <goal>`. The
+`/jobs` and `/ps` live viewer uses that same normal command-output treatment.
 
 After terminals yield into the background, the footer shows:
 

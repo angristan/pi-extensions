@@ -206,6 +206,7 @@ describe("live output refresh", () => {
 
 		const initial = viewer.render(40);
 		expect(initial.join("\n")).toContain("latest-line");
+		expect(initial.join("\n")).toContain("\x1b[2m  │ latest-line\x1b[0m");
 		expect(initial.join("\n")).not.toContain("first-sentinel");
 		expect(initial.length).toBeLessThanOrEqual(Math.max(10, (process.stdout.rows || 24) - 5));
 
@@ -432,7 +433,8 @@ describe("terminal tools", () => {
 		).render(200).join("\n");
 		expect(rendered).toContain("<success>•</success> Interacted with <dim>");
 		expect(rendered).toContain("</dim> <dim>to</dim> <accent>answer the test prompt</accent>");
-		expect(rendered).toContain("│ </dim>got:hello");
+		expect(rendered).toContain("\x1b[2m  │ got:hello");
+		expect(rendered).not.toContain("<dim>  │ </dim>");
 		expect(rendered).not.toContain("↪");
 		expect(rendered).not.toContain("↳");
 	});
