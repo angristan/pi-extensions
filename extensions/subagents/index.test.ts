@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { createContextFork } from "./context";
 import registerSubagents, { boundedText } from "./index";
 import type { AgentClient, AgentClientOptions, RpcAgentEvent } from "./rpc";
@@ -46,6 +47,7 @@ class FakeClient implements AgentClient {
 interface Harness {
 	tool: any;
 	commands: Map<string, any>;
+	messageRenderers: Map<string, (...args: any[]) => any>;
 	handlers: Map<string, (...args: any[]) => any>;
 	clients: FakeClient[];
 	sentMessages: Array<{ message: any; options: any }>;
@@ -65,6 +67,7 @@ afterEach(async () => {
 function createHarness(options: { maxAgents?: number; withPendingToolCall?: boolean; firstTurn?: boolean; failClientCreation?: boolean } = {}): Harness {
 	const tools = new Map<string, any>();
 	const commands = new Map<string, any>();
+	const messageRenderers = new Map<string, (...args: any[]) => any>();
 	const handlers = new Map<string, (...args: any[]) => any>();
 	const clients: FakeClient[] = [];
 	const sentMessages: Array<{ message: any; options: any }> = [];
@@ -97,7 +100,7 @@ function createHarness(options: { maxAgents?: number; withPendingToolCall?: bool
 	const pi = {
 		registerTool(definition: any) { tools.set(definition.name, definition); },
 		registerCommand(name: string, definition: any) { commands.set(name, definition); },
-		registerMessageRenderer() {},
+		registerMessageRenderer(type: string, renderer: (...args: any[]) => any) { messageRenderers.set(type, renderer); },
 		on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
 		getActiveTools() { return ["read", "grep", "agents"]; },
 		getThinkingLevel() { return "medium"; },
@@ -112,7 +115,7 @@ function createHarness(options: { maxAgents?: number; withPendingToolCall?: bool
 			return client;
 		},
 	});
-	const harness = { tool: tools.get("agents"), commands, handlers, clients, sentMessages, statuses, ctx, parent };
+	const harness = { tool: tools.get("agents"), commands, messageRenderers, handlers, clients, sentMessages, statuses, ctx, parent };
 	harnesses.push(harness);
 	void handlers.get("session_start")?.({ reason: "startup" }, ctx);
 	return harness;
@@ -122,13 +125,23 @@ async function spawnAgent(harness: Harness, task = "Inspect the repository") {
 	return harness.tool.execute("call", { action: "spawn", task }, undefined, undefined, harness.ctx);
 }
 
+const renderTheme = {
+	fg: (_color: string, text: string) => text,
+	bold: (text: string) => text,
+};
+
+function rendered(component: any, width = 100): string[] {
+	return component.render(width).map((line: string) => line.replace(/\x1b\[[0-9;]*m/g, ""));
+}
+
 describe("subagents", () => {
 	test("exposes one generic lifecycle tool without role presets", () => {
 		const harness = createHarness();
 		expect(harness.tool).toBeDefined();
 		expect(Object.keys(harness.tool.parameters.properties)).toEqual([
-			"action", "task", "agent_id", "message", "agent_ids", "timeout_ms",
+			"reasoning", "action", "task", "agent_id", "message", "agent_ids", "timeout_ms",
 		]);
+		expect(harness.tool.parameters.required).toEqual(["reasoning", "action"]);
 		expect(harness.tool.parameters.properties).not.toHaveProperty("agent_type");
 		expect(harness.tool.parameters.properties).not.toHaveProperty("model");
 		expect(harness.tool.description).toContain("inherit the current model");
@@ -155,6 +168,77 @@ describe("subagents", () => {
 		expect(harness.sentMessages[0].message.content).not.toContain("\u001b");
 		expect(harness.sentMessages[0].options).toEqual({ deliverAs: "steer", triggerTurn: true });
 		expect(harness.statuses.get("subagents")).toBeUndefined();
+	});
+
+	test("uses native-style partial and settled cards without duplicate rows", async () => {
+		const harness = createHarness();
+		const args = { reasoning: "Delegate repository inspection", action: "spawn", task: "Inspect the repository" };
+		const call = harness.tool.renderCall(args, renderTheme, { isPartial: true, args });
+		expect(rendered(call)).toEqual([
+			"• Spawning agent Delegate repository inspection",
+			"  └ Inspect the repository",
+		]);
+		expect(rendered(harness.tool.renderCall(args, renderTheme, { isPartial: false, args }))).toEqual([]);
+
+		const result = await harness.tool.execute("spawn", args, undefined, undefined, harness.ctx);
+		const settled = harness.tool.renderResult(result, { isPartial: false, expanded: false }, renderTheme, {
+			lastComponent: call,
+			args,
+			isError: false,
+		});
+		expect(settled).toBe(call);
+		const lines = rendered(settled);
+		expect(lines[0]).toBe("• Spawned agent Delegate repository inspection");
+		expect(lines[1]).toContain(`└ ● ${result.details.agents[0].id} · running`);
+		expect(lines.every((line) => visibleWidth(line) <= 100)).toBe(true);
+	});
+
+	test("renders wait timeouts, expanded results, and errors semantically", async () => {
+		const harness = createHarness();
+		const first = await spawnAgent(harness, "Inspect API");
+		harness.clients[0].complete("API review complete.");
+		const waitArgs = { reasoning: "Collect delegated review", action: "wait", agent_ids: [first.details.agents[0].id], timeout_ms: 1_000 };
+		const waited = await harness.tool.execute("wait", waitArgs, undefined, undefined, harness.ctx);
+		const collapsed = rendered(harness.tool.renderResult(waited, { isPartial: false, expanded: false }, renderTheme, { args: waitArgs }));
+		expect(collapsed[0]).toBe("• Waited for agents Collect delegated review");
+		expect(collapsed.join("\n")).not.toContain("API review complete");
+		const expanded = rendered(harness.tool.renderResult(waited, { isPartial: false, expanded: true }, renderTheme, { args: waitArgs }), 60);
+		expect(expanded.join("\n")).toContain("API review complete.");
+		expect(expanded.join("\n")).toContain("1 turn");
+		expect(expanded.every((line) => visibleWidth(line) <= 60)).toBe(true);
+
+		const second = await spawnAgent(harness, "Slow task");
+		const timeoutArgs = { reasoning: "Check slow task", action: "wait", agent_ids: [second.details.agents[0].id], timeout_ms: 0 };
+		const timeout = await harness.tool.execute("timeout", timeoutArgs, undefined, undefined, harness.ctx);
+		const timedOut = rendered(harness.tool.renderResult(timeout, { isPartial: false, expanded: false }, renderTheme, { args: timeoutArgs }));
+		expect(timedOut[0]).toBe("• Wait timed out Check slow task");
+		expect(timedOut.join("\n")).toContain("running");
+
+		const failed = rendered(harness.tool.renderResult(
+			{ content: [{ type: "text", text: "Subagent not found" }] },
+			{ isPartial: false, expanded: false },
+			renderTheme,
+			{ args: { reasoning: "Redirect delegated work", action: "send" }, isError: true },
+		));
+		expect(failed).toEqual([
+			"• Agent action failed Redirect delegated work",
+			"  └ Subagent not found",
+		]);
+	});
+
+	test("renders automatic completion as the same expandable tool block", async () => {
+		const harness = createHarness();
+		await spawnAgent(harness, "Review renderer");
+		harness.clients[0].complete("Renderer matches the shared design.");
+		await Bun.sleep(0);
+		const message = harness.sentMessages[0].message;
+		const renderer = harness.messageRenderers.get("subagent-result")!;
+		const compactLines = rendered(renderer(message, { expanded: false }, renderTheme));
+		expect(compactLines[0]).toContain("• Agent completed");
+		expect(compactLines[1]).toContain("Review renderer");
+		expect(compactLines.join("\n")).not.toContain("shared design");
+		const expandedLines = rendered(renderer(message, { expanded: true }, renderTheme));
+		expect(expandedLines.join("\n")).toContain("Renderer matches the shared design.");
 	});
 
 	test("forks inherited context before the unresolved delegating tool call", async () => {

@@ -10,7 +10,9 @@ specialization.
 
 ## Agent tool
 
-The extension registers one `agents` tool with five actions:
+The extension registers one `agents` tool with five actions. Every call also
+uses the same concise `reasoning` intent field as the repository's native-style
+tools.
 
 | Action | Fields | Behavior |
 |---|---|---|
@@ -40,15 +42,25 @@ for the children being awaited, so their results appear only once.
 
 ## UI
 
+Calls use the same two-row, semantic design as the other tools: a magenta
+progress headline becomes a green or red settled headline, with targets and
+status on an indented branch.
+
+```text
+• Spawned agent Delegate API review
+  └ ● api-review-a1b2c3 · running · Inspect the API changes
+```
+
 The footer reports active children:
 
 ```text
-2 subagents running · /agents
+2 subagents running · /agents to view
 ```
 
 Use `/agents` to list children and inspect their latest result. Child completion
-messages show task, status, model, turns, tokens, and cost; expand tool output
-with `Ctrl+O` to see the rendered result.
+messages use the same card design and show task, status, model, turns, tokens,
+and cost. Expand `wait` or `list` results and completion messages with `Ctrl+O`
+to see the child's rendered output.
 
 ## Context and lifecycle
 

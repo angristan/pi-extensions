@@ -1,7 +1,9 @@
 import { randomBytes } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { Markdown, Text } from "@earendil-works/pi-tui";
+import { Container, Markdown, Text, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { fitToolLine, formatElapsed, withReasoning } from "../better-native-pi/core.js";
+import { BOLD, GREEN, MAGENTA, RED, RESET } from "../better-native-pi/render.js";
 import { createContextFork, type ContextFork } from "./context.js";
 import {
 	RpcProcessClient,
@@ -23,6 +25,8 @@ const DEFAULT_WAIT_MS = 30_000;
 const MAX_WAIT_MS = 5 * 60_000;
 const RESULT_BYTES = 24 * 1024;
 const TOOL_OUTPUT_BYTES = 48 * 1024;
+const TOOL_BRANCH = "  └ ";
+const TOOL_INDENT = "    ";
 
 const CHILD_PROMPT = `You are a delegated child agent working in an isolated conversation.
 Complete only the explicit task below. The inherited conversation is context, not a request to continue unrelated work.
@@ -101,11 +105,7 @@ export function boundedText(text: string, maxBytes: number): string {
 }
 
 function durationText(startedAt: number, endedAt = Date.now()): string {
-	const seconds = Math.max(0, Math.floor((endedAt - startedAt) / 1000));
-	if (seconds < 60) return `${seconds}s`;
-	const minutes = Math.floor(seconds / 60);
-	if (minutes < 60) return `${minutes}m${seconds % 60 ? `${seconds % 60}s` : ""}`;
-	return `${Math.floor(minutes / 60)}h${minutes % 60 ? `${minutes % 60}m` : ""}`;
+	return formatElapsed(Math.max(0, endedAt - startedAt));
 }
 
 function tokenText(count: number): string {
@@ -214,35 +214,167 @@ function messageContent(agent: AgentSnapshot): string {
 	].filter(Boolean).join("\n\n"), RESULT_BYTES);
 }
 
-class CompletionComponent {
-	constructor(private readonly agent: AgentSnapshot, private readonly expanded: boolean, private readonly theme: any) {}
-	render(width: number): string[] {
-		const color = statusColor(this.agent.status);
-		const header = `${this.theme.fg(color, statusSymbol(this.agent.status))} ${this.theme.bold(this.agent.id)} ${this.theme.fg("dim", `· ${this.agent.status} · ${durationText(this.agent.startedAt, this.agent.endedAt)}`)}`;
-		const task = this.theme.fg("accent", compact(this.agent.task, Math.max(40, width - 4)));
-		const usage = usageText(this.agent);
-		const compactLines = [header, `  ${task}`, ...(usage ? [`  ${this.theme.fg("dim", usage)}`] : [])];
-		if (!this.expanded || !this.agent.output) return compactLines;
-		return [...compactLines, "", ...new Markdown(this.agent.output, 2, 0, getMarkdownTheme()).render(width)];
-	}
-	invalidate(): void {}
+interface ToolRenderContext {
+	lastComponent?: unknown;
+	args?: Record<string, unknown>;
+	isPartial?: boolean;
+	isError?: boolean;
 }
 
-class ToolResultComponent {
-	constructor(
-		private readonly details: ToolDetails | undefined,
-		private readonly fallback: string,
-		private readonly isError: boolean,
-		private readonly theme: any,
-	) {}
-	render(): string[] {
-		if (!this.details?.agents?.length) return this.fallback ? [this.isError ? this.theme.fg("error", this.fallback) : this.fallback] : [];
-		return this.details.agents.map((agent) => {
-			const color = statusColor(agent.status);
-			return `${this.theme.fg(color, statusSymbol(agent.status))} ${this.theme.bold(agent.id)} ${this.theme.fg("dim", `· ${agent.status}`)} ${this.theme.fg("accent", compact(agent.task, 80))}`;
+interface ToolRenderOptions {
+	expanded?: boolean;
+	isPartial?: boolean;
+}
+
+class AgentToolLines implements Component {
+	private cachedWidth?: number;
+	private cachedLines?: string[];
+	constructor(private source: (width: number) => string[] = () => []) {}
+	update(source: (width: number) => string[]): void {
+		this.source = source;
+		this.invalidate();
+	}
+	render(width: number): string[] {
+		const max = Math.max(1, width);
+		if (this.cachedLines && this.cachedWidth === max) return this.cachedLines;
+		this.cachedLines = this.source(max).map((line) => visibleWidth(line) <= max ? line : fitToolLine(line, max));
+		this.cachedWidth = max;
+		return this.cachedLines;
+	}
+	invalidate(): void {
+		this.cachedWidth = undefined;
+		this.cachedLines = undefined;
+	}
+}
+
+function reuseAgentToolLines(context: ToolRenderContext | undefined): AgentToolLines {
+	return context?.lastComponent instanceof AgentToolLines ? context.lastComponent : new AgentToolLines();
+}
+
+function toolHeadline(partial: boolean, isError: boolean, verb: string, detail: string): string {
+	const mark = partial ? `${MAGENTA}•${RESET}` : isError ? `${RED}•${RESET}` : `${GREEN}•${RESET}`;
+	return `${mark} ${BOLD}${verb}${RESET}${detail ? ` ${detail}` : ""}`;
+}
+
+function actionVerb(action: unknown, partial: boolean, details?: ToolDetails): string {
+	if (action === "spawn") return partial ? "Spawning agent" : "Spawned agent";
+	if (action === "send") return partial ? "Sending to agent" : "Sent to agent";
+	if (action === "wait") {
+		if (!partial && details?.interrupted) return "Wait interrupted";
+		if (!partial && details?.timedOut) return "Wait timed out";
+		return partial ? "Waiting for agents" : "Waited for agents";
+	}
+	if (action === "list") return partial ? "Listing agents" : "Listed agents";
+	if (action === "close") return partial ? "Closing agent" : "Closed agent";
+	return partial ? "Using agents" : "Used agents";
+}
+
+function actionDetail(args: Record<string, unknown> | undefined): string {
+	if (!args) return "";
+	if (args.action === "spawn") return compact(String(args.task ?? ""), 180);
+	if (args.action === "send") return [compact(String(args.agent_id ?? ""), 48), compact(String(args.message ?? ""), 120)].filter(Boolean).join(" · ");
+	if (args.action === "wait") {
+		const ids = Array.isArray(args.agent_ids) && args.agent_ids.length ? args.agent_ids.join(", ") : "running agents";
+		const timeout = Number.isInteger(args.timeout_ms)
+			? (args.timeout_ms === 0 ? "no wait" : `${formatElapsed(args.timeout_ms as number)} timeout`)
+			: "";
+		return [compact(ids, 120), timeout].filter(Boolean).join(" · ");
+	}
+	if (args.action === "list") return "current session";
+	return compact(String(args.agent_id ?? ""), 80);
+}
+
+function reasoningDetail(args: Record<string, unknown> | undefined, theme: any, partial: boolean): string {
+	const reasoning = compact(String(args?.reasoning ?? ""), 100);
+	if (reasoning) return theme.fg("accent", reasoning);
+	return partial ? theme.fg("dim", "…") : "";
+}
+
+function agentSummary(agent: AgentSnapshot, width: number, theme: any): string {
+	const mark = theme.fg(statusColor(agent.status), statusSymbol(agent.status));
+	const identity = `${mark} ${theme.bold(agent.id)} ${theme.fg("dim", `· ${agent.status} · ${durationText(agent.startedAt, agent.endedAt)}`)}`;
+	const taskWidth = Math.max(0, width - visibleWidth(TOOL_BRANCH) - visibleWidth(identity) - visibleWidth(" · "));
+	const task = taskWidth > 3 ? truncateToWidth(compact(agent.task, 240), taskWidth, "…") : "";
+	return `${identity}${task ? ` ${theme.fg("dim", `· ${task}`)}` : ""}`;
+}
+
+function expandedAgentLines(agent: AgentSnapshot, width: number, theme: any, includeUsage = true): string[] {
+	const lines: string[] = [];
+	const usage = includeUsage ? usageText(agent) : "";
+	if (usage) lines.push(`${TOOL_INDENT}${theme.fg("dim", usage)}`);
+	if (agent.error) lines.push(`${TOOL_INDENT}${theme.fg("error", compact(agent.error, 240))}`);
+	if (agent.output) {
+		const contentWidth = Math.max(1, width - visibleWidth(TOOL_INDENT));
+		lines.push(...new Markdown(agent.output, 0, 0, getMarkdownTheme()).render(contentWidth).map((line) => `${TOOL_INDENT}${line}`));
+	} else if (agent.status === "starting" || agent.status === "running") {
+		lines.push(`${TOOL_INDENT}${theme.fg("dim", "still running")}`);
+	}
+	return lines;
+}
+
+function resultText(result: any): string {
+	return result?.content?.find?.((part: any) => part?.type === "text")?.text ?? "";
+}
+
+function renderAgentCall(args: Record<string, unknown>, theme: any, context: ToolRenderContext) {
+	if (!context?.isPartial) return new Container();
+	const component = reuseAgentToolLines(context);
+	component.update(() => {
+		const detail = actionDetail(args);
+		return [
+			toolHeadline(true, false, actionVerb(args.action, true), reasoningDetail(args, theme, true)),
+			...(detail ? [`${TOOL_BRANCH}${theme.fg("dim", detail)}`] : []),
+		];
+	});
+	return component;
+}
+
+function renderAgentResult(result: any, options: ToolRenderOptions, theme: any, context: ToolRenderContext) {
+	if (options?.isPartial) return new Container();
+	const component = reuseAgentToolLines(context);
+	const details = result?.details as ToolDetails | undefined;
+	const args = context?.args;
+	const action = details?.action ?? args?.action;
+	const fallback = resultText(result);
+	component.update((width) => {
+		if (context?.isError) {
+			return [
+				toolHeadline(false, true, "Agent action failed", reasoningDetail(args, theme, false)),
+				`${TOOL_BRANCH}${theme.fg("error", compact(fallback || "Unknown agent error", 240))}`,
+			];
+		}
+		const lines = [toolHeadline(false, false, actionVerb(action, false, details), reasoningDetail(args, theme, false))];
+		if (!details?.agents?.length) {
+			lines.push(`${TOOL_BRANCH}${theme.fg("dim", action === "wait" ? "no running agents" : "no agents in this session")}`);
+			return lines;
+		}
+		for (const agent of details.agents) {
+			lines.push(`${TOOL_BRANCH}${agentSummary(agent, width, theme)}`);
+			if (options?.expanded) lines.push(...expandedAgentLines(agent, width, theme));
+		}
+		return lines;
+	});
+	return component;
+}
+
+class CompletionComponent implements Component {
+	private readonly component: AgentToolLines;
+	constructor(agent: AgentSnapshot, expanded: boolean, theme: any) {
+		this.component = new AgentToolLines((width) => {
+			const failed = agent.status === "failed";
+			const detail = theme.fg("accent", theme.bold(agent.id));
+			const metadata = [compact(agent.task, 180), durationText(agent.startedAt, agent.endedAt), usageText(agent)].filter(Boolean).join(" · ");
+			const lines = [
+				toolHeadline(false, failed, failed ? "Agent failed" : "Agent completed", detail),
+				`${TOOL_BRANCH}${theme.fg("dim", metadata)}`,
+			];
+			if (agent.error) lines.push(`${TOOL_INDENT}${theme.fg("error", compact(agent.error, 240))}`);
+			if (expanded && agent.output) lines.push(...expandedAgentLines({ ...agent, error: undefined }, width, theme, false));
+			return lines;
 		});
 	}
-	invalidate(): void {}
+	render(width: number): string[] { return this.component.render(width); }
+	invalidate(): void { this.component.invalidate(); }
 }
 
 export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOptions = {}) {
@@ -258,7 +390,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	const updateStatus = () => {
 		if (!activeCtx) return;
 		const count = [...agents.values()].filter(isActive).length;
-		activeCtx.ui.setStatus(STATUS_KEY, count > 0 ? `${count} subagent${count === 1 ? "" : "s"} running · /agents` : undefined);
+		activeCtx.ui.setStatus(STATUS_KEY, count > 0 ? `${count} subagent${count === 1 ? "" : "s"} running · /agents to view` : undefined);
 	};
 	const resolveAgent = (idOrPrefix: string): ManagedAgent | undefined => {
 		const query = idOrPrefix.trim();
@@ -462,7 +594,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			"Use agents action=wait only when blocked on child results; completed children report back automatically.",
 			"Give concurrently writing child agents disjoint file scopes to avoid conflicting edits.",
 		],
-		parameters: {
+		parameters: withReasoning({
 			type: "object",
 			properties: {
 				action: { type: "string", enum: ["spawn", "send", "wait", "list", "close"], description: "Lifecycle action" },
@@ -473,7 +605,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				timeout_ms: { type: "integer", minimum: 0, maximum: MAX_WAIT_MS, description: `Wait timeout in milliseconds (default ${DEFAULT_WAIT_MS})` },
 			},
 			required: ["action"],
-		} as any,
+		} as any),
 		async execute(_toolCallId: string, params: any, signal: AbortSignal | undefined, _onUpdate: any, ctx: any) {
 			if (params.action === "spawn") {
 				const agent = await startAgent(String(params.task ?? ""), ctx);
@@ -548,16 +680,8 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			}
 			throw new Error(`Unknown agents action: ${params.action}`);
 		},
-		renderCall(args: any, theme: any) {
-			const subject = args.action === "spawn" ? compact(args.task ?? "", 100)
-				: args.action === "wait" ? (args.agent_ids?.join(", ") || "running")
-				: args.agent_id ?? "";
-			return new Text(`${theme.fg("toolTitle", theme.bold("agents "))}${theme.fg("accent", args.action ?? "...")}${subject ? ` ${theme.fg("dim", subject)}` : ""}`, 0, 0);
-		},
-		renderResult(result: any, _options: any, theme: any, context: any) {
-			const fallback = result?.content?.find?.((part: any) => part?.type === "text")?.text ?? "";
-			return new ToolResultComponent(result.details as ToolDetails | undefined, fallback, Boolean(context?.isError), theme);
-		},
+		renderCall: renderAgentCall,
+		renderResult: renderAgentResult,
 		renderShell: "self",
 	});
 
