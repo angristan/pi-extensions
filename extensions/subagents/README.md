@@ -49,7 +49,7 @@ status on an indented branch.
 
 ```text
 • Spawned agent Delegate API review
-  └ ● api-review-a1b2c3 · running · Inspect the API changes
+  └ ● api-review-a1b2c3 · forked context · running · Inspect the API changes
 ```
 
 In TUI mode, actively running children also appear in the shared top-right
@@ -81,10 +81,11 @@ The footer still reports active children:
 2 subagents running · /agents to view
 ```
 
+Collapsed rows identify whether the child received `forked context` or a `fresh context`.
 Use `/agents` to list children and inspect their latest result. Child completion
-messages use the same card design and show task, status, model, turns, tokens,
-and cost. Expand `wait` or `list` results and completion messages with `Ctrl+O`
-to see the child's rendered output.
+messages use the same card design and show task, context mode, status, model,
+turns, tokens, and cost. Expand `wait` or `list` results and completion messages
+with `Ctrl+O` to see the child's rendered output.
 
 ## Context and lifecycle
 

@@ -53,6 +53,7 @@ interface AgentUsage {
 export interface AgentSnapshot {
 	id: string;
 	task: string;
+	contextMode: "forked" | "fresh";
 	status: AgentStatus;
 	cwd: string;
 	model?: string;
@@ -230,6 +231,7 @@ function snapshot(agent: ManagedAgent): AgentSnapshot {
 	return {
 		id: agent.id,
 		task: agent.task,
+		contextMode: agent.contextMode,
 		status: agent.status,
 		cwd: agent.cwd,
 		model: agent.model,
@@ -244,7 +246,7 @@ function snapshot(agent: ManagedAgent): AgentSnapshot {
 
 function formatAgent(agent: AgentSnapshot, includeOutput: boolean): string {
 	const elapsed = durationText(agent.startedAt, agent.endedAt);
-	const lines = [`${statusSymbol(agent.status)} ${agent.id} · ${agent.status} · ${elapsed}`, `task: ${sanitizeTerminal(agent.task)}`];
+	const lines = [`${statusSymbol(agent.status)} ${agent.id} · ${agent.contextMode} context · ${agent.status} · ${elapsed}`, `task: ${sanitizeTerminal(agent.task)}`];
 	if (agent.error) lines.push(`error: ${agent.error}`);
 	const usage = usageText(agent);
 	if (usage) lines.push(`usage: ${usage}`);
@@ -364,7 +366,7 @@ function reasoningDetail(args: Record<string, unknown> | undefined, theme: any, 
 
 function agentSummary(agent: AgentSnapshot, width: number, theme: any): string {
 	const mark = theme.fg(statusColor(agent.status), statusSymbol(agent.status));
-	const identity = `${mark} ${theme.bold(agent.id)} ${theme.fg("dim", `· ${agent.status} · ${durationText(agent.startedAt, agent.endedAt)}`)}`;
+	const identity = `${mark} ${theme.bold(agent.id)} ${theme.fg("dim", `· ${agent.contextMode} context · ${agent.status} · ${durationText(agent.startedAt, agent.endedAt)}`)}`;
 	const taskWidth = Math.max(0, width - visibleWidth(TOOL_BRANCH) - visibleWidth(identity) - visibleWidth(" · "));
 	const task = taskWidth > 3 ? truncateToWidth(compact(agent.task, 240), taskWidth, "…") : "";
 	return `${identity}${task ? ` ${theme.fg("dim", `· ${task}`)}` : ""}`;
@@ -435,7 +437,7 @@ class CompletionComponent implements Component {
 		this.component = new AgentToolLines((width) => {
 			const failed = agent.status === "failed";
 			const detail = theme.fg("accent", theme.bold(agent.id));
-			const metadata = [compact(agent.task, 180), durationText(agent.startedAt, agent.endedAt), usageText(agent)].filter(Boolean).join(" · ");
+			const metadata = [compact(agent.task, 180), `${agent.contextMode} context`, durationText(agent.startedAt, agent.endedAt), usageText(agent)].filter(Boolean).join(" · ");
 			const lines = [
 				toolHeadline(false, failed, failed ? "Agent failed" : "Agent completed", detail),
 				`${TOOL_BRANCH}${theme.fg("dim", metadata)}`,
@@ -631,6 +633,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			agent = {
 				id,
 				task: normalizedTask,
+				contextMode: inheritContext ? "forked" : "fresh",
 				status: "starting",
 				cwd: ctx.cwd,
 				model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
@@ -875,7 +878,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				ctx.ui.notify("No subagents in this session.", "info");
 				return;
 			}
-			const labels = ordered.map((agent) => `${statusSymbol(agent.status)} ${agent.id} · ${agent.status} · ${compact(agent.task, 72)}`);
+			const labels = ordered.map((agent) => `${statusSymbol(agent.status)} ${agent.id} · ${agent.contextMode} context · ${agent.status} · ${compact(agent.task, 72)}`);
 			const selected = await ctx.ui.select(`Subagents (${ordered.filter(isActive).length} running)`, labels);
 			if (!selected) return;
 			const agent = ordered[labels.indexOf(selected)];

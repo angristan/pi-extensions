@@ -281,7 +281,7 @@ describe("subagents", () => {
 		expect(settled).toBe(call);
 		const lines = rendered(settled);
 		expect(lines[0]).toBe("• Spawned agent Delegate repository inspection");
-		expect(lines[1]).toContain(`└ ● ${result.details.agents[0].id} · running`);
+		expect(lines[1]).toContain(`└ ● ${result.details.agents[0].id} · forked context · running`);
 		expect(lines.every((line) => visibleWidth(line) <= 100)).toBe(true);
 	});
 
@@ -361,11 +361,16 @@ describe("subagents", () => {
 
 	test("starts with fresh conversation context when requested", async () => {
 		const harness = createHarness({ withPendingToolCall: true });
-		await harness.tool.execute("call", {
+		const started = await harness.tool.execute("call", {
 			action: "spawn",
 			task: "Inspect without history",
 			fork_context: false,
 		}, undefined, undefined, harness.ctx);
+		expect(started.details.agents[0].contextMode).toBe("fresh");
+		const lines = rendered(harness.tool.renderResult(started, { isPartial: false, expanded: false }, renderTheme, {
+			args: { action: "spawn", task: "Inspect without history", fork_context: false },
+		}));
+		expect(lines[1]).toContain("fresh context");
 		const args = harness.clients[0].options.args;
 		const sessionPath = args[args.indexOf("--session") + 1];
 		const messages = SessionManager.open(sessionPath).buildSessionContext().messages;
