@@ -4,6 +4,7 @@ import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Text, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { fitToolLine, formatElapsed, withReasoning } from "../better-native-pi/core.js";
 import { BOLD, GREEN, MAGENTA, RED, RESET } from "../better-native-pi/render.js";
+import { registerOverlayCard } from "../overlay-stack/index.js";
 import { createContextFork, type ContextFork } from "./context.js";
 import {
 	RpcProcessClient,
@@ -27,6 +28,8 @@ const RESULT_BYTES = 24 * 1024;
 const TOOL_OUTPUT_BYTES = 48 * 1024;
 const TOOL_BRANCH = "  └ ";
 const TOOL_INDENT = "    ";
+const OVERLAY_WIDTH = 58;
+const OVERLAY_MAX_ROWS = 6;
 
 const CHILD_PROMPT = `You are a delegated child agent working in an isolated conversation.
 Complete only the explicit task below. The inherited conversation is context, not a request to continue unrelated work.
@@ -78,6 +81,7 @@ interface ToolDetails {
 
 export interface SubagentsOptions {
 	createClient?: AgentClientFactory;
+	registerOverlayCard?: typeof registerOverlayCard;
 	maxAgents?: number;
 }
 
@@ -137,6 +141,45 @@ function statusColor(status: AgentStatus): string {
 	if (status === "completed") return "success";
 	if (status === "failed") return "error";
 	return "muted";
+}
+
+function compactAgentId(id: string, width: number): string {
+	if (visibleWidth(id) <= width) return id;
+	if (width < 9) return truncateToWidth(id, width, "…");
+	const suffix = id.slice(-7);
+	return `${truncateToWidth(id, Math.max(1, width - visibleWidth(suffix) - 1), "")}…${suffix}`;
+}
+
+function overlayAgentDetail(agent: AgentSnapshot): string {
+	if (agent.status === "completed") return "completed";
+	if (agent.status === "failed") return compact(agent.error || "failed", 160);
+	return compact(agent.activity.at(-1) || agent.task || agent.status, 160);
+}
+
+function renderOverlayAgent(agent: AgentSnapshot, width: number, theme: any): string {
+	const mark = theme.fg(statusColor(agent.status), statusSymbol(agent.status));
+	const idWidth = Math.max(8, Math.min(22, Math.floor(width * 0.42)));
+	const identity = `${mark} ${theme.bold(compactAgentId(agent.id, idWidth))}`;
+	const elapsed = theme.fg("dim", durationText(agent.startedAt, agent.endedAt));
+	const detailWidth = Math.max(0, width - visibleWidth(identity) - visibleWidth(elapsed) - 2);
+	const detailText = detailWidth > 3 ? truncateToWidth(overlayAgentDetail(agent), detailWidth, "…") : "";
+	const detail = agent.status === "completed"
+		? theme.fg("success", detailText)
+		: agent.status === "failed"
+			? theme.fg("error", detailText)
+			: theme.fg("dim", detailText);
+	return truncateToWidth([identity, elapsed, detail].filter(Boolean).join(" "), width, "…");
+}
+
+export function renderAgentsOverlayBody(agents: AgentSnapshot[], width: number, maxHeight: number, theme: any): string[] {
+	const rowBudget = Math.max(0, Math.min(OVERLAY_MAX_ROWS, maxHeight));
+	if (rowBudget === 0 || agents.length === 0) return [];
+	const reserveOverflow = agents.length > rowBudget && rowBudget > 1;
+	const shown = agents.slice(0, reserveOverflow ? rowBudget - 1 : rowBudget);
+	const lines = shown.map((agent) => renderOverlayAgent(agent, width, theme));
+	const hidden = agents.length - shown.length;
+	if (reserveOverflow && hidden > 0) lines.push(theme.fg("dim", `… ${hidden} more · /agents`));
+	return lines.map((line) => truncateToWidth(line, width, "…"));
 }
 
 function isActive(agent: Pick<ManagedAgent, "status">): boolean {
@@ -381,13 +424,38 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	if (isSubagentChild()) return;
 	const agents = new Map<string, ManagedAgent>();
 	const createClient = options.createClient ?? ((clientOptions: AgentClientOptions) => new RpcProcessClient(clientOptions));
+	const registerCard = options.registerOverlayCard ?? registerOverlayCard;
 	const maxAgents = options.maxAgents ?? DEFAULT_MAX_AGENTS;
 	let activeCtx: any;
 	let generation = 0;
 
 	const openAgents = () => [...agents.values()].filter((agent) => agent.client && agent.status !== "closed");
 	const orderedAgents = () => [...agents.values()].sort((a, b) => Number(isActive(b)) - Number(isActive(a)) || b.startedAt - a.startedAt);
+	const displayedAgents = () => orderedAgents().filter((agent) => agent.client && agent.status !== "closed");
+	const overlayCard = registerCard({
+		id: "subagents",
+		order: 15,
+		width: OVERLAY_WIDTH,
+		minBodyHeight: 1,
+		minTerminalWidth: 90,
+		minTerminalHeight: 10,
+		visible: () => displayedAgents().length > 0,
+		title: (theme) => {
+			const displayed = displayedAgents();
+			const running = displayed.filter(isActive).length;
+			const completed = displayed.filter((agent) => agent.status === "completed").length;
+			const failed = displayed.filter((agent) => agent.status === "failed").length;
+			const parts = [
+				running ? theme.fg("accent", `● ${running} running`) : "",
+				completed ? theme.fg("success", `✓ ${completed} done`) : "",
+				failed ? theme.fg("error", `× ${failed} failed`) : "",
+			].filter(Boolean);
+			return `${theme.bold(" Agents ")}${parts.join(theme.fg("dim", " · "))} `;
+		},
+		renderBody: (width, maxHeight, theme) => renderAgentsOverlayBody(displayedAgents().map(snapshot), width, maxHeight, theme),
+	});
 	const updateStatus = () => {
+		overlayCard.invalidate();
 		if (!activeCtx) return;
 		const count = [...agents.values()].filter(isActive).length;
 		activeCtx.ui.setStatus(STATUS_KEY, count > 0 ? `${count} subagent${count === 1 ? "" : "s"} running · /agents to view` : undefined);
@@ -438,6 +506,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			const description = `${event.toolName ?? "tool"}${event.args?.command ? `: ${compact(event.args.command, 100)}` : ""}`;
 			agent.activity.push(description);
 			if (agent.activity.length > 12) agent.activity.shift();
+			overlayCard.invalidate();
 			return;
 		}
 		if ((event.type === "message_update" || event.type === "message_end") && event.message?.role === "assistant") {
@@ -460,7 +529,11 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			}
 			return;
 		}
-		if (event.type === "extension_error") agent.activity.push(`extension error: ${event.error ?? "unknown"}`);
+		if (event.type === "extension_error") {
+			agent.activity.push(`extension error: ${event.error ?? "unknown"}`);
+			if (agent.activity.length > 12) agent.activity.shift();
+			overlayCard.invalidate();
+		}
 		if (event.type === "agent_settled") finishRun(agent, agent.error ? "failed" : "completed", agent.error);
 	};
 	const closeAgent = async (agent: ManagedAgent, suppressNotification = true) => {
@@ -627,14 +700,19 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 					agent.endedAt = undefined;
 					agent.output = "";
 					agent.error = undefined;
+					agent.activity = [`follow-up: ${compact(message, 100)}`];
 					agent.suppressNotifications = false;
 					newCompletion(agent);
+					updateStatus();
 					await agent.client!.prompt(message);
 				};
 				try {
 					if (isActive(agent)) {
-						try { await agent.client.steer(message); }
-						catch (error) {
+						try {
+							await agent.client.steer(message);
+							agent.activity.push(`steered: ${compact(message, 100)}`);
+							if (agent.activity.length > 12) agent.activity.shift();
+						} catch (error) {
 							// The child may settle between our status check and the RPC
 							// command. In that case continue it as a fresh prompt.
 							if (!isActive(agent) && agent.client) await beginFollowUp();
@@ -713,6 +791,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		await Promise.all(current.map((agent) => closeAgent(agent, true)));
 		activeCtx?.ui.setStatus(STATUS_KEY, undefined);
 		agents.clear();
+		overlayCard.unregister();
 		activeCtx = undefined;
 	});
 }

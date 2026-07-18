@@ -51,7 +51,23 @@ status on an indented branch.
   └ ● api-review-a1b2c3 · running · Inspect the API changes
 ```
 
-The footer reports active children:
+In TUI mode, open children also appear in the shared top-right overlay stack:
+
+```text
+ Agents ● 2 running · ✓ 1 done
+ ● api-review-a1b2c3  18s  read
+ ● test-audit-d4e5f6   9s  bash: bun test
+ ✓ docs-check-123abc  31s  completed
+```
+
+Active children appear first with their latest tool activity. Completed and
+failed children remain visible while their persistent conversation is open,
+then disappear on `close`; the card hides automatically when none remain. It
+shows at most six rows, reports additional children with an `/agents` hint, and
+hides on terminals narrower than 90 columns or shorter than 10 rows. Use
+`/overlay` or `Ctrl+Shift+O` to toggle the shared overlay stack.
+
+The footer still reports active children:
 
 ```text
 2 subagents running · /agents to view

@@ -8,6 +8,12 @@ import { createContextFork } from "./context";
 import registerSubagents, { boundedText } from "./index";
 import type { AgentClient, AgentClientOptions, RpcAgentEvent } from "./rpc";
 
+interface OverlayRegistration {
+	definition: any;
+	invalidations: number;
+	unregistered: boolean;
+}
+
 function assistant(text: string, stopReason = "stop"): any {
 	return {
 		role: "assistant",
@@ -52,6 +58,7 @@ interface Harness {
 	clients: FakeClient[];
 	sentMessages: Array<{ message: any; options: any }>;
 	statuses: Map<string, string | undefined>;
+	overlay: OverlayRegistration;
 	ctx: any;
 	parent: SessionManager;
 }
@@ -106,8 +113,16 @@ function createHarness(options: { maxAgents?: number; withPendingToolCall?: bool
 		getThinkingLevel() { return "medium"; },
 		sendMessage(message: any, messageOptions: any) { sentMessages.push({ message, options: messageOptions }); },
 	};
+	let overlay: OverlayRegistration | undefined;
 	registerSubagents(pi as any, {
 		maxAgents: options.maxAgents,
+		registerOverlayCard(definition) {
+			overlay = { definition, invalidations: 0, unregistered: false };
+			return {
+				invalidate() { overlay!.invalidations += 1; },
+				unregister() { overlay!.unregistered = true; },
+			};
+		},
 		createClient(clientOptions) {
 			if (options.failClientCreation) throw new Error("client factory failed");
 			const client = new FakeClient(clientOptions);
@@ -115,7 +130,8 @@ function createHarness(options: { maxAgents?: number; withPendingToolCall?: bool
 			return client;
 		},
 	});
-	const harness = { tool: tools.get("agents"), commands, messageRenderers, handlers, clients, sentMessages, statuses, ctx, parent };
+	if (!overlay) throw new Error("Subagents overlay was not registered");
+	const harness = { tool: tools.get("agents"), commands, messageRenderers, handlers, clients, sentMessages, statuses, overlay, ctx, parent };
 	harnesses.push(harness);
 	void handlers.get("session_start")?.({ reason: "startup" }, ctx);
 	return harness;
@@ -168,6 +184,50 @@ describe("subagents", () => {
 		expect(harness.sentMessages[0].message.content).not.toContain("\u001b");
 		expect(harness.sentMessages[0].options).toEqual({ deliverAs: "steer", triggerTurn: true });
 		expect(harness.statuses.get("subagents")).toBeUndefined();
+	});
+
+	test("shows open agents in the shared overlay and hides after close", async () => {
+		const harness = createHarness();
+		const card = harness.overlay.definition;
+		expect({ id: card.id, order: card.order, width: card.width }).toEqual({ id: "subagents", order: 15, width: 58 });
+		expect(card.visible()).toBe(false);
+
+		const started = await spawnAgent(harness, "Inspect a very long repository task whose description must fit the overlay");
+		const id = started.details.agents[0].id;
+		expect(card.visible()).toBe(true);
+		expect(card.title(renderTheme)).toContain("Agents ● 1 running");
+		let body = card.renderBody(54, 6, renderTheme);
+		expect(body[0]).toContain(id.slice(-7));
+		expect(body[0]).toContain("Inspect");
+		expect(body.every((line: string) => visibleWidth(line) <= 54)).toBe(true);
+
+		const invalidations = harness.overlay.invalidations;
+		harness.clients[0].emit({ type: "tool_execution_start", toolName: "read", args: { path: "index.ts" } });
+		expect(harness.overlay.invalidations).toBeGreaterThan(invalidations);
+		body = card.renderBody(54, 6, renderTheme);
+		expect(body[0]).toContain("read");
+
+		harness.clients[0].complete("Inspection complete");
+		expect(card.visible()).toBe(true);
+		expect(card.title(renderTheme)).toContain("✓ 1 done");
+		expect(card.renderBody(54, 6, renderTheme)[0]).toContain("completed");
+
+		await harness.tool.execute("close", { action: "close", agent_id: id }, undefined, undefined, harness.ctx);
+		expect(card.visible()).toBe(false);
+		await harness.handlers.get("session_shutdown")?.({ reason: "quit" }, harness.ctx);
+		expect(harness.overlay.unregistered).toBe(true);
+		harnesses.splice(harnesses.indexOf(harness), 1);
+	});
+
+	test("bounds overlay rows and reports hidden open agents", async () => {
+		const harness = createHarness();
+		await spawnAgent(harness, "First overlay task");
+		await spawnAgent(harness, "Second overlay task");
+		await spawnAgent(harness, "Third overlay task");
+		const lines = harness.overlay.definition.renderBody(38, 2, renderTheme);
+		expect(lines).toHaveLength(2);
+		expect(lines[1]).toContain("… 2 more · /agents");
+		expect(lines.every((line: string) => visibleWidth(line) <= 38)).toBe(true);
 	});
 
 	test("uses native-style partial and settled cards without duplicate rows", async () => {
@@ -316,9 +376,11 @@ describe("subagents", () => {
 		const id = started.details.agents[0].id;
 		await harness.tool.execute("send-running", { action: "send", agent_id: id, message: "Focus on tests" }, undefined, undefined, harness.ctx);
 		expect(harness.clients[0].steering).toEqual(["Focus on tests"]);
+		expect(harness.overlay.definition.renderBody(54, 6, renderTheme)[0]).toContain("steered: Focus on tests");
 		harness.clients[0].complete("Initial result");
 		await harness.tool.execute("send-idle", { action: "send", agent_id: id, message: "Now inspect docs" }, undefined, undefined, harness.ctx);
 		expect(harness.clients[0].prompts.at(-1)).toBe("Now inspect docs");
+		expect(harness.overlay.definition.renderBody(54, 6, renderTheme)[0]).toContain("follow-up: Now inspect");
 	});
 
 	test("enforces the open-agent limit until a child is closed", async () => {
