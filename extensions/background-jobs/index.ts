@@ -135,6 +135,8 @@ export interface JobSnapshot {
 
 interface JobToolDetails extends JobSnapshot {
 	managedTerminal: true;
+	/** Wall-clock time when this immutable tool-result snapshot was observed. */
+	observedAt?: number;
 	output?: string;
 	cursor?: number;
 	outputOmittedBytes?: number;
@@ -187,8 +189,8 @@ function compactDuration(milliseconds: number): string {
 	return `${hours}h${minutes % 60 ? `${minutes % 60}m` : ""}`;
 }
 
-function duration(job: Pick<JobSnapshot, "startedAt" | "endedAt">): number {
-	return Math.max(0, (job.endedAt ?? Date.now()) - job.startedAt);
+function duration(job: Pick<JobSnapshot, "startedAt" | "endedAt">, now = Date.now()): number {
+	return Math.max(0, (job.endedAt ?? now) - job.startedAt);
 }
 
 function compactCommand(command: unknown, limit = 100): string {
@@ -375,13 +377,20 @@ class JobOutputViewer {
 }
 
 class TerminalInteractionComponent {
+	private readonly observedAt: number;
+
 	constructor(
 		private readonly details: JobToolDetails | undefined,
 		private readonly args: any,
 		private readonly expanded: boolean,
 		private readonly theme: any,
 		private readonly action: "read" | "write",
-	) {}
+	) {
+		// Tool results are historical snapshots. Never let an active status make
+		// an old transcript row depend on Date.now(): unrelated streaming renders
+		// would mutate the off-screen row and force Pi to redraw all scrollback.
+		this.observedAt = details?.observedAt ?? Date.now();
+	}
 
 	render(width: number): string[] {
 		const max = Math.max(1, width);
@@ -394,7 +403,7 @@ class TerminalInteractionComponent {
 		const reasoning = typeof this.args?.reasoning === "string" ? compactCommand(this.args.reasoning, 96) : "";
 		const terminal = this.theme.fg("dim", compactCommand(name, 64));
 		const goal = reasoning ? ` ${this.theme.fg("dim", "to")} ${this.theme.fg("accent", reasoning)}` : "";
-		const elapsed = compactDuration(duration(details));
+		const elapsed = compactDuration(duration(details, this.observedAt));
 		const header = `${this.theme.fg(color, "•")} ${verb} ${terminal}${goal} ${this.theme.fg("dim", `· ${details.status} in ${elapsed}`)}`;
 		const output = details.output?.replace(/\s+$/, "") || "(no new output)";
 		const bodyWidth = Math.max(1, max - 4);
@@ -683,6 +692,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			details: {
 				managedTerminal: true,
 				...snapshot(job, PERSISTED_OUTPUT_BYTES),
+				observedAt: Date.now(),
 				output: read.text,
 				cursor: read.cursor,
 				outputOmittedBytes: read.omittedBytes,

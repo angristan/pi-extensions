@@ -80,6 +80,7 @@ duplicate transcript entry.
 
 - Polls return cursor-based deltas rather than repeating old output.
 - Live command cards request a TUI redraw only when output or process status changes; idle background processes do not continuously disturb terminal scrollback.
+- Historical terminal interaction cards freeze elapsed time at the result's observation timestamp, so unrelated streaming renders remain byte-stable and preserve a scrolled viewport.
 - Tool output remains below Pi's 50KB limit.
 - Full UI output retains bounded head and tail sections for diagnostics.
 - Session shutdown waits for SIGTERM/SIGKILL escalation.

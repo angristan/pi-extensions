@@ -297,6 +297,7 @@ describe("terminal tools", () => {
 			"yield-time_ms": 1_000,
 		});
 		expect(finished.details.status).toBe("completed");
+		expect(finished.details.observedAt).toBeGreaterThanOrEqual(started.details.observedAt);
 		expect(finished.content[0].text).toContain("second");
 		expect(finished.content[0].text).not.toContain("\nfirst");
 		expect(harness.events).toHaveLength(0);
@@ -425,6 +426,46 @@ describe("terminal tools", () => {
 		expect(completed).toContain(`✓ ${started.details.id} · completed`);
 		expect(completed).not.toContain("/ps");
 		component.dispose?.();
+	});
+
+	test("keeps historical interaction cards stable across unrelated renders", () => {
+		const harness = createHarness();
+		const tool = harness.tools.get("job_output");
+		const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+		const originalNow = Date.now;
+		let now = 10_000;
+		Date.now = () => now;
+		try {
+			// Legacy sessions lack observedAt, so construction freezes their last
+			// known elapsed time. New results persist observedAt in the same shape.
+			const details = {
+				managedTerminal: true,
+				id: "historical-job",
+				description: "historical terminal",
+				command: "sleep 9999",
+				cwd: harness.ctx.cwd,
+				status: "running",
+				startedAt: 5_000,
+				stdout: "",
+				stderr: "",
+				stdoutOmittedBytes: 0,
+				stderrOmittedBytes: 0,
+				output: "still waiting",
+			};
+			const component = tool.renderResult(
+				{ details },
+				{ expanded: false },
+				theme,
+				{ args: { reasoning: "inspect historical terminal" } },
+			);
+			const first = component.render(120);
+			expect(first.join("\n")).toContain("running in 5s");
+
+			now = 70_000;
+			expect(component.render(120)).toEqual(first);
+		} finally {
+			Date.now = originalNow;
+		}
 	});
 
 	test("redraws running cards only when output or status changes", async () => {
