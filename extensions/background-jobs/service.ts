@@ -12,6 +12,8 @@ export interface BackgroundTerminalService {
 		ctx: any,
 	): Promise<any>;
 	getView(id: string, fallback: any, maxOutputBytes: number): BackgroundTerminalView;
+	/** Subscribe to live output or status changes. Returns a no-op for historical jobs. */
+	subscribe(id: string, listener: () => void): () => void;
 }
 
 const SERVICE_KEY = Symbol.for("pi.background-terminal.service");

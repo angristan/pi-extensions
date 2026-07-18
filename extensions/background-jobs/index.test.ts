@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import registerBetterNativeBash from "../better-native-pi/bash";
-import registerBackgroundJobs, { BoundedOutput, CursorOutput } from "./index";
+import registerBackgroundJobs, { BoundedOutput, CursorOutput, JobOutputViewer } from "./index";
 import { sanitizeTerminalOutput } from "./output";
 import { isPtySupported } from "./terminal-process";
 
@@ -171,6 +171,75 @@ describe("bounded terminal output", () => {
 		const bounded = new BoundedOutput();
 		bounded.append("start\x1b]0;title\x07\x1b[2Kend");
 		expect(bounded.text()).toBe("startend");
+	});
+});
+
+describe("live output refresh", () => {
+	test("coalesces changed events and stops after completion", async () => {
+		let snapshot: any = {
+			id: "viewer-job",
+			description: "viewer job",
+			command: "produce output",
+			cwd: process.cwd(),
+			status: "running",
+			startedAt: Date.now(),
+			stdout: "",
+			stderr: "",
+			stdoutOmittedBytes: 0,
+			stderrOmittedBytes: 0,
+			outputCursor: 0,
+			output: `first-sentinel\n${"middle\n".repeat(10_000)}latest-line`,
+		};
+		let listener: (() => void) | undefined;
+		let unsubscribed = 0;
+		let renders = 0;
+		const viewer = new JobOutputViewer(
+			() => snapshot,
+			(next) => {
+				listener = next;
+				return () => { unsubscribed += 1; listener = undefined; };
+			},
+			{ requestRender() { renders += 1; } } as any,
+			{ fg: (_color: string, text: string) => text },
+			() => {},
+		);
+
+		const initial = viewer.render(40);
+		expect(initial.join("\n")).toContain("latest-line");
+		expect(initial.join("\n")).not.toContain("first-sentinel");
+		expect(initial.length).toBeLessThanOrEqual(Math.max(10, (process.stdout.rows || 24) - 5));
+
+		snapshot = { ...snapshot, outputCursor: 1, output: "changed output" };
+		listener?.();
+		listener?.();
+		listener?.();
+		await Bun.sleep(100);
+		expect(renders).toBe(0);
+		await Bun.sleep(200);
+		expect(renders).toBe(1);
+		expect(viewer.render(40).join("\n")).toContain("changed output");
+
+		// Repeated activity without a revision change is ignored.
+		listener?.();
+		await Bun.sleep(300);
+		expect(renders).toBe(1);
+
+		// An obscured overlay records activity but does not redraw until focused.
+		viewer.focused = false;
+		snapshot = { ...snapshot, outputCursor: 2, output: "changed while unfocused" };
+		listener?.();
+		await Bun.sleep(300);
+		expect(renders).toBe(1);
+		viewer.focused = true;
+		await Bun.sleep(300);
+		expect(renders).toBe(2);
+
+		snapshot = { ...snapshot, status: "completed", endedAt: Date.now(), outputCursor: 3 };
+		listener?.();
+		await Bun.sleep(300);
+		expect(renders).toBe(3);
+		expect(unsubscribed).toBe(1);
+		viewer.dispose();
 	});
 });
 
@@ -397,7 +466,7 @@ describe("terminal tools", () => {
 		await shutdownHarness(harness);
 	});
 
-	test("updates the original running card when the command completes", async () => {
+	test("freezes the yielded transcript card when the command completes", async () => {
 		const harness = createHarness();
 		await startHarness(harness);
 		const tool = harness.tools.get("bash");
@@ -410,21 +479,19 @@ describe("terminal tools", () => {
 		const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
 		const context = { state: {}, args, cwd: harness.ctx.cwd, invalidate() {} };
 		const component = tool.renderResult(started, { expanded: false }, theme, context);
-		const running = component.render(120).join("\n");
-		expect(running).toContain("Running test live card");
-		expect(running).toContain("╭ bash ");
-		expect(running).toContain("  │ styled-output");
-		expect(running).toContain("running · /ps");
-		expect(running).not.toContain(`\n● ${started.details.id} · running`);
+		const running = component.render(120);
+		expect(running.join("\n")).toContain("Running test live card");
+		expect(running.join("\n")).toContain("╭ bash ");
+		expect(running.join("\n")).toContain("  │ styled-output");
+		expect(running.join("\n")).toContain("running · /ps");
 
 		await harness.tools.get("job_output").execute("wait", {
 			job_id: started.details.id,
 			wait: true,
 		});
-		const completed = component.render(120).join("\n");
-		expect(completed).toContain("Ran test live card");
-		expect(completed).toContain(`✓ ${started.details.id} · completed`);
-		expect(completed).not.toContain("/ps");
+		// Completion updates footer state and the live overlay, not an off-screen
+		// transcript row whose redraw would recompute the whole session.
+		expect(component.render(120)).toEqual(running);
 		component.dispose?.();
 	});
 
@@ -468,12 +535,12 @@ describe("terminal tools", () => {
 		}
 	});
 
-	test("redraws running cards only when output or status changes", async () => {
+	test("never invalidates a yielded transcript card", async () => {
 		const harness = createHarness();
 		await startHarness(harness);
 		const tool = harness.tools.get("bash");
 		const args = {
-			command: "sleep 1; printf 'changed\\n'; sleep 1",
+			command: "sleep 0.35; printf 'changed\\n'; sleep 0.35",
 			reasoning: "test change-driven redraws",
 			"yield-time_ms": 250,
 		};
@@ -488,35 +555,12 @@ describe("terminal tools", () => {
 		});
 		const firstRender = component.render(120);
 
-		// Unrelated streaming renders must not advance elapsed time in this
-		// off-screen card when the managed command itself has not changed.
-		const originalNow = Date.now;
-		Date.now = () => originalNow() + 60_000;
-		try {
-			expect(component.render(120)).toEqual(firstRender);
-		} finally {
-			Date.now = originalNow;
-		}
-
-		// The first poll sees the same active status and output cursor.
-		await Bun.sleep(600);
-		expect(invalidations).toBe(0);
-
-		// New output advances the cursor and requests exactly one redraw.
-		await Bun.sleep(700);
-		expect(invalidations).toBe(1);
-
 		await harness.tools.get("job_output").execute("wait", {
 			job_id: started.details.id,
 			wait: true,
 		});
-		await Bun.sleep(600);
-		expect(invalidations).toBe(2);
-
-		// Reaching a terminal status stops the poller permanently.
-		const settledInvalidations = invalidations;
-		await Bun.sleep(700);
-		expect(invalidations).toBe(settledInvalidations);
+		expect(invalidations).toBe(0);
+		expect(component.render(120)).toEqual(firstRender);
 		component.dispose?.();
 		await shutdownHarness(harness);
 	});
@@ -559,11 +603,8 @@ describe("terminal tools", () => {
 		// Regression: session_start intentionally skips restoring jobs whose
 		// persisted status is still `running`/`stopping` (their process died with
 		// the previous session). Such an id therefore never reappears in the live
-		// jobs map, so getView falls through to the persisted fallback. Returning
-		// the stale active status verbatim made better-native-pi's bash card spin
-		// its 500ms render timer forever (no live process could flip it terminal),
-		// re-rendering the whole transcript and yanking scroll back to the bottom
-		// every 500ms. The fallback must coerce to a terminal status instead.
+		// jobs map, so getView falls through to the persisted fallback. The fallback
+		// must settle before the immutable transcript snapshot is cached.
 		const harness = createHarness();
 		await startHarness(harness);
 		const bash = harness.tools.get("bash");
@@ -609,9 +650,9 @@ describe("terminal tools", () => {
 	test("last-resort reaper SIGKILLs a trap-TERM orphan on ungraceful exit", async () => {
 		// Regression: when pi exits without firing session_shutdown (crash,
 		// emergencyTerminalExit, SIGKILL of pi), a running job that ignores
-		// SIGTERM (`trap '' TERM`) was re-parented to PID 1 and leaked forever,
-		// keeping the 500ms render loop alive. background-jobs now registers every
-		// live job pid and SIGKILLs the whole process tree from process 'exit'.
+		// SIGTERM (`trap '' TERM`) was re-parented to PID 1 and leaked forever.
+		// background-jobs now registers every live job pid and SIGKILLs the whole
+		// process tree from process 'exit'.
 		// We can't call session_shutdown (that's the graceful path). Instead, emit
 		// the sync 'exit' event the way Node does on process.exit() and assert no
 		// orphan survives.

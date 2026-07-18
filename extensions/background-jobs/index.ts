@@ -10,10 +10,15 @@ import {
 	matchesKey,
 	truncateToWidth,
 	wrapTextWithAnsi,
+	type Focusable,
 	type TUI,
 } from "@earendil-works/pi-tui";
 import { fitToolLine } from "../better-native-pi/core.js";
-import { BoundedOutput, CursorOutput, type CursorRead } from "./output.js";
+import { BoundedOutput, CursorOutput, sanitizeTerminalOutput, type CursorRead } from "./output.js";
+import {
+	CoalescedRefresh,
+	LIVE_REFRESH_FALLBACK_MS,
+} from "./refresh.js";
 import { clearBackgroundTerminalService, setBackgroundTerminalService, type BackgroundTerminalService } from "./service.js";
 import { isPtySupported, spawnTerminal } from "./terminal-process.js";
 
@@ -26,6 +31,7 @@ const MAX_RETAINED_JOBS = 50;
 const TOOL_OUTPUT_BYTES = 24 * 1024;
 const PARTIAL_OUTPUT_BYTES = 4 * 1024;
 const PERSISTED_OUTPUT_BYTES = 8 * 1024;
+const VIEWER_OUTPUT_BYTES = 64 * 1024;
 const TERMINAL_TOOL_NAMES = ["job_output", "terminal_write", "job_kill"] as const;
 const TERMINAL_TOOL_NAME_SET = new Set<string>(TERMINAL_TOOL_NAMES);
 
@@ -41,9 +47,8 @@ const TERMINAL_TOOL_NAME_SET = new Set<string>(TERMINAL_TOOL_NAMES);
 //   - a crash mid-run while a job is `trap '' TERM`-ignoring SIGTERM.
 // On those paths the killTimer (5s SIGTERM->SIGKILL escalation) never fires,
 // and detached children (each its own session leader via spawnTerminal) are
-// re-parented to PID 1 and live forever as orphans — which then drive the
-// 500ms render loop forever (the scroll-jank bug). Register every live job's
-// pids here and SIGKILL their whole process tree from process exit + the same
+// re-parented to PID 1 and live forever as resource-leaking orphans. Register
+// every live job's pids here and SIGKILL their whole process tree from process exit + the same
 // signals pi listens to, as a sync best-effort. Idempotent and re-entrant.
 const liveJobPids = new Set<number>();
 let lastResortReaperArmed = false;
@@ -140,6 +145,10 @@ interface JobToolDetails extends JobSnapshot {
 	output?: string;
 	cursor?: number;
 	outputOmittedBytes?: number;
+}
+
+interface JobViewerSnapshot extends JobSnapshot {
+	output: string;
 }
 
 interface ManagedJob {
@@ -256,6 +265,28 @@ function snapshot(job: ManagedJob, outputLimit?: number): JobSnapshot {
 	};
 }
 
+function viewerSnapshot(job: ManagedJob): JobViewerSnapshot {
+	return {
+		id: job.id,
+		description: job.description,
+		command: job.command,
+		cwd: job.cwd,
+		status: job.status,
+		tty: job.tty,
+		backgrounded: job.backgrounded,
+		startedAt: job.startedAt,
+		endedAt: job.endedAt,
+		exitCode: job.exitCode,
+		signal: job.signal,
+		stdout: "",
+		stderr: "",
+		stdoutOmittedBytes: job.stdout.omittedBytes,
+		stderrOmittedBytes: job.stderr.omittedBytes,
+		outputCursor: job.output.cursor,
+		output: job.output.read(0, VIEWER_OUTPUT_BYTES).text,
+	};
+}
+
 function restoredJob(data: JobSnapshot, generation: number): ManagedJob {
 	let resolveCompletion!: () => void;
 	const completion = new Promise<void>((resolvePromise) => { resolveCompletion = resolvePromise; });
@@ -307,52 +338,132 @@ function formatDeltaText(job: ManagedJob, read: CursorRead): string {
 	return lines.join("\n");
 }
 
-class JobOutputViewer {
+function activeSnapshot(snapshot: Pick<JobSnapshot, "status">): boolean {
+	return snapshot.status === "running" || snapshot.status === "stopping";
+}
+
+function viewerRevision(snapshot: JobViewerSnapshot): string {
+	return [
+		snapshot.status,
+		snapshot.outputCursor,
+		snapshot.endedAt,
+		snapshot.exitCode,
+		snapshot.signal,
+		snapshot.stdoutOmittedBytes,
+		snapshot.stderrOmittedBytes,
+	].join(":");
+}
+
+function boundedViewerOutput(text: string, width: number, maxRows: number): string[] {
+	if (!text.trim()) return ["(no output)"];
+	const rowLimit = Math.max(1, maxRows);
+	const inputLimit = Math.max(1_024, width * rowLimit * 4);
+	let bounded = text;
+	let omitted = false;
+	if (bounded.length > inputLimit) {
+		bounded = sanitizeTerminalOutput(bounded.slice(-inputLimit));
+		omitted = true;
+	}
+	let rows = bounded.replace(/\s+$/, "").split("\n")
+		.flatMap((line) => wrapTextWithAnsi(line, Math.max(1, width)));
+	if (rows.length > rowLimit) {
+		rows = rowLimit === 1 ? rows.slice(-1) : rows.slice(-(rowLimit - 1));
+		omitted = true;
+	}
+	if (omitted && rowLimit > 1) rows = ["… earlier output omitted …", ...rows].slice(-rowLimit);
+	return rows.length > 0 ? rows : ["(no output)"];
+}
+
+export class JobOutputViewer implements Focusable {
 	private scroll = 0;
+	private _focused = true;
+	private pendingWhileUnfocused = false;
 	private cachedWidth = 0;
+	private cachedHeight = 0;
 	private cachedLines: string[] = [];
-	private refreshTimer?: ReturnType<typeof setInterval>;
+	private currentSnapshot: JobViewerSnapshot;
+	private lastRevision: string;
+	private readonly refreshScheduler: CoalescedRefresh;
+	private fallbackTimer?: ReturnType<typeof setInterval>;
+	private unsubscribe?: () => void;
 
 	constructor(
-		private readonly getSnapshot: () => JobSnapshot,
+		private readonly getSnapshot: () => JobViewerSnapshot,
+		private readonly subscribe: (listener: () => void) => () => void,
 		private readonly tui: TUI,
 		private readonly theme: any,
 		private readonly done: (result?: unknown) => void,
 	) {
-		if (getSnapshot().status === "running" || getSnapshot().status === "stopping") {
-			this.refreshTimer = setInterval(() => {
-				this.cachedWidth = 0;
-				this.tui.requestRender();
-				if (!(["running", "stopping"] as JobStatus[]).includes(this.getSnapshot().status)) this.stopRefreshing();
-			}, 500);
-			this.refreshTimer.unref?.();
+		this.currentSnapshot = getSnapshot();
+		this.lastRevision = viewerRevision(this.currentSnapshot);
+		this.refreshScheduler = new CoalescedRefresh(() => this.refreshIfChanged());
+		if (activeSnapshot(this.currentSnapshot)) {
+			this.unsubscribe = subscribe(() => this.scheduleRefresh());
+			// A slow revision check covers missed process events without driving the UI.
+			this.fallbackTimer = setInterval(() => this.scheduleRefresh(), LIVE_REFRESH_FALLBACK_MS);
+			this.fallbackTimer.unref?.();
 		}
 	}
 
-	private stopRefreshing(): void {
-		if (!this.refreshTimer) return;
-		clearInterval(this.refreshTimer);
-		this.refreshTimer = undefined;
+	get focused(): boolean { return this._focused; }
+	set focused(value: boolean) {
+		this._focused = value;
+		if (value && this.pendingWhileUnfocused) {
+			this.pendingWhileUnfocused = false;
+			this.refreshScheduler.trigger();
+		}
 	}
 
-	private lines(width: number): string[] {
-		if (this.cachedWidth === width) return this.cachedLines;
-		const lines: string[] = [];
-		for (const source of formatSnapshotText(this.getSnapshot()).split("\n")) {
-			if (!source) { lines.push(""); continue; }
-			lines.push(...wrapTextWithAnsi(source, Math.max(1, width)));
+	private scheduleRefresh(): void {
+		if (!this.focused) {
+			this.pendingWhileUnfocused = true;
+			return;
 		}
+		this.refreshScheduler.trigger();
+	}
+
+	private refreshIfChanged(force = false): void {
+		const next = this.getSnapshot();
+		const revision = viewerRevision(next);
+		if (!force && revision === this.lastRevision) return;
+		this.currentSnapshot = next;
+		this.lastRevision = revision;
+		this.invalidate();
+		this.tui.requestRender();
+		if (!activeSnapshot(next)) this.stopLiveRefresh();
+	}
+
+	private stopLiveRefresh(): void {
+		this.pendingWhileUnfocused = false;
+		this.unsubscribe?.();
+		this.unsubscribe = undefined;
+		if (this.fallbackTimer) clearInterval(this.fallbackTimer);
+		this.fallbackTimer = undefined;
+	}
+
+	private lines(width: number, bodyHeight: number): string[] {
+		if (this.cachedWidth === width && this.cachedHeight === bodyHeight) return this.cachedLines;
+		const data = this.currentSnapshot;
+		const headerSources = [
+			`${statusSymbol(data.status)} ${data.id} · ${data.status} · ${compactDuration(duration(data))}${data.tty ? " · tty" : ""}`,
+			`cwd: ${data.cwd}`,
+			`command: ${compactCommand(data.command, Math.max(120, width * 2))}`,
+		];
+		if (data.exitCode !== undefined) headerSources.push(`exit code: ${data.exitCode}`);
+		if (data.signal) headerSources.push(`signal: ${data.signal}`);
+		const header = headerSources.flatMap((line) => wrapTextWithAnsi(line, Math.max(1, width)));
+		const outputRows = boundedViewerOutput(data.output, width, Math.max(1, bodyHeight - header.length - 2));
 		this.cachedWidth = width;
-		this.cachedLines = lines;
-		return lines;
+		this.cachedHeight = bodyHeight;
+		this.cachedLines = [...header, "", data.tty ? "latest terminal output:" : "latest output:", ...outputRows];
+		return this.cachedLines;
 	}
 
 	render(width: number): string[] {
 		const max = Math.max(1, width);
 		const height = Math.max(10, (process.stdout.rows || 24) - 5);
 		const bodyHeight = height - 1;
-		if ((["running", "stopping"] as JobStatus[]).includes(this.getSnapshot().status)) this.cachedWidth = 0;
-		const lines = this.lines(max);
+		const lines = this.lines(max, bodyHeight);
 		const maxScroll = Math.max(0, lines.length - bodyHeight);
 		this.scroll = Math.min(this.scroll, maxScroll);
 		const visible = lines.slice(this.scroll, this.scroll + bodyHeight).map((line) => truncateToWidth(line, max, "…"));
@@ -362,8 +473,8 @@ class JobOutputViewer {
 
 	handleInput(data: string): void {
 		if (matchesKey(data, Key.escape) || data === "q") return this.done(undefined);
-		if (data === "r") this.cachedWidth = 0;
-		else if (matchesKey(data, Key.up)) this.scroll = Math.max(0, this.scroll - 1);
+		if (data === "r") { this.refreshIfChanged(true); return; }
+		if (matchesKey(data, Key.up)) this.scroll = Math.max(0, this.scroll - 1);
 		else if (matchesKey(data, Key.down)) this.scroll += 1;
 		else if (matchesKey(data, Key.pageUp)) this.scroll = Math.max(0, this.scroll - 10);
 		else if (matchesKey(data, Key.pageDown)) this.scroll += 10;
@@ -372,8 +483,16 @@ class JobOutputViewer {
 		this.tui.requestRender();
 	}
 
-	invalidate(): void { this.cachedWidth = 0; }
-	dispose(): void { this.stopRefreshing(); }
+	invalidate(): void {
+		this.cachedWidth = 0;
+		this.cachedHeight = 0;
+		this.cachedLines = [];
+	}
+
+	dispose(): void {
+		this.stopLiveRefresh();
+		this.refreshScheduler.dispose();
+	}
 }
 
 class TerminalInteractionComponent {
@@ -717,7 +836,16 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			return;
 		}
 		await ctx.ui.custom((tui: TUI, theme: any, _kb: any, done: (result: unknown) => void) =>
-			new JobOutputViewer(() => snapshot(job), tui, theme, done), {
+			new JobOutputViewer(
+				() => viewerSnapshot(job),
+				(listener) => {
+					job.activityListeners.add(listener);
+					return () => job.activityListeners.delete(listener);
+				},
+				tui,
+				theme,
+				done,
+			), {
 				overlay: true,
 				overlayOptions: { width: "94%", maxHeight: "92%", anchor: "center", margin: 1 },
 			});
@@ -737,23 +865,23 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		if (!Number.isInteger(yieldMs) || yieldMs < 250 || yieldMs > 30_000) throw new Error("yield-time_ms must be an integer between 250 and 30000");
 		const job = startJob(params, ctx);
 		const initialCursor = 0;
-		let lastUpdate = 0;
 		const update = () => {
-			const now = Date.now();
-			if (!onUpdate || now - lastUpdate < 100) return;
-			lastUpdate = now;
+			if (!onUpdate) return;
 			const partial = job.output.read(initialCursor, PARTIAL_OUTPUT_BYTES);
 			onUpdate({
 				content: [{ type: "text", text: formatDeltaText(job, partial) }],
 				details: { managedTerminal: true, ...snapshot(job, PERSISTED_OUTPUT_BYTES) },
 			});
 		};
-		job.activityListeners.add(update);
-		// Fire one immediate partial so the managed-terminal card mounts on the
-		// first render (the 100ms throttle would otherwise leave the card empty
-		// for up to 100ms after the call starts).
+		const partialUpdates = new CoalescedRefresh(update);
+		const scheduleUpdate = () => partialUpdates.trigger();
+		job.activityListeners.add(scheduleUpdate);
+		// Mount the managed-terminal card immediately, then batch output bursts.
 		update();
-		try { await waitForYield(job, yieldMs, signal); } finally { job.activityListeners.delete(update); }
+		try { await waitForYield(job, yieldMs, signal); } finally {
+			job.activityListeners.delete(scheduleUpdate);
+			partialUpdates.dispose();
+		}
 		const yielded = isActive(job);
 		if (yielded) {
 			// Until the initial yield window expires, this is still foreground tool
@@ -784,11 +912,8 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			// for persisted cards whose status is still `running`/`stopping`.
 			// session_start intentionally skips restoring active jobs (their
 			// process died with the previous session), so such an id can never
-			// reappear here. Returning the stale active status verbatim makes
-			// better-native-pi's bash card spin its 500ms render timer forever
-			// (no live process will ever flip it to terminal), which re-renders
-			// the whole transcript every 500ms and yanks scroll back to the
-			// bottom. Coerce to a terminal status so the card settles.
+			// reappear here. Coerce stale active status to a terminal state before
+			// the immutable transcript snapshot is cached.
 			const fallbackDetails = fallback ?? {};
 			const staleActive =
 				fallbackDetails.status === "running" || fallbackDetails.status === "stopping";
@@ -797,6 +922,12 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 				details,
 				output: details.output ?? [details.stdout, details.stderr].filter(Boolean).join("\n"),
 			};
+		},
+		subscribe: (id, listener) => {
+			const job = jobs.get(id);
+			if (!job || !isActive(job)) return () => {};
+			job.activityListeners.add(listener);
+			return () => job.activityListeners.delete(listener);
 		},
 	};
 	setBackgroundTerminalService(terminalService);
@@ -939,9 +1070,9 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		if (!selected) return;
 		const job = ordered[labels.indexOf(selected)];
 		if (!job) return;
-		const choices = isActive(job) ? ["View full output", "Stop terminal", "Cancel"] : ["View full output", "Cancel"];
+		const choices = isActive(job) ? ["View latest output", "Stop terminal", "Cancel"] : ["View latest output", "Cancel"];
 		const choice = await ctx.ui.select(`${job.id}\n${job.command}`, choices);
-		if (choice === "View full output") await showOutput(job, ctx);
+		if (choice === "View latest output") await showOutput(job, ctx);
 		else if (choice === "Stop terminal" && !job.killReason && await confirmKill(job, ctx)) requestKill(job, "user");
 	};
 

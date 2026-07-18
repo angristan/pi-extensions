@@ -18,7 +18,7 @@ import { buildToolBlock, fitToolLine, formatShellCommandForDisplay, highlightedS
 const OUTPUT_ROWS = 5;
 const COMMAND_ROWS = 8;
 const EXPANDED_OUTPUT_BYTES = 256 * 1024;
-const COLLAPSED_OUTPUT_BYTES = 24 * 1024;
+const COLLAPSED_OUTPUT_BYTES = 4 * 1024;
 const COMMAND_INDENT = "  ";
 const DIM = "\x1b[2m";
 const RESET = "\x1b[0m";
@@ -131,13 +131,11 @@ function wrappedOutput(text: string, width: number): string[] {
 
 function boundedRows(rows: string[]): string[] {
 	if (rows.length <= OUTPUT_ROWS) return rows;
-	const head = 2;
-	const tail = 2;
-	const omitted = rows.length - head - tail;
+	const tailRows = OUTPUT_ROWS - 1;
+	const omitted = rows.length - tailRows;
 	return [
-		...rows.slice(0, head),
-		barLine(`… +${omitted} lines (Ctrl+O for full output)`),
-		...rows.slice(-tail),
+		barLine(`… +${omitted} earlier lines (Ctrl+O for full output)`),
+		...rows.slice(-tailRows),
 	];
 }
 
@@ -210,11 +208,10 @@ class CommandComponent {
 }
 
 class ManagedCommandComponent {
-	private timer?: ReturnType<typeof setInterval>;
 	private fallback: any;
 	private expanded: boolean;
-	private lastRevision = "";
 	private observedAt: number;
+	private frozenView?: { details: any; output: string };
 	// Width-keyed render cache, mirroring CommandComponent above. Without this,
 	// every render tick re-runs sanitizeTerminalOutput (regex), wrapTextWithAnsi
 	// (ICU grapheme segmentation), and visibleWidth across every line — for
@@ -230,25 +227,38 @@ class ManagedCommandComponent {
 		private readonly theme: any,
 		private readonly cwd: string | undefined,
 		private readonly service: BackgroundTerminalService,
-		private readonly requestRender: () => void,
 	) {
 		this.fallback = result?.details ?? {};
 		this.expanded = expanded;
 		this.observedAt = Number.isFinite(this.fallback.observedAt) ? this.fallback.observedAt : Date.now();
-		this.syncTimer();
 	}
 
 	update(result: any, expanded: boolean): void {
-		this.fallback = result?.details ?? this.fallback;
-		if (Number.isFinite(result?.details?.observedAt)) this.observedAt = result.details.observedAt;
-		// Expansion changes which output bytes are fetched and how rows are
-		// bounded, so the cache must not survive a toggle.
-		if (this.expanded !== expanded) this.invalidate();
+		const next = result?.details ?? this.fallback;
+		const changed = this.revision(next) !== this.revision(this.fallback);
+		const expansionChanged = this.expanded !== expanded;
+		this.fallback = next;
+		if (changed || expansionChanged) this.frozenView = undefined;
+		if (Number.isFinite(next?.observedAt)) this.observedAt = next.observedAt;
+		// Partial updates and expansion changes are the only reasons to recompute
+		// this transcript row. Once a command yields, the card becomes an immutable
+		// snapshot and live output moves to the explicitly opened /ps overlay.
+		if (changed || expansionChanged) this.invalidate();
 		this.expanded = expanded;
-		this.syncTimer();
 	}
 
 	private view(): { details: any; output: string } {
+		const active = this.fallback.status === "running" || this.fallback.status === "stopping";
+		if (active && this.fallback.backgrounded) {
+			// Resolve once so resumed cards whose process no longer exists can settle
+			// to "killed"; live cards then keep that snapshot immutable.
+			this.frozenView ??= this.service.getView(
+				this.fallback.id,
+				this.fallback,
+				this.expanded ? EXPANDED_OUTPUT_BYTES : COLLAPSED_OUTPUT_BYTES,
+			);
+			return this.frozenView;
+		}
 		return this.service.getView(
 			this.fallback.id,
 			this.fallback,
@@ -259,6 +269,7 @@ class ManagedCommandComponent {
 	private revision(details: any): string {
 		return [
 			details.status,
+			details.backgrounded,
 			details.outputCursor,
 			details.endedAt,
 			details.exitCode,
@@ -268,45 +279,15 @@ class ManagedCommandComponent {
 		].join(":");
 	}
 
-	private poll(): void {
-		const view = this.view();
-		const revision = this.revision(view.details);
-		const changed = revision !== this.lastRevision;
-		this.lastRevision = revision;
-		const active = view.details.status === "running" || view.details.status === "stopping";
-		if (!active) this.dispose();
-		if (!changed) return;
-		this.observedAt = Number.isFinite(view.details.observedAt) ? view.details.observedAt : Date.now();
-		this.invalidate();
-		this.requestRender();
-	}
-
-	private syncTimer(): void {
-		const view = this.view();
-		this.lastRevision = this.revision(view.details);
-		const active = view.details.status === "running" || view.details.status === "stopping";
-		if (active && !this.timer) {
-			// Polling keeps yielded command cards live, but unchanged jobs must not
-			// redraw the entire transcript and disrupt terminal scrollback.
-			this.timer = setInterval(() => this.poll(), 500);
-			this.timer.unref?.();
-		} else if (!active) this.dispose();
-	}
-
 	render(width: number): string[] {
 		const max = Math.max(1, width);
+		if (this.cachedLines && this.cachedWidth === max) return this.cachedLines;
 		const view = this.view();
 		const details = view.details;
 		const status = details.status ?? "failed";
 		const active = status === "running" || status === "stopping";
-		if (!active) this.dispose();
-		// Terminal-state jobs have immutable output, so a width-keyed cache is
-		// always correct. Active jobs stream new output on the 500ms timer, so
-		// they must recompute to show fresh rows.
-		if (!active && this.cachedLines && this.cachedWidth === max) return this.cachedLines;
-		// Active cards update their observation time only when output or status
-		// changes. Unrelated model-stream renders must remain byte-identical or an
-		// off-screen card can force a full transcript redraw and move the viewport.
+		// Every card is width-cached. Foreground output invalidates through Pi's
+		// partial-result updates; yielded cards never mutate behind the viewport.
 		const elapsedMs = Math.max(0, (details.endedAt ?? this.observedAt) - (details.startedAt ?? this.observedAt));
 		const failed = status === "failed" || status === "killed" || status === "timed_out";
 		const summaryText = details.exitCode === undefined ? status : `Command exited with code ${details.exitCode}`;
@@ -326,14 +307,16 @@ class ManagedCommandComponent {
 		if (!this.expanded) output = boundedRows(output);
 		if (!details.backgrounded) {
 			const result = [...block, ...command, ...output];
-			if (!active) { this.cachedLines = result; this.cachedWidth = max; }
+			this.cachedLines = result;
+			this.cachedWidth = max;
 			return result;
 		}
 		const color = terminalStatusColor(status);
 		const metadata = [details.id, status, details.tty ? "tty" : undefined, active ? "/ps" : undefined].filter(Boolean).join(" · ");
 		const footer = fitToolLine(`  └ ${this.theme.fg(color, terminalStatusSymbol(status))} ${this.theme.fg("dim", metadata)}`, max);
 		const result = [...block, ...command, ...output, footer];
-		if (!active) { this.cachedLines = result; this.cachedWidth = max; }
+		this.cachedLines = result;
+		this.cachedWidth = max;
 		return result;
 	}
 
@@ -342,10 +325,7 @@ class ManagedCommandComponent {
 		this.cachedLines = undefined;
 	}
 
-	dispose(): void {
-		if (this.timer) clearInterval(this.timer);
-		this.timer = undefined;
-	}
+	dispose(): void {}
 }
 
 export default function bash(pi: ExtensionAPI) {
@@ -390,10 +370,9 @@ export default function bash(pi: ExtensionAPI) {
 		renderResult: (result: any, options: any, theme: any, context: any) => {
 			const terminal = getBackgroundTerminalService();
 			// Stream partial output for managed terminals: executeUnified pushes
-			// onUpdate every 100ms while the job runs, but without this branch the
-			// card rendered nothing until the yield window closed and isPartial
-			// flipped to false. Render the live ManagedCommandComponent instead so
-			// stdout appears in the card as it arrives.
+			// coalesced updates while the job runs. Render the live component so
+			// stdout appears during the foreground yield window; once yielded, the
+			// transcript card freezes and /ps owns live updates.
 			if (options?.isPartial && terminal && result?.details?.managedTerminal) {
 				let component = context.state.managedCommand as ManagedCommandComponent | undefined;
 				if (!component) {
@@ -404,7 +383,6 @@ export default function bash(pi: ExtensionAPI) {
 						theme,
 						context.cwd,
 						terminal,
-						context.invalidate,
 					);
 					context.state.managedCommand = component;
 				} else component.update(result, Boolean(options.expanded));
@@ -421,7 +399,6 @@ export default function bash(pi: ExtensionAPI) {
 						theme,
 						context.cwd,
 						terminal,
-						context.invalidate,
 					);
 					context.state.managedCommand = component;
 				} else component.update(result, Boolean(options.expanded));
