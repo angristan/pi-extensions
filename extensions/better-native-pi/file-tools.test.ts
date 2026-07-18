@@ -1,4 +1,7 @@
 import { beforeEach, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { getCapabilities, setCapabilities } from "@earendil-works/pi-tui";
 import { DETAILS_KEY } from "../image-store/index.js";
 import { EXPLORATION_DETAILS_KEY, resetExplorationStateForTests } from "./exploration.js";
@@ -10,6 +13,38 @@ const theme = {
 };
 
 beforeEach(() => resetExplorationStateForTests());
+
+test("write results identify diffs that already show the complete file", async () => {
+	const tools = new Map<string, any>();
+	fileTools({
+		on() {},
+		registerTool(tool: any) { tools.set(tool.name, tool); },
+	} as any);
+	const directory = await mkdtemp(join(tmpdir(), "better-native-pi-write-"));
+	const write = tools.get("write");
+
+	try {
+		const created = await write.execute(
+			"write-create",
+			{ reasoning: "create fixture", path: "fixture.ts", content: "export const value = 1;\n" },
+			undefined,
+			undefined,
+			{ cwd: directory },
+		);
+		expect(created.details.diffCoversFullContent).toBe(true);
+
+		const overwritten = await write.execute(
+			"write-overwrite",
+			{ reasoning: "update fixture", path: "fixture.ts", content: "export const value = 2;\n" },
+			undefined,
+			undefined,
+			{ cwd: directory },
+		);
+		expect(overwritten.details.diffCoversFullContent).toBe(false);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
 
 test("grouped read results keep sidecar previews in the rendered row", () => {
 	const tools = new Map<string, any>();

@@ -363,9 +363,14 @@ export function buildToolBlock(
 		lines.push(...colorizeDiff(diff!.replace(/\s+$/, ""), path, theme).map((line) => `${INDENT}${line}`));
 	}
 
-	// A write expansion still usefully reveals the complete written content.
+	// A write expansion still usefully reveals unchanged content omitted by a
+	// focused diff. Diffs from empty files already show every written line, so
+	// appending the complete content would render a duplicate uncolored copy.
+	const diffAlreadyShowsFullWrite = name === "write"
+		&& showsInlineDiff
+		&& result?.details?.diffCoversFullContent === true;
 	// An edit expansion would only repeat the structured diff already shown.
-	if (expanded && !isPartial && !(name === "edit" && showsInlineDiff)) {
+	if (expanded && !isPartial && !(name === "edit" && showsInlineDiff) && !diffAlreadyShowsFullWrite) {
 		lines.push(...expandedLines(name, rest, result, theme));
 	}
 	return lines;

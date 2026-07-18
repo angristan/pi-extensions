@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { generateDiffString } from "@earendil-works/pi-coding-agent";
 import { buildToolBlock, REASONING_DESCRIPTION, withReasoning } from "./core.js";
 
 const ANSI_PATTERN = /\x1b\[[0-9;:]*m/g;
@@ -22,6 +23,36 @@ describe("withReasoning", () => {
 		expect(REASONING_DESCRIPTION).toContain("≤8-word");
 		expect(REASONING_DESCRIPTION).toContain("No period");
 		expect(REASONING_DESCRIPTION.length).toBeLessThanOrEqual(100);
+	});
+});
+
+describe("buildToolBlock write expansion", () => {
+	const content = "export const x = 1;\nexport const y = 2;\n";
+	const diff = generateDiffString("", content).diff;
+	const args = { path: "worker/lib/http.ts", reasoning: "centralize request parsing", content };
+
+	test("does not repeat content already covered by a new-file diff", () => {
+		const lines = buildToolBlock(
+			"write",
+			args,
+			{ content: [{ type: "text", text: "ok" }], details: { diff, diffCoversFullContent: true } },
+			{ expanded: true },
+		);
+
+		expect(lines.filter((line) => plain(line).includes("export const x = 1;")).length).toBe(1);
+		expect(lines.filter((line) => plain(line).includes("export const y = 2;")).length).toBe(1);
+	});
+
+	test("keeps complete expansion when a focused diff omits file content", () => {
+		const lines = buildToolBlock(
+			"write",
+			args,
+			{ content: [{ type: "text", text: "ok" }], details: { diff, diffCoversFullContent: false } },
+			{ expanded: true },
+		);
+
+		expect(lines.filter((line) => plain(line).includes("export const x = 1;")).length).toBe(2);
+		expect(lines.filter((line) => plain(line).includes("export const y = 2;")).length).toBe(2);
 	});
 });
 

@@ -145,6 +145,7 @@ export default function fileTools(pi: ExtensionAPI) {
 				}
 
 				let diff = "";
+				let diffCoversFullContent = false;
 				const writeTool = createWriteTool(ctx.cwd, {
 					operations: {
 						mkdir: async (directory: string) => { await mkdir(directory, { recursive: true }); },
@@ -158,11 +159,14 @@ export default function fileTools(pi: ExtensionAPI) {
 							await mkdir(dirname(path), { recursive: true });
 							await writeFile(path, content, "utf8");
 							diff = generateDiffString(previous, content).diff;
+							// A diff from empty content already displays every written line,
+							// so expanded rendering must not append the same file again.
+							diffCoversFullContent = previous.length === 0;
 						},
 					},
 				});
 				const result = await writeTool.execute(id, rest, sig, up);
-				return { ...result, details: { ...(result.details ?? {}), diff } };
+				return { ...result, details: { ...(result.details ?? {}), diff, diffCoversFullContent } };
 			},
 
 			// The call slot owns the running block. Do not schedule periodic invalidation:
