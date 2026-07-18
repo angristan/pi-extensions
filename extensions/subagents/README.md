@@ -51,30 +51,28 @@ status on an indented branch.
   └ ● api-review-a1b2c3 · running · Inspect the API changes
 ```
 
-In TUI mode, open children also appear in the shared top-right overlay stack:
+In TUI mode, actively running children also appear in the shared top-right
+overlay stack:
 
 ```text
- Agents ● 2 running · ✓ 1 done
+ Agents ● 2 running
  ● api-review-a1b2c3              18s · 42k tok
    Inspect the API changes
    ↳ read: extensions/subagents/index.ts
  ● test-audit-d4e5f6               9s · 31k tok
    Find missing renderer coverage
    ↳ bash: bun test extensions/subagents
- ✓ docs-check-123abc              31s · 18k tok
-   Verify the extension documentation
-   ↳ completed · /agents
 ```
 
-Each child gets three rows for identity and usage, a dedicated task preview,
-and latest activity. The token total combines input, output, cache-read, and
-cache-write usage across the persistent conversation. Active children appear
-first. Completed and failed children remain visible while their conversation is
-open, then disappear on `close`; the card hides automatically when none remain.
-It shows up to three detailed children and uses an `/agents` overflow hint when
-space permits. The card hides on terminals narrower than 90 columns or shorter
-than 10 rows. Use `/overlay` or `Ctrl+Shift+O` to toggle the shared overlay
-stack.
+Each active child gets three rows for identity and usage, a dedicated task
+preview, and latest activity. The token total combines input, output,
+cache-read, and cache-write usage across the persistent conversation. Completed
+and failed children disappear from the live overlay as soon as they settle, but
+remain available through `/agents` while their conversation is open. The card
+hides automatically when no children are running. It shows up to three detailed
+children and uses an `/agents` overflow hint when space permits. The card hides
+on terminals narrower than 90 columns or shorter than 10 rows. Use `/overlay`
+or `Ctrl+Shift+O` to toggle the shared overlay stack.
 
 The footer still reports active children:
 
@@ -100,9 +98,11 @@ session:
 - Session shutdown and `/reload` terminate every child and remove temporary sessions.
 - A child cannot spawn grandchildren.
 
-Up to six child processes may remain open at once. Completed children remain
-available for follow-ups and count toward that limit until `close` is called.
-Closed child summaries remain visible for the current parent session.
+Up to six child processes may remain open at once. Completed children do not
+expire automatically: they remain available for follow-ups and count toward
+that limit until `close` is called. The parent is instructed to close a child
+after collecting its final result when no further follow-up is needed. Closed
+child summaries remain visible for the current parent session.
 
 ## Output limits
 

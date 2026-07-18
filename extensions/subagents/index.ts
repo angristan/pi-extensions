@@ -444,7 +444,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 
 	const openAgents = () => [...agents.values()].filter((agent) => agent.client && agent.status !== "closed");
 	const orderedAgents = () => [...agents.values()].sort((a, b) => Number(isActive(b)) - Number(isActive(a)) || b.startedAt - a.startedAt);
-	const displayedAgents = () => orderedAgents().filter((agent) => agent.client && agent.status !== "closed");
+	const activeAgents = () => orderedAgents().filter((agent) => agent.client && isActive(agent));
 	const overlayCard = registerCard({
 		id: "subagents",
 		order: 15,
@@ -452,20 +452,9 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		minBodyHeight: OVERLAY_AGENT_ROWS,
 		minTerminalWidth: 90,
 		minTerminalHeight: 10,
-		visible: () => displayedAgents().length > 0,
-		title: (theme) => {
-			const displayed = displayedAgents();
-			const running = displayed.filter(isActive).length;
-			const completed = displayed.filter((agent) => agent.status === "completed").length;
-			const failed = displayed.filter((agent) => agent.status === "failed").length;
-			const parts = [
-				running ? theme.fg("accent", `● ${running} running`) : "",
-				completed ? theme.fg("success", `✓ ${completed} done`) : "",
-				failed ? theme.fg("error", `× ${failed} failed`) : "",
-			].filter(Boolean);
-			return `${theme.bold(" Agents ")}${parts.join(theme.fg("dim", " · "))} `;
-		},
-		renderBody: (width, maxHeight, theme) => renderAgentsOverlayBody(displayedAgents().map(snapshot), width, maxHeight, theme),
+		visible: () => activeAgents().length > 0,
+		title: (theme) => `${theme.bold(" Agents ")}${theme.fg("accent", `● ${activeAgents().length} running`)} `,
+		renderBody: (width, maxHeight, theme) => renderAgentsOverlayBody(activeAgents().map(snapshot), width, maxHeight, theme),
 	});
 	const updateStatus = () => {
 		overlayCard.invalidate();
@@ -678,6 +667,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			"Use agents only when the user or applicable project instructions request delegation, subagents, or parallel agent work.",
 			"Call agents with action=spawn for concrete independent tasks; multiple spawn calls can run concurrently, and the parent should continue useful non-overlapping work.",
 			"Use agents action=wait only when blocked on child results; completed children report back automatically.",
+			"After collecting a child's final result, call agents with action=close when no further follow-up is needed; completed children remain open and consume a process slot until closed.",
 			"Give concurrently writing child agents disjoint file scopes to avoid conflicting edits.",
 		],
 		parameters: withReasoning({

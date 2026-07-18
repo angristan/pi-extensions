@@ -161,6 +161,7 @@ describe("subagents", () => {
 		expect(harness.tool.parameters.properties).not.toHaveProperty("agent_type");
 		expect(harness.tool.parameters.properties).not.toHaveProperty("model");
 		expect(harness.tool.description).toContain("inherit the current model");
+		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("action=close") && guideline.includes("consume a process slot"))).toBe(true);
 	});
 
 	test("spawns immediately, inherits runtime choices, and reports completion", async () => {
@@ -186,7 +187,7 @@ describe("subagents", () => {
 		expect(harness.statuses.get("subagents")).toBeUndefined();
 	});
 
-	test("shows open agents in the shared overlay and hides after close", async () => {
+	test("shows active agents in the shared overlay and hides them after completion", async () => {
 		const harness = createHarness();
 		const card = harness.overlay.definition;
 		expect({ id: card.id, order: card.order, width: card.width }).toEqual({ id: "subagents", order: 15, width: 58 });
@@ -210,15 +211,17 @@ describe("subagents", () => {
 		body = card.renderBody(54, 6, renderTheme);
 		expect(body[2]).toContain("read");
 
-		harness.clients[0].complete("Inspection complete");
-		expect(card.visible()).toBe(true);
-		expect(card.title(renderTheme)).toContain("✓ 1 done");
-		body = card.renderBody(54, 6, renderTheme);
-		expect(body[0]).toContain("20 tok");
-		expect(body[2]).toContain("completed · /agents");
+		harness.clients[0].emit({ type: "message_end", message: assistant("Inspection complete") });
+		expect(card.renderBody(54, 6, renderTheme)[0]).toContain("20 tok");
+		harness.clients[0].emit({ type: "agent_settled" });
+		expect(card.visible()).toBe(false);
+		expect(card.renderBody(54, 6, renderTheme)).toEqual([]);
+		const listed = await harness.tool.execute("list", { action: "list" }, undefined, undefined, harness.ctx);
+		expect(listed.details.agents.find((agent: any) => agent.id === id)?.status).toBe("completed");
+		expect(harness.clients[0].stopped).toBe(false);
 
 		await harness.tool.execute("close", { action: "close", agent_id: id }, undefined, undefined, harness.ctx);
-		expect(card.visible()).toBe(false);
+		expect(harness.clients[0].stopped).toBe(true);
 		await harness.handlers.get("session_shutdown")?.({ reason: "quit" }, harness.ctx);
 		expect(harness.overlay.unregistered).toBe(true);
 		harnesses.splice(harnesses.indexOf(harness), 1);
