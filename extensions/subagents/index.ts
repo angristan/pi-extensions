@@ -3,7 +3,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Text, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { fitToolLine, formatElapsed, withReasoning } from "../better-native-pi/core.js";
-import { BOLD, GREEN, MAGENTA, RED, RESET } from "../better-native-pi/render.js";
 import { registerOverlayCard } from "../overlay-stack/index.js";
 import { createContextFork, type ContextFork } from "./context.js";
 import {
@@ -28,6 +27,7 @@ const RESULT_BYTES = 24 * 1024;
 const TOOL_OUTPUT_BYTES = 48 * 1024;
 const MAX_TASK_CHARS = 16_000;
 const MAX_MESSAGE_CHARS = 16_000;
+const MAX_AGENT_NAME_CHARS = 80;
 const TOOL_BRANCH = "  └ ";
 const TOOL_INDENT = "    ";
 const OVERLAY_WIDTH = 58;
@@ -52,6 +52,7 @@ interface AgentUsage {
 
 export interface AgentSnapshot {
 	id: string;
+	name?: string;
 	task: string;
 	contextMode: "forked" | "fresh";
 	status: AgentStatus;
@@ -111,6 +112,12 @@ function boundedInput(value: unknown, label: string, maxChars: number): string {
 	return text;
 }
 
+function optionalName(value: unknown): string | undefined {
+	if (value === undefined) return undefined;
+	if (typeof value !== "string") throw new Error("agent name must be a string");
+	return boundedInput(value, "agent name", MAX_AGENT_NAME_CHARS);
+}
+
 export function boundedText(text: string, maxBytes: number): string {
 	if (Buffer.byteLength(text) <= maxBytes) return text;
 	const marker = "\n\n[... output omitted ...]\n\n";
@@ -120,10 +127,6 @@ export function boundedText(text: string, maxBytes: number): string {
 	while (Buffer.byteLength(head + marker + tail) > maxBytes && tail.length > 0) tail = tail.slice(1);
 	while (Buffer.byteLength(head + marker + tail) > maxBytes && head.length > 0) head = head.slice(0, -1);
 	return head + marker + tail;
-}
-
-function durationText(startedAt: number, endedAt = Date.now()): string {
-	return formatElapsed(Math.max(0, endedAt - startedAt));
 }
 
 function tokenText(count: number): string {
@@ -177,9 +180,9 @@ function overlayAgentDetail(agent: AgentSnapshot): string {
 
 function renderOverlayAgent(agent: AgentSnapshot, width: number, theme: any): string[] {
 	const mark = theme.fg(statusColor(agent.status), statusSymbol(agent.status));
-	const metadata = theme.fg("dim", `${durationText(agent.startedAt, agent.endedAt)} · ${tokenText(overlayTokenCount(agent))} tok`);
+	const metadata = theme.fg("muted", `${tokenText(overlayTokenCount(agent))} tok`);
 	const idWidth = Math.max(8, width - visibleWidth(mark) - visibleWidth(metadata) - 3);
-	const identity = `${mark} ${theme.bold(compactAgentId(agent.id, idWidth))}`;
+	const identity = `${mark} ${theme.bold(compact(agent.name ?? agent.id, idWidth))}`;
 	const gap = " ".repeat(Math.max(1, width - visibleWidth(identity) - visibleWidth(metadata)));
 	const headline = truncateToWidth(`${identity}${gap}${metadata}`, width, "…");
 
@@ -230,6 +233,7 @@ function newCompletion(agent: ManagedAgent): void {
 function snapshot(agent: ManagedAgent): AgentSnapshot {
 	return {
 		id: agent.id,
+		name: agent.name,
 		task: agent.task,
 		contextMode: agent.contextMode,
 		status: agent.status,
@@ -245,8 +249,8 @@ function snapshot(agent: ManagedAgent): AgentSnapshot {
 }
 
 function formatAgent(agent: AgentSnapshot, includeOutput: boolean): string {
-	const elapsed = durationText(agent.startedAt, agent.endedAt);
-	const lines = [`${statusSymbol(agent.status)} ${agent.id} · ${agent.contextMode} context · ${agent.status} · ${elapsed}`, `task: ${sanitizeTerminal(agent.task)}`];
+	const identity = agent.name ? `${agent.name} · ${agent.id}` : agent.id;
+	const lines = [`${statusSymbol(agent.status)} ${identity} · ${agent.contextMode} context · ${agent.status}`, `task: ${sanitizeTerminal(agent.task)}`];
 	if (agent.error) lines.push(`error: ${agent.error}`);
 	const usage = usageText(agent);
 	if (usage) lines.push(`usage: ${usage}`);
@@ -325,9 +329,10 @@ function reuseAgentToolLines(context: ToolRenderContext | undefined): AgentToolL
 	return context?.lastComponent instanceof AgentToolLines ? context.lastComponent : new AgentToolLines();
 }
 
-function toolHeadline(partial: boolean, isError: boolean, verb: string, detail: string): string {
-	const mark = partial ? `${MAGENTA}•${RESET}` : isError ? `${RED}•${RESET}` : `${GREEN}•${RESET}`;
-	return `${mark} ${BOLD}${verb}${RESET}${detail ? ` ${detail}` : ""}`;
+function toolHeadline(partial: boolean, isError: boolean, verb: string, detail: string, theme: any): string {
+	const color = partial ? "accent" : isError ? "error" : "success";
+	const mark = theme.fg(color, "•");
+	return `${mark} ${theme.fg("toolTitle", theme.bold(verb))}${detail ? ` ${detail}` : ""}`;
 }
 
 function actionVerb(action: unknown, partial: boolean, details?: ToolDetails): string {
@@ -364,12 +369,13 @@ function reasoningDetail(args: Record<string, unknown> | undefined, theme: any, 
 	return partial ? theme.fg("dim", "…") : "";
 }
 
-function agentSummary(agent: AgentSnapshot, width: number, theme: any): string {
+function agentSummary(agent: AgentSnapshot, theme: any): string {
 	const mark = theme.fg(statusColor(agent.status), statusSymbol(agent.status));
-	const identity = `${mark} ${theme.bold(agent.id)} ${theme.fg("dim", `· ${agent.contextMode} context · ${agent.status} · ${durationText(agent.startedAt, agent.endedAt)}`)}`;
-	const taskWidth = Math.max(0, width - visibleWidth(TOOL_BRANCH) - visibleWidth(identity) - visibleWidth(" · "));
-	const task = taskWidth > 3 ? truncateToWidth(compact(agent.task, 240), taskWidth, "…") : "";
-	return `${identity}${task ? ` ${theme.fg("dim", `· ${task}`)}` : ""}`;
+	const identity = agent.name
+		? `${theme.bold(agent.name)} ${theme.fg("dim", `· ${compactAgentId(agent.id, 20)}`)}`
+		: theme.bold(agent.id);
+	const metadata = `${theme.fg("muted", `${agent.contextMode} context`)} · ${theme.fg(statusColor(agent.status), agent.status)}`;
+	return `${mark} ${identity} · ${metadata}`;
 }
 
 function expandedAgentLines(agent: AgentSnapshot, width: number, theme: any, includeUsage = true): string[] {
@@ -396,8 +402,8 @@ function renderAgentCall(args: Record<string, unknown>, theme: any, context: Too
 	component.update(() => {
 		const detail = actionDetail(args);
 		return [
-			toolHeadline(true, false, actionVerb(args.action, true), reasoningDetail(args, theme, true)),
-			...(detail ? [`${TOOL_BRANCH}${theme.fg("dim", detail)}`] : []),
+			toolHeadline(true, false, actionVerb(args.action, true), reasoningDetail(args, theme, true), theme),
+			...(detail ? [`${TOOL_BRANCH}${theme.fg("text", detail)}`] : []),
 		];
 	});
 	return component;
@@ -413,17 +419,19 @@ function renderAgentResult(result: any, options: ToolRenderOptions, theme: any, 
 	component.update((width) => {
 		if (context?.isError) {
 			return [
-				toolHeadline(false, true, "Agent action failed", reasoningDetail(args, theme, false)),
+				toolHeadline(false, true, "Agent action failed", reasoningDetail(args, theme, false), theme),
 				`${TOOL_BRANCH}${theme.fg("error", compact(fallback || "Unknown agent error", 240))}`,
 			];
 		}
-		const lines = [toolHeadline(false, false, actionVerb(action, false, details), reasoningDetail(args, theme, false))];
+		const lines = [toolHeadline(false, false, actionVerb(action, false, details), reasoningDetail(args, theme, false), theme)];
 		if (!details?.agents?.length) {
 			lines.push(`${TOOL_BRANCH}${theme.fg("dim", action === "wait" ? "no running agents" : "no agents in this session")}`);
 			return lines;
 		}
 		for (const agent of details.agents) {
-			lines.push(`${TOOL_BRANCH}${agentSummary(agent, width, theme)}`);
+			const taskWidth = Math.max(1, width - visibleWidth(TOOL_BRANCH));
+			lines.push(`${TOOL_BRANCH}${theme.fg("text", truncateToWidth(compact(agent.task, 240), taskWidth, "…"))}`);
+			lines.push(`${TOOL_INDENT}${agentSummary(agent, theme)}`);
 			if (options?.expanded) lines.push(...expandedAgentLines(agent, width, theme));
 		}
 		return lines;
@@ -436,11 +444,13 @@ class CompletionComponent implements Component {
 	constructor(agent: AgentSnapshot, expanded: boolean, theme: any) {
 		this.component = new AgentToolLines((width) => {
 			const failed = agent.status === "failed";
-			const detail = theme.fg("accent", theme.bold(agent.id));
-			const metadata = [compact(agent.task, 180), `${agent.contextMode} context`, durationText(agent.startedAt, agent.endedAt), usageText(agent)].filter(Boolean).join(" · ");
+			const detail = theme.fg("accent", theme.bold(agent.name ?? agent.id));
+			const metadata = [`${agent.contextMode} context`, agent.status, usageText(agent)].filter(Boolean).join(" · ");
+			const task = truncateToWidth(compact(agent.task, 240), Math.max(1, width - visibleWidth(TOOL_BRANCH)), "…");
 			const lines = [
-				toolHeadline(false, failed, failed ? "Agent failed" : "Agent completed", detail),
-				`${TOOL_BRANCH}${theme.fg("dim", metadata)}`,
+				toolHeadline(false, failed, failed ? "Agent failed" : "Agent completed", detail, theme),
+				`${TOOL_BRANCH}${theme.fg("text", task)}`,
+				`${TOOL_INDENT}${theme.fg("muted", metadata)}`,
 			];
 			if (agent.error) lines.push(`${TOOL_INDENT}${theme.fg("error", compact(agent.error, 240))}`);
 			if (expanded && agent.output) lines.push(...expandedAgentLines({ ...agent, error: undefined }, width, theme, false));
@@ -611,10 +621,11 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			if (agent.closePromise === operation) agent.closePromise = undefined;
 		}
 	};
-	const startAgent = async (task: string, ctx: any, inheritContext = true): Promise<ManagedAgent> => {
+	const startAgent = async (task: string, ctx: any, inheritContext = true, name?: string): Promise<ManagedAgent> => {
 		const normalizedTask = boundedInput(task, "spawn task", MAX_TASK_CHARS);
+		const normalizedName = optionalName(name);
 		const reservation = reserveSpawn();
-		const seed = normalizedTask.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 16) || "agent";
+		const seed = (normalizedName ?? normalizedTask).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 16) || "agent";
 		let id: string;
 		do { id = `${seed}-${randomBytes(3).toString("hex")}`; } while (agents.has(id));
 		let fork: ContextFork | undefined;
@@ -632,6 +643,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			let resolveCompletion!: () => void;
 			agent = {
 				id,
+				name: normalizedName,
 				task: normalizedTask,
 				contextMode: inheritContext ? "forked" : "fresh",
 				status: "starting",
@@ -748,7 +760,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		promptSnippet: "Spawn and coordinate isolated child agents for explicitly delegated work",
 		promptGuidelines: [
 			"Use agents only when the user or applicable project instructions request delegation, subagents, or parallel agent work.",
-			"Call agents with action=spawn for concrete independent tasks; multiple spawn calls can run concurrently, and the parent should continue useful non-overlapping work.",
+			"Call agents with action=spawn for concrete independent tasks; give each child a concise task-specific name; multiple spawn calls can run concurrently, and the parent should continue useful non-overlapping work.",
 			"Set fork_context=false for self-contained tasks that do not need the parent conversation; it defaults to true.",
 			"Use agents action=wait only when blocked on child results; completed children report back automatically.",
 			"After collecting a child's final result, call agents with action=close when no further follow-up is needed; completed children remain open and consume a process slot until closed.",
@@ -760,6 +772,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				action: { type: "string", enum: ["spawn", "send", "wait", "list", "close"], description: "Lifecycle action" },
 				task: { type: "string", maxLength: MAX_TASK_CHARS, description: "Concrete task for spawn" },
 				fork_context: { type: "boolean", description: "Whether spawn inherits the parent conversation (default true)" },
+				name: { type: "string", maxLength: MAX_AGENT_NAME_CHARS, description: "Short human-readable name for a spawned agent" },
 				agent_id: { type: "string", description: "Agent ID or unambiguous prefix for send or close" },
 				message: { type: "string", maxLength: MAX_MESSAGE_CHARS, description: "Follow-up instruction for send" },
 				agent_ids: { type: "array", items: { type: "string" }, description: "Agent IDs or prefixes for wait; defaults to all running agents" },
@@ -770,10 +783,10 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		async execute(_toolCallId: string, params: any, signal: AbortSignal | undefined, _onUpdate: any, ctx: any) {
 			if (params.action === "spawn") {
 				if (params.fork_context !== undefined && typeof params.fork_context !== "boolean") throw new Error("fork_context must be a boolean");
-				const agent = await startAgent(String(params.task ?? ""), ctx, params.fork_context ?? true);
+				const agent = await startAgent(String(params.task ?? ""), ctx, params.fork_context ?? true, params.name);
 				const data = snapshot(agent);
 				return {
-					content: [{ type: "text", text: `Started ${agent.id} for: ${agent.task}\nContinue non-overlapping work; its result will arrive automatically.` }],
+					content: [{ type: "text", text: `Started ${agent.name ? `${agent.name} (${agent.id})` : agent.id} for: ${agent.task}\nContinue non-overlapping work; its result will arrive automatically.` }],
 					details: { action: "spawn", agents: [data] } satisfies ToolDetails,
 				};
 			}
@@ -878,7 +891,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				ctx.ui.notify("No subagents in this session.", "info");
 				return;
 			}
-			const labels = ordered.map((agent) => `${statusSymbol(agent.status)} ${agent.id} · ${agent.contextMode} context · ${agent.status} · ${compact(agent.task, 72)}`);
+			const labels = ordered.map((agent) => `${statusSymbol(agent.status)} ${agent.name ?? agent.id} · ${agent.contextMode} context · ${agent.status} · ${compact(agent.task, 72)}`);
 			const selected = await ctx.ui.select(`Subagents (${ordered.filter(isActive).length} running)`, labels);
 			if (!selected) return;
 			const agent = ordered[labels.indexOf(selected)];

@@ -175,7 +175,7 @@ describe("subagents", () => {
 		const harness = createHarness();
 		expect(harness.tool).toBeDefined();
 		expect(Object.keys(harness.tool.parameters.properties)).toEqual([
-			"reasoning", "action", "task", "fork_context", "agent_id", "message", "agent_ids", "timeout_ms",
+			"reasoning", "action", "task", "fork_context", "name", "agent_id", "message", "agent_ids", "timeout_ms",
 		]);
 		expect(harness.tool.parameters.required).toEqual(["reasoning", "action"]);
 		expect(harness.tool.parameters.properties).not.toHaveProperty("agent_type");
@@ -184,6 +184,7 @@ describe("subagents", () => {
 		expect(harness.tool.parameters.properties.message.maxLength).toBe(16_000);
 		expect(harness.tool.description).toContain("inherit the current model");
 		expect(harness.tool.parameters.properties.fork_context.description).toContain("default true");
+		expect(harness.tool.parameters.properties.name).toMatchObject({ maxLength: 80, description: expect.stringContaining("human-readable") });
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("fork_context=false") && guideline.includes("defaults to true"))).toBe(true);
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("action=close") && guideline.includes("consume a process slot"))).toBe(true);
 	});
@@ -281,7 +282,9 @@ describe("subagents", () => {
 		expect(settled).toBe(call);
 		const lines = rendered(settled);
 		expect(lines[0]).toBe("• Spawned agent Delegate repository inspection");
-		expect(lines[1]).toContain(`└ ● ${result.details.agents[0].id} · forked context · running`);
+		expect(lines[1]).toBe("  └ Inspect the repository");
+		expect(lines[2]).toContain(`● ${result.details.agents[0].id} · forked context · running`);
+		expect(lines.join("\n")).not.toMatch(/\b\d+ms\b/);
 		expect(lines.every((line) => visibleWidth(line) <= 100)).toBe(true);
 	});
 
@@ -370,12 +373,32 @@ describe("subagents", () => {
 		const lines = rendered(harness.tool.renderResult(started, { isPartial: false, expanded: false }, renderTheme, {
 			args: { action: "spawn", task: "Inspect without history", fork_context: false },
 		}));
-		expect(lines[1]).toContain("fresh context");
+		expect(lines[2]).toContain("fresh context");
 		const args = harness.clients[0].options.args;
 		const sessionPath = args[args.indexOf("--session") + 1];
 		const messages = SessionManager.open(sessionPath).buildSessionContext().messages;
 		expect(messages).toEqual([]);
 		expect(harness.clients[0].prompts[0]).toContain("No parent conversation was inherited");
+	});
+
+	test("uses a supplied name while lifecycle actions keep the generated ID", async () => {
+		const harness = createHarness();
+		const started = await harness.tool.execute("call", {
+			action: "spawn",
+			task: "Review the renderer",
+			name: "renderer review",
+		}, undefined, undefined, harness.ctx);
+		const agent = started.details.agents[0];
+		expect(agent.name).toBe("renderer review");
+		expect(agent.id).toMatch(/^renderer-review-/);
+		const lines = rendered(harness.tool.renderResult(started, { isPartial: false, expanded: false }, renderTheme, {
+			args: { action: "spawn", task: "Review the renderer", name: "renderer review" },
+		}));
+		expect(lines[0]).toBe("• Spawned agent");
+		expect(lines[1]).toBe("  └ Review the renderer");
+		expect(lines[2]).toContain("● renderer review · renderer-rev");
+		await harness.tool.execute("send", { action: "send", agent_id: agent.id, message: "Check tests too" }, undefined, undefined, harness.ctx);
+		expect(harness.clients[0].steering).toEqual(["Check tests too"]);
 	});
 
 	test("rejects invalid context inheritance values", async () => {

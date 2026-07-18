@@ -3,8 +3,10 @@
 Run generic child agents in isolated persistent conversations while the parent
 continues working.
 
-There are no named roles or agent presets. Every child inherits the current
-model, thinking level, active tools, working directory, and project instructions.
+There are no named roles or agent presets. Give each child a concise name when
+spawning it; the name labels the transcript while the generated ID still targets
+follow-ups. Every child inherits the current model, thinking level, active tools,
+working directory, and project instructions.
 By default it also inherits compaction-aware conversation context; set
 `fork_context: false` for a fresh conversation containing only the explicit task.
 The explicit child task is the only specialization.
@@ -17,7 +19,7 @@ tools.
 
 | Action | Fields | Behavior |
 |---|---|---|
-| `spawn` | `task`, `fork_context?` | Start a child and immediately return its ID; context inheritance defaults to `true` |
+| `spawn` | `task`, `name?`, `fork_context?` | Start a named child and immediately return its generated ID; context inheritance defaults to `true` |
 | `send` | `agent_id`, `message` | Steer a running child or continue an idle child |
 | `wait` | `agent_ids?`, `timeout_ms?` | Wait for selected children, or every running child |
 | `list` | — | List child status without waiting |
@@ -43,13 +45,14 @@ for the children being awaited, so their results appear only once.
 
 ## UI
 
-Calls use the same two-row, semantic design as the other tools: a magenta
-progress headline becomes a green or red settled headline, with targets and
-status on an indented branch.
+Calls use semantic theme colors: an accent progress headline becomes a success
+or error headline when settled. The child prompt occupies its own second line;
+identity and status follow beneath it.
 
 ```text
 • Spawned agent Delegate API review
-  └ ● api-review-a1b2c3 · forked context · running · Inspect the API changes
+  └ Inspect the API changes
+    ● api review · api-review-a1b2c3 · forked context · running
 ```
 
 In TUI mode, actively running children also appear in the shared top-right
@@ -57,16 +60,16 @@ overlay stack:
 
 ```text
  Agents ● 2 running
- ● api-review-a1b2c3              18s · 42k tok
+ ● api review                      42k tok
    Inspect the API changes
    ↳ read: extensions/subagents/index.ts
- ● test-audit-d4e5f6               9s · 31k tok
+ ● test audit                       31k tok
    Find missing renderer coverage
    ↳ bash: bun test extensions/subagents
 ```
 
 Each active child gets three rows for identity and usage, a dedicated task
-preview, and latest activity. The token total combines input, output,
+preview, and latest activity. Elapsed startup time is intentionally omitted. The token total combines input, output,
 cache-read, and cache-write usage across the persistent conversation. Completed
 and failed children disappear from the live overlay as soon as they settle, but
 remain available through `/agents` while their conversation is open. The card
@@ -81,7 +84,7 @@ The footer still reports active children:
 2 subagents running · /agents to view
 ```
 
-Collapsed rows identify whether the child received `forked context` or a `fresh context`.
+Collapsed rows show the child name or generated ID and identify whether it received `forked context` or a `fresh context`.
 Use `/agents` to list children and inspect their latest result. Child completion
 messages use the same card design and show task, context mode, status, model,
 turns, tokens, and cost. Expand `wait` or `list` results and completion messages
