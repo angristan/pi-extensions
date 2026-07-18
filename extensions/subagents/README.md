@@ -47,10 +47,11 @@ reported.
 
 ## UI
 
-Calls use semantic theme colors: an accent progress headline becomes a success
-or error headline when settled. Identity and status come first, followed by an
-explicit dimmed prompt and, once available, a short emphasized result preview
-and usage line. Waited and automatic completions share the exact same body.
+Calls use semantic theme colors: the state symbol and status reflect lifecycle,
+the agent name and `prompt` label use the theme accent, IDs and context recede,
+prompt text and usage values stay dim, and the `result` label carries success or
+error color while result text remains readable. Identity and status come first,
+followed by prompt, result preview, and usage. Waited and automatic completions share the exact same body.
 
 ```text
 • Agent completed
@@ -79,8 +80,8 @@ overlay stack:
 Each active child gets three rows for identity and usage, a dedicated task
 preview, and latest activity. Elapsed startup time is intentionally omitted. The
 token total combines input, output, cache-read, and cache-write usage across the
-persistent conversation. Completed and failed children disappear from the live overlay as soon as they settle, but
-remain available through `/agents` while their conversation is open. The card
+persistent conversation. Completed and failed children disappear from the live
+overlay as soon as they settle, but remain available through `/agents` while their conversation is open. The card
 hides automatically when no children are running. It shows up to three detailed
 children and uses an `/agents` overflow hint when space permits. The card hides
 on terminals narrower than 90 columns or shorter than 10 rows. Use `/overlay`

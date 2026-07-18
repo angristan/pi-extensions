@@ -166,6 +166,14 @@ const renderTheme = {
 	bold: (text: string) => text,
 };
 
+const semanticTheme = {
+	fg(color: string, text: string) {
+		const codes: Record<string, number> = { accent: 35, success: 32, error: 31, muted: 90, dim: 2, text: 39, toolTitle: 36 };
+		return `\x1b[${codes[color] ?? 39}m${text}\x1b[0m`;
+	},
+	bold: (text: string) => text,
+};
+
 function rendered(component: any, width = 100): string[] {
 	return component.render(width).map((line: string) => line.replace(/\x1b\[[0-9;]*m/g, ""));
 }
@@ -340,6 +348,11 @@ describe("subagents", () => {
 		expect(compactLines[2]).toBe("    prompt  Review renderer");
 		expect(compactLines[3]).toBe("    result  Renderer matches the shared design.");
 		expect(compactLines[4]).toContain("    usage   1 turn · ↑10 · ↓5 · R2 · W3 · $0.0100 · test-provider/test-model");
+		const styledLines = renderer(message, { expanded: false }, semanticTheme).render(100);
+		expect(styledLines[1]).toContain("\x1b[35mreview-renderer-");
+		expect(styledLines[2]).toContain("\x1b[35mprompt\x1b[0m  \x1b[2mReview renderer\x1b[0m");
+		expect(styledLines[3]).toContain("\x1b[32mresult\x1b[0m  \x1b[39mRenderer matches the shared design.\x1b[0m");
+		expect(styledLines[4]).toContain("\x1b[90musage \x1b[0m  \x1b[2m1 turn");
 		const waitArgs = { reasoning: "Collect reported result", action: "wait", agent_ids: [message.details.id], timeout_ms: 1_000 };
 		const waited = await harness.tool.execute("wait", waitArgs, undefined, undefined, harness.ctx);
 		expect(waited.details.alreadyReportedAgentIds).toEqual([message.details.id]);
@@ -408,14 +421,11 @@ describe("subagents", () => {
 		expect(lines[0]).toBe("• Spawned agent");
 		expect(lines[1]).toContain("└ ● renderer review · renderer-rev");
 		expect(lines[2]).toBe("    prompt  Review the renderer");
-		const dimTheme = {
-			fg: (color: string, text: string) => color === "dim" ? `\x1b[2m${text}\x1b[0m` : text,
-			bold: (text: string) => text,
-		};
-		const styled = harness.tool.renderResult(started, { isPartial: false, expanded: false }, dimTheme, {
+		const styled = harness.tool.renderResult(started, { isPartial: false, expanded: false }, semanticTheme, {
 			args: { action: "spawn", task: "Review the renderer", name: "renderer review" },
 		}).render(100);
-		expect(styled[2]).toContain("prompt  \x1b[2mReview the renderer\x1b[0m");
+		expect(styled[1]).toContain("\x1b[35mrenderer review\x1b[0m");
+		expect(styled[2]).toContain("\x1b[35mprompt\x1b[0m  \x1b[2mReview the renderer\x1b[0m");
 		const sendArgs = { reasoning: "Refine delegated review", action: "send", agent_id: agent.id, message: "Check tests too" };
 		const sent = await harness.tool.execute("send", sendArgs, undefined, undefined, harness.ctx);
 		expect(harness.clients[0].steering).toEqual(["Check tests too"]);

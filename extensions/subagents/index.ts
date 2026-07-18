@@ -375,8 +375,8 @@ function reasoningDetail(args: Record<string, unknown> | undefined, theme: any, 
 function agentSummary(agent: AgentSnapshot, theme: any): string {
 	const mark = theme.fg(statusColor(agent.status), statusSymbol(agent.status));
 	const identity = agent.name
-		? `${theme.bold(agent.name)} ${theme.fg("dim", `· ${compactAgentId(agent.id, 20)}`)}`
-		: theme.bold(agent.id);
+		? `${theme.fg("accent", theme.bold(agent.name))} ${theme.fg("dim", `· ${compactAgentId(agent.id, 20)}`)}`
+		: theme.fg("accent", theme.bold(agent.id));
 	const metadata = `${theme.fg("muted", `${agent.contextMode} context`)} · ${theme.fg(statusColor(agent.status), agent.status)}`;
 	return `${mark} ${identity} · ${metadata}`;
 }
@@ -384,11 +384,13 @@ function agentSummary(agent: AgentSnapshot, theme: any): string {
 type DetailLabel = "prompt" | "result" | "usage" | "error";
 
 function detailPrefix(label: DetailLabel, theme: any, indent = TOOL_INDENT, failed = false): string {
-	const labelColor = label === "result"
-		? (failed ? "error" : "success")
-		: label === "error"
-			? "error"
-			: "muted";
+	const labelColor = label === "prompt"
+		? "accent"
+		: label === "result"
+			? (failed ? "error" : "success")
+			: label === "error"
+				? "error"
+				: "muted";
 	return `${indent}${theme.fg(labelColor, label.padEnd(6))}  `;
 }
 
@@ -425,7 +427,7 @@ function agentBodyLines(
 	theme: any,
 	options: { prompt?: string; showResult?: boolean; showUsage?: boolean; expanded?: boolean } = {},
 ): string[] {
-	const lines = [`${TOOL_BRANCH}${agentSummary(agent, theme)}`];
+	const lines = [`${theme.fg("dim", TOOL_BRANCH)}${agentSummary(agent, theme)}`];
 	if (options.prompt) lines.push(detailLine("prompt", compact(options.prompt, 240), width, theme));
 	if (options.showResult && agent.output) {
 		lines.push(...(options.expanded
@@ -450,7 +452,7 @@ function renderAgentCall(args: Record<string, unknown>, theme: any, context: Too
 		return [
 			toolHeadline(true, false, actionVerb(args.action, true), reasoningDetail(args, theme, true), theme),
 			...(detail ? [args.action === "spawn"
-				? detailLine("prompt", detail, width, theme, TOOL_BRANCH)
+				? detailLine("prompt", detail, width, theme, theme.fg("dim", TOOL_BRANCH))
 				: `${TOOL_BRANCH}${theme.fg("text", detail)}`] : []),
 		];
 	});
