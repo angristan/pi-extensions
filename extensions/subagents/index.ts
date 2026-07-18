@@ -29,7 +29,8 @@ const TOOL_OUTPUT_BYTES = 48 * 1024;
 const TOOL_BRANCH = "  └ ";
 const TOOL_INDENT = "    ";
 const OVERLAY_WIDTH = 58;
-const OVERLAY_MAX_ROWS = 6;
+const OVERLAY_AGENT_ROWS = 3;
+const OVERLAY_MAX_ROWS = 10;
 
 const CHILD_PROMPT = `You are a delegated child agent working in an isolated conversation.
 Complete only the explicit task below. The inherited conversation is context, not a request to continue unrelated work.
@@ -150,35 +151,47 @@ function compactAgentId(id: string, width: number): string {
 	return `${truncateToWidth(id, Math.max(1, width - visibleWidth(suffix) - 1), "")}…${suffix}`;
 }
 
-function overlayAgentDetail(agent: AgentSnapshot): string {
-	if (agent.status === "completed") return "completed";
-	if (agent.status === "failed") return compact(agent.error || "failed", 160);
-	return compact(agent.activity.at(-1) || agent.task || agent.status, 160);
+function overlayTokenCount(agent: AgentSnapshot): number {
+	return agent.usage.input + agent.usage.output + agent.usage.cacheRead + agent.usage.cacheWrite;
 }
 
-function renderOverlayAgent(agent: AgentSnapshot, width: number, theme: any): string {
+function overlayAgentDetail(agent: AgentSnapshot): string {
+	if (agent.status === "completed") return "completed · /agents";
+	if (agent.status === "failed") return `${compact(agent.error || "failed", 140)} · /agents`;
+	return compact(agent.activity.at(-1) || (agent.status === "starting" ? "starting" : "working"), 160);
+}
+
+function renderOverlayAgent(agent: AgentSnapshot, width: number, theme: any): string[] {
 	const mark = theme.fg(statusColor(agent.status), statusSymbol(agent.status));
-	const idWidth = Math.max(8, Math.min(22, Math.floor(width * 0.42)));
+	const metadata = theme.fg("dim", `${durationText(agent.startedAt, agent.endedAt)} · ${tokenText(overlayTokenCount(agent))} tok`);
+	const idWidth = Math.max(8, width - visibleWidth(mark) - visibleWidth(metadata) - 3);
 	const identity = `${mark} ${theme.bold(compactAgentId(agent.id, idWidth))}`;
-	const elapsed = theme.fg("dim", durationText(agent.startedAt, agent.endedAt));
-	const detailWidth = Math.max(0, width - visibleWidth(identity) - visibleWidth(elapsed) - 2);
-	const detailText = detailWidth > 3 ? truncateToWidth(overlayAgentDetail(agent), detailWidth, "…") : "";
-	const detail = agent.status === "completed"
-		? theme.fg("success", detailText)
+	const gap = " ".repeat(Math.max(1, width - visibleWidth(identity) - visibleWidth(metadata)));
+	const headline = truncateToWidth(`${identity}${gap}${metadata}`, width, "…");
+
+	const taskPrefix = "  ";
+	const task = truncateToWidth(compact(agent.task, 240), Math.max(1, width - visibleWidth(taskPrefix)), "…");
+	const taskLine = truncateToWidth(`${taskPrefix}${theme.fg("text", task)}`, width, "…");
+
+	const activityPrefix = theme.fg("dim", "  ↳ ");
+	const activityWidth = Math.max(1, width - visibleWidth(activityPrefix));
+	const activityText = truncateToWidth(overlayAgentDetail(agent), activityWidth, "…");
+	const activity = agent.status === "completed"
+		? theme.fg("success", activityText)
 		: agent.status === "failed"
-			? theme.fg("error", detailText)
-			: theme.fg("dim", detailText);
-	return truncateToWidth([identity, elapsed, detail].filter(Boolean).join(" "), width, "…");
+			? theme.fg("error", activityText)
+			: theme.fg("dim", activityText);
+	const activityLine = truncateToWidth(`${activityPrefix}${activity}`, width, "…");
+	return [headline, taskLine, activityLine];
 }
 
 export function renderAgentsOverlayBody(agents: AgentSnapshot[], width: number, maxHeight: number, theme: any): string[] {
 	const rowBudget = Math.max(0, Math.min(OVERLAY_MAX_ROWS, maxHeight));
-	if (rowBudget === 0 || agents.length === 0) return [];
-	const reserveOverflow = agents.length > rowBudget && rowBudget > 1;
-	const shown = agents.slice(0, reserveOverflow ? rowBudget - 1 : rowBudget);
-	const lines = shown.map((agent) => renderOverlayAgent(agent, width, theme));
-	const hidden = agents.length - shown.length;
-	if (reserveOverflow && hidden > 0) lines.push(theme.fg("dim", `… ${hidden} more · /agents`));
+	if (rowBudget < OVERLAY_AGENT_ROWS || agents.length === 0) return [];
+	const shownCount = Math.min(agents.length, Math.floor(rowBudget / OVERLAY_AGENT_ROWS));
+	const lines = agents.slice(0, shownCount).flatMap((agent) => renderOverlayAgent(agent, width, theme));
+	const hidden = agents.length - shownCount;
+	if (hidden > 0 && lines.length < rowBudget) lines.push(theme.fg("dim", `… ${hidden} more · /agents`));
 	return lines.map((line) => truncateToWidth(line, width, "…"));
 }
 
@@ -436,7 +449,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		id: "subagents",
 		order: 15,
 		width: OVERLAY_WIDTH,
-		minBodyHeight: 1,
+		minBodyHeight: OVERLAY_AGENT_ROWS,
 		minTerminalWidth: 90,
 		minTerminalHeight: 10,
 		visible: () => displayedAgents().length > 0,

@@ -21,7 +21,7 @@ function assistant(text: string, stopReason = "stop"): any {
 		api: "test",
 		provider: "test-provider",
 		model: "test-model",
-		usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 0, totalTokens: 17, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 } },
+		usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 3, totalTokens: 20, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 } },
 		stopReason,
 		timestamp: Date.now(),
 	};
@@ -197,20 +197,25 @@ describe("subagents", () => {
 		expect(card.visible()).toBe(true);
 		expect(card.title(renderTheme)).toContain("Agents ● 1 running");
 		let body = card.renderBody(54, 6, renderTheme);
+		expect(body).toHaveLength(3);
 		expect(body[0]).toContain(id.slice(-7));
-		expect(body[0]).toContain("Inspect");
+		expect(body[0]).toContain("0 tok");
+		expect(body[1]).toContain("Inspect a very long repository task");
+		expect(body[2]).toContain("working");
 		expect(body.every((line: string) => visibleWidth(line) <= 54)).toBe(true);
 
 		const invalidations = harness.overlay.invalidations;
 		harness.clients[0].emit({ type: "tool_execution_start", toolName: "read", args: { path: "index.ts" } });
 		expect(harness.overlay.invalidations).toBeGreaterThan(invalidations);
 		body = card.renderBody(54, 6, renderTheme);
-		expect(body[0]).toContain("read");
+		expect(body[2]).toContain("read");
 
 		harness.clients[0].complete("Inspection complete");
 		expect(card.visible()).toBe(true);
 		expect(card.title(renderTheme)).toContain("✓ 1 done");
-		expect(card.renderBody(54, 6, renderTheme)[0]).toContain("completed");
+		body = card.renderBody(54, 6, renderTheme);
+		expect(body[0]).toContain("20 tok");
+		expect(body[2]).toContain("completed · /agents");
 
 		await harness.tool.execute("close", { action: "close", agent_id: id }, undefined, undefined, harness.ctx);
 		expect(card.visible()).toBe(false);
@@ -224,9 +229,9 @@ describe("subagents", () => {
 		await spawnAgent(harness, "First overlay task");
 		await spawnAgent(harness, "Second overlay task");
 		await spawnAgent(harness, "Third overlay task");
-		const lines = harness.overlay.definition.renderBody(38, 2, renderTheme);
-		expect(lines).toHaveLength(2);
-		expect(lines[1]).toContain("… 2 more · /agents");
+		const lines = harness.overlay.definition.renderBody(38, 4, renderTheme);
+		expect(lines).toHaveLength(4);
+		expect(lines[3]).toContain("… 2 more · /agents");
 		expect(lines.every((line: string) => visibleWidth(line) <= 38)).toBe(true);
 	});
 
@@ -376,11 +381,11 @@ describe("subagents", () => {
 		const id = started.details.agents[0].id;
 		await harness.tool.execute("send-running", { action: "send", agent_id: id, message: "Focus on tests" }, undefined, undefined, harness.ctx);
 		expect(harness.clients[0].steering).toEqual(["Focus on tests"]);
-		expect(harness.overlay.definition.renderBody(54, 6, renderTheme)[0]).toContain("steered: Focus on tests");
+		expect(harness.overlay.definition.renderBody(54, 6, renderTheme)[2]).toContain("steered: Focus on tests");
 		harness.clients[0].complete("Initial result");
 		await harness.tool.execute("send-idle", { action: "send", agent_id: id, message: "Now inspect docs" }, undefined, undefined, harness.ctx);
 		expect(harness.clients[0].prompts.at(-1)).toBe("Now inspect docs");
-		expect(harness.overlay.definition.renderBody(54, 6, renderTheme)[0]).toContain("follow-up: Now inspect");
+		expect(harness.overlay.definition.renderBody(54, 6, renderTheme)[2]).toContain("follow-up: Now inspect");
 	});
 
 	test("enforces the open-agent limit until a child is closed", async () => {

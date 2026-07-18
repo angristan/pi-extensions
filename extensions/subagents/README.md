@@ -55,17 +55,26 @@ In TUI mode, open children also appear in the shared top-right overlay stack:
 
 ```text
  Agents ● 2 running · ✓ 1 done
- ● api-review-a1b2c3  18s  read
- ● test-audit-d4e5f6   9s  bash: bun test
- ✓ docs-check-123abc  31s  completed
+ ● api-review-a1b2c3              18s · 42k tok
+   Inspect the API changes
+   ↳ read: extensions/subagents/index.ts
+ ● test-audit-d4e5f6               9s · 31k tok
+   Find missing renderer coverage
+   ↳ bash: bun test extensions/subagents
+ ✓ docs-check-123abc              31s · 18k tok
+   Verify the extension documentation
+   ↳ completed · /agents
 ```
 
-Active children appear first with their latest tool activity. Completed and
-failed children remain visible while their persistent conversation is open,
-then disappear on `close`; the card hides automatically when none remain. It
-shows at most six rows, reports additional children with an `/agents` hint, and
-hides on terminals narrower than 90 columns or shorter than 10 rows. Use
-`/overlay` or `Ctrl+Shift+O` to toggle the shared overlay stack.
+Each child gets three rows for identity and usage, a dedicated task preview,
+and latest activity. The token total combines input, output, cache-read, and
+cache-write usage across the persistent conversation. Active children appear
+first. Completed and failed children remain visible while their conversation is
+open, then disappear on `close`; the card hides automatically when none remain.
+It shows up to three detailed children and uses an `/agents` overflow hint when
+space permits. The card hides on terminals narrower than 90 columns or shorter
+than 10 rows. Use `/overlay` or `Ctrl+Shift+O` to toggle the shared overlay
+stack.
 
 The footer still reports active children:
 
