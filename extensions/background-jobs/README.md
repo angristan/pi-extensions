@@ -41,8 +41,8 @@ without mixing metadata into command output:
   └ ● demo-loop-a1b2c3d4 · running · /ps
 ```
 
-`terminal_write` and `job_output` use the same colored `•` headline, dim
-terminal name, accent reasoning, dim `│` command-output gutter, tail-first
+`terminal_write` and `job_output` use the same colored `•` headline, distinct
+heading-colored terminal name, accent reasoning, dim `│` command-output gutter, tail-first
 collapse, and `└` metadata hierarchy: `Interacted with <terminal> to <goal>`,
 `Waited for <terminal> to <goal>`, or `Read from <terminal> to <goal>`. The
 `/jobs` and `/ps` live viewer uses that same normal command-output treatment.

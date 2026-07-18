@@ -516,7 +516,7 @@ class TerminalInteractionComponent {
 		const color = statusColor(details.status);
 		const name = details.description || details.id;
 		const reasoning = typeof this.args?.reasoning === "string" ? compactCommand(this.args.reasoning, 96) : "";
-		const terminal = this.theme.fg("dim", compactCommand(name, 64));
+		const terminal = this.theme.fg("mdHeading", compactCommand(name, 64));
 		const goal = reasoning ? ` ${this.theme.fg("dim", "to")} ${this.theme.fg("accent", reasoning)}` : "";
 		const elapsed = compactDuration(duration(details, this.observedAt));
 		const header = `${this.theme.fg(color, "•")} ${verb} ${terminal}${goal} ${this.theme.fg("dim", `· ${details.status} in ${elapsed}`)}`;
