@@ -35,7 +35,7 @@ const OVERLAY_AGENT_ROWS = 3;
 const OVERLAY_MAX_ROWS = 10;
 
 const CHILD_PROMPT = `You are a delegated child agent working in an isolated conversation.
-Complete only the explicit task below. The inherited conversation is context, not a request to continue unrelated work.
+Complete only the explicit task below.
 Work autonomously with the available tools. Return a concise final result with relevant file paths, commands, findings, or remaining blockers.
 Do not ask the user questions; report any missing information to the parent agent.`;
 
@@ -269,8 +269,11 @@ function buildArgs(pi: ExtensionAPI, ctx: any, fork: ContextFork): string[] {
 	return args;
 }
 
-function childTask(id: string, task: string): string {
-	return `${CHILD_PROMPT}\n\nChild agent id: ${id}\n\nTask:\n${task.trim()}`;
+function childTask(id: string, task: string, inheritedContext: boolean): string {
+	const contextNote = inheritedContext
+		? "The inherited conversation is context, not a request to continue unrelated work."
+		: "No parent conversation was inherited; rely on the explicit task and available project instructions.";
+	return `${CHILD_PROMPT}\n${contextNote}\n\nChild agent id: ${id}\n\nTask:\n${task.trim()}`;
 }
 
 function messageContent(agent: AgentSnapshot): string {
@@ -606,7 +609,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			if (agent.closePromise === operation) agent.closePromise = undefined;
 		}
 	};
-	const startAgent = async (task: string, ctx: any): Promise<ManagedAgent> => {
+	const startAgent = async (task: string, ctx: any, inheritContext = true): Promise<ManagedAgent> => {
 		const normalizedTask = boundedInput(task, "spawn task", MAX_TASK_CHARS);
 		const reservation = reserveSpawn();
 		const seed = normalizedTask.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 16) || "agent";
@@ -615,7 +618,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		let fork: ContextFork | undefined;
 		let agent: ManagedAgent | undefined;
 		try {
-			fork = await forkContext(ctx);
+			fork = await forkContext(ctx, inheritContext);
 			assertCurrentSession(reservation.generation);
 			const invocation = getPiInvocation(buildArgs(pi, ctx, fork));
 			const client = createClient({
@@ -681,7 +684,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			assertCurrentSession(reservation.generation);
 			if (agent.status === "closed") throw new Error("Subagent closed during startup");
 			agent.status = "running";
-			await client.prompt(childTask(id, normalizedTask));
+			await client.prompt(childTask(id, normalizedTask, inheritContext));
 			assertCurrentSession(reservation.generation);
 			updateStatus();
 			return agent;
@@ -738,11 +741,12 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	pi.registerTool({
 		name: TOOL_NAME,
 		label: "Agents",
-		description: "Spawn and coordinate generic child agents with isolated persistent context. Actions: spawn starts one and returns its ID immediately; send continues it; wait collects one or more results; list shows status; close stops and releases it. Children inherit the current model, tools, working directory, project instructions, and conversation context. Completion results also arrive automatically.",
+		description: "Spawn and coordinate generic child agents with isolated persistent context. Actions: spawn starts one and returns its ID immediately; send continues it; wait collects one or more results; list shows status; close stops and releases it. Children inherit the current model, tools, working directory, and project instructions; conversation context is inherited by default and can be disabled per spawn. Completion results also arrive automatically.",
 		promptSnippet: "Spawn and coordinate isolated child agents for explicitly delegated work",
 		promptGuidelines: [
 			"Use agents only when the user or applicable project instructions request delegation, subagents, or parallel agent work.",
 			"Call agents with action=spawn for concrete independent tasks; multiple spawn calls can run concurrently, and the parent should continue useful non-overlapping work.",
+			"Set fork_context=false for self-contained tasks that do not need the parent conversation; it defaults to true.",
 			"Use agents action=wait only when blocked on child results; completed children report back automatically.",
 			"After collecting a child's final result, call agents with action=close when no further follow-up is needed; completed children remain open and consume a process slot until closed.",
 			"Give concurrently writing child agents disjoint file scopes to avoid conflicting edits.",
@@ -752,6 +756,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			properties: {
 				action: { type: "string", enum: ["spawn", "send", "wait", "list", "close"], description: "Lifecycle action" },
 				task: { type: "string", maxLength: MAX_TASK_CHARS, description: "Concrete task for spawn" },
+				fork_context: { type: "boolean", description: "Whether spawn inherits the parent conversation (default true)" },
 				agent_id: { type: "string", description: "Agent ID or unambiguous prefix for send or close" },
 				message: { type: "string", maxLength: MAX_MESSAGE_CHARS, description: "Follow-up instruction for send" },
 				agent_ids: { type: "array", items: { type: "string" }, description: "Agent IDs or prefixes for wait; defaults to all running agents" },
@@ -761,7 +766,8 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		} as any),
 		async execute(_toolCallId: string, params: any, signal: AbortSignal | undefined, _onUpdate: any, ctx: any) {
 			if (params.action === "spawn") {
-				const agent = await startAgent(String(params.task ?? ""), ctx);
+				if (params.fork_context !== undefined && typeof params.fork_context !== "boolean") throw new Error("fork_context must be a boolean");
+				const agent = await startAgent(String(params.task ?? ""), ctx, params.fork_context ?? true);
 				const data = snapshot(agent);
 				return {
 					content: [{ type: "text", text: `Started ${agent.id} for: ${agent.task}\nContinue non-overlapping work; its result will arrive automatically.` }],

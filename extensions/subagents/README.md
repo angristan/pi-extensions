@@ -4,9 +4,10 @@ Run generic child agents in isolated persistent conversations while the parent
 continues working.
 
 There are no named roles or agent presets. Every child inherits the current
-model, thinking level, active tools, working directory, project instructions,
-and compaction-aware conversation context. The explicit child task is the only
-specialization.
+model, thinking level, active tools, working directory, and project instructions.
+By default it also inherits compaction-aware conversation context; set
+`fork_context: false` for a fresh conversation containing only the explicit task.
+The explicit child task is the only specialization.
 
 ## Agent tool
 
@@ -16,7 +17,7 @@ tools.
 
 | Action | Fields | Behavior |
 |---|---|---|
-| `spawn` | `task` | Start a child and immediately return its ID |
+| `spawn` | `task`, `fork_context?` | Start a child and immediately return its ID; context inheritance defaults to `true` |
 | `send` | `agent_id`, `message` | Steer a running child or continue an idle child |
 | `wait` | `agent_ids?`, `timeout_ms?` | Wait for selected children, or every running child |
 | `list` | — | List child status without waiting |
@@ -90,8 +91,9 @@ to see the child's rendered output.
 Each child is a persistent `pi --mode rpc` subprocess backed by a temporary
 session:
 
-- The active parent context is copied with compaction already applied.
-- The unresolved assistant tool-call turn is excluded from the fork.
+- By default, the active parent context is copied with compaction already applied.
+- Set `fork_context: false` to start without parent conversation messages while retaining project instructions and runtime configuration.
+- When context is inherited, the unresolved assistant tool-call turn is excluded from the fork.
 - The child runs in the same working directory and sees the same project files.
 - Child dialogs are cancelled because no interactive UI is attached to the RPC process.
 - Follow-ups reuse the same child conversation.

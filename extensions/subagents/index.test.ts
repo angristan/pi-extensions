@@ -175,7 +175,7 @@ describe("subagents", () => {
 		const harness = createHarness();
 		expect(harness.tool).toBeDefined();
 		expect(Object.keys(harness.tool.parameters.properties)).toEqual([
-			"reasoning", "action", "task", "agent_id", "message", "agent_ids", "timeout_ms",
+			"reasoning", "action", "task", "fork_context", "agent_id", "message", "agent_ids", "timeout_ms",
 		]);
 		expect(harness.tool.parameters.required).toEqual(["reasoning", "action"]);
 		expect(harness.tool.parameters.properties).not.toHaveProperty("agent_type");
@@ -183,6 +183,8 @@ describe("subagents", () => {
 		expect(harness.tool.parameters.properties.task.maxLength).toBe(16_000);
 		expect(harness.tool.parameters.properties.message.maxLength).toBe(16_000);
 		expect(harness.tool.description).toContain("inherit the current model");
+		expect(harness.tool.parameters.properties.fork_context.description).toContain("default true");
+		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("fork_context=false") && guideline.includes("defaults to true"))).toBe(true);
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("action=close") && guideline.includes("consume a process slot"))).toBe(true);
 	});
 
@@ -355,6 +357,30 @@ describe("subagents", () => {
 		const messages = child.buildSessionContext().messages;
 		expect(messages.some((message: any) => message.role === "user" && message.content === "Delegate this")).toBe(true);
 		expect(messages.some((message: any) => message.role === "assistant" && message.content?.some?.((part: any) => part.type === "toolCall"))).toBe(false);
+	});
+
+	test("starts with fresh conversation context when requested", async () => {
+		const harness = createHarness({ withPendingToolCall: true });
+		await harness.tool.execute("call", {
+			action: "spawn",
+			task: "Inspect without history",
+			fork_context: false,
+		}, undefined, undefined, harness.ctx);
+		const args = harness.clients[0].options.args;
+		const sessionPath = args[args.indexOf("--session") + 1];
+		const messages = SessionManager.open(sessionPath).buildSessionContext().messages;
+		expect(messages).toEqual([]);
+		expect(harness.clients[0].prompts[0]).toContain("No parent conversation was inherited");
+	});
+
+	test("rejects invalid context inheritance values", async () => {
+		const harness = createHarness();
+		await expect(harness.tool.execute("call", {
+			action: "spawn",
+			task: "Inspect context",
+			fork_context: "false",
+		}, undefined, undefined, harness.ctx)).rejects.toThrow("fork_context must be a boolean");
+		expect(harness.clients).toHaveLength(0);
 	});
 
 	test("forks before a sequential tool batch with unresolved sibling calls", () => {

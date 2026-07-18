@@ -65,7 +65,7 @@ function appendInheritedMessage(session: SessionManager, message: any): void {
 	session.appendMessage(structuredClone(message));
 }
 
-export async function createContextFork(ctx: any): Promise<ContextFork> {
+export async function createContextFork(ctx: any, inheritContext = true): Promise<ContextFork> {
 	const directory = await mkdtemp(join(tmpdir(), "pi-subagent-"));
 	let cleanupPromise: Promise<void> | undefined;
 	try {
@@ -86,7 +86,7 @@ export async function createContextFork(ctx: any): Promise<ContextFork> {
 		const session = SessionManager.open(sessionFile, directory, ctx.cwd);
 		if (context.model) session.appendModelChange(context.model.provider, context.model.modelId);
 		if (context.thinkingLevel) session.appendThinkingLevelChange(context.thinkingLevel);
-		const messages = forkableMessages(context);
+		const messages = inheritContext ? forkableMessages(context) : [];
 		for (const message of messages) appendInheritedMessage(session, message);
 		return {
 			directory,
