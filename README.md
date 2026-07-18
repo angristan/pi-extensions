@@ -62,6 +62,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | [`plan-progress`](extensions/plan-progress/) | Track a multi-step plan as a collapsible overlay above the editor, and expose a tool the agent can call to maintain it |
 | [`questions`](extensions/questions/) | A tool the agent can call to ask you structured questions and preserve the answers in the transcript |
 | [`side-chat`](extensions/side-chat/) | An ephemeral, read-only side question about the current conversation, without changing the main transcript |
+| [`subagents`](extensions/subagents/) | Spawn and coordinate generic child agents with isolated persistent conversations |
 
 ### Tools & integrations
 
