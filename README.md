@@ -2,7 +2,8 @@
 
 A collection of [pi](https://github.com/earendil-works/pi-coding-agent) TUI
 extensions: nicer tool-block rendering, context telemetry, goal/plan tracking,
-background jobs, working timers, and quality-of-life features for the terminal UI.
+background jobs, image sidecars, working timers, and quality-of-life features for
+the terminal UI.
 
 These are generic extensions with no third-party npm dependencies. They ship
 together because a few share rendering helpers and runtime services, as shown
@@ -80,6 +81,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 |---|---|
 | [`cached-line-resets`](extensions/cached-line-resets/) | Caches pi's per-line ANSI reset application so rendering large transcript regions stays fast |
 | [`doctor`](extensions/doctor/) | Run diagnostics on your pi setup |
+| [`image-store`](extensions/image-store/) | Stores image payloads as deduplicated sidecars and renders transcript history lazily |
 
 Each extension has its own `README.md` with commands, config, and sample output.
 
