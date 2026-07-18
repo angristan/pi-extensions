@@ -285,14 +285,14 @@ function renderSearchResult(
 		for (const [index, item] of shownResults.entries()) {
 			const url = resultUrl(item);
 			const label = sourceUrl(item);
-			const rendered = url ? hyperlink(theme.fg("mdLink", label), url) : theme.fg("muted", label);
+			const rendered = url ? hyperlink(theme.fg("text", label), url) : theme.fg("muted", label);
 			const website = resultWebsite(item);
 			const itemSearchEngine = resultSearchEngine(item);
 			const itemDate = formatDisplayDate(item.date);
 			const via = !searchEngine && itemSearchEngine && itemSearchEngine.toLowerCase() !== website?.toLowerCase() ? `via ${itemSearchEngine}` : undefined;
 			const meta = [
 				via ? theme.fg("muted", via) : undefined,
-				itemDate ? theme.fg("mdLink", itemDate) : undefined,
+				itemDate ? theme.fg("muted", itemDate) : undefined,
 			].filter(Boolean).join(theme.fg("dim", " · "));
 			lines.push(`${INDENT}${theme.fg("syntaxNumber", `${index + 1}.`)} ${rendered}${meta ? ` ${theme.fg("dim", "·")} ${meta}` : ""}`);
 		}

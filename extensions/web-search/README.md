@@ -67,9 +67,9 @@ Search output truncates only between complete records. Page output is capped at
 are rejected, and result URLs are normalized and deduplicated.
 
 Provider attempts and reported credit usage are retained in bounded result
-details. Search transcript rows show clickable full URLs plus available source
-and date metadata; titles and snippets remain agent-facing without adding visual
-noise to the transcript. Fallbacks render explicitly:
+details. Search transcript rows show clickable full URLs in normal text plus
+muted source and date metadata; titles and snippets remain agent-facing without
+adding visual noise to the transcript. Fallbacks render explicitly:
 
 ```text
 • Searched “auth middleware docs”

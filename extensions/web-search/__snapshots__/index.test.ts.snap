@@ -4,11 +4,11 @@ exports[`web search renderer collapsed results use shared engine attribution and
 [
   "<green>•</> <bold>Searched</> “Kimi pricing” · 2026-04-01 → 2026-04-30",
   "  └ <green>6 results</><dim> · </dim><muted>via Mistral/Brave</muted><dim> · </dim>1.2s",
-  "    <syntaxNumber>1.</syntaxNumber> <link:https://www.example1.com/article><mdLink>https://www.example1.com/article</mdLink></link> <dim>·</dim> <mdLink>2026-04-21</mdLink>",
-  "    <syntaxNumber>2.</syntaxNumber> <link:https://www.example2.com/article><mdLink>https://www.example2.com/article</mdLink></link> <dim>·</dim> <mdLink>2026-04-21</mdLink>",
-  "    <syntaxNumber>3.</syntaxNumber> <link:https://www.example3.com/article><mdLink>https://www.example3.com/article</mdLink></link> <dim>·</dim> <mdLink>2026-04-21</mdLink>",
-  "    <syntaxNumber>4.</syntaxNumber> <link:https://www.example4.com/article><mdLink>https://www.example4.com/article</mdLink></link> <dim>·</dim> <mdLink>2026-04-21</mdLink>",
-  "    <syntaxNumber>5.</syntaxNumber> <link:https://www.example5.com/article><mdLink>https://www.example5.com/article</mdLink></link> <dim>·</dim> <mdLink>2026-04-21</mdLink>",
+  "    <syntaxNumber>1.</syntaxNumber> <link:https://www.example1.com/article><text>https://www.example1.com/article</text></link> <dim>·</dim> <muted>2026-04-21</muted>",
+  "    <syntaxNumber>2.</syntaxNumber> <link:https://www.example2.com/article><text>https://www.example2.com/article</text></link> <dim>·</dim> <muted>2026-04-21</muted>",
+  "    <syntaxNumber>3.</syntaxNumber> <link:https://www.example3.com/article><text>https://www.example3.com/article</text></link> <dim>·</dim> <muted>2026-04-21</muted>",
+  "    <syntaxNumber>4.</syntaxNumber> <link:https://www.example4.com/article><text>https://www.example4.com/article</text></link> <dim>·</dim> <muted>2026-04-21</muted>",
+  "    <syntaxNumber>5.</syntaxNumber> <link:https://www.example5.com/article><text>https://www.example5.com/article</text></link> <dim>·</dim> <muted>2026-04-21</muted>",
   "    <syntaxNumber>5</syntaxNumber><muted> shown · </muted><syntaxNumber>1</syntaxNumber><muted> more</muted>",
 ]
 `;
@@ -17,8 +17,8 @@ exports[`web search renderer expanded mixed-engine results retain per-result att
 [
   "<green>•</> <bold>Searched</> “mixed sources”",
   "  └ <green>2 results</><dim> · </dim><muted>via Mistral</muted><dim> · </dim><1s",
-  "    <syntaxNumber>1.</syntaxNumber> <link:https://www.example1.com/article><mdLink>https://www.example1.com/article</mdLink></link> <dim>·</dim> <muted>via Brave</muted><dim> · </dim><mdLink>2026-04-21</mdLink>",
-  "    <syntaxNumber>2.</syntaxNumber> <link:https://www.example2.com/article><mdLink>https://www.example2.com/article</mdLink></link> <dim>·</dim> <muted>via Bing</muted><dim> · </dim><mdLink>2026-04-21</mdLink>",
+  "    <syntaxNumber>1.</syntaxNumber> <link:https://www.example1.com/article><text>https://www.example1.com/article</text></link> <dim>·</dim> <muted>via Brave</muted><dim> · </dim><muted>2026-04-21</muted>",
+  "    <syntaxNumber>2.</syntaxNumber> <link:https://www.example2.com/article><text>https://www.example2.com/article</text></link> <dim>·</dim> <muted>via Bing</muted><dim> · </dim><muted>2026-04-21</muted>",
 ]
 `;
 
