@@ -90,6 +90,45 @@ setInterval(() => {}, 1000);
 	expect(processExists(pid)).toBe(false);
 });
 
+test("rejects oversized RPC records and reaps the offending child", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "pi-subagent-rpc-oversized-"));
+	directories.push(directory);
+	const pidFile = join(directory, "pid");
+	const script = join(directory, "oversized-rpc.mjs");
+	await writeFile(script, `
+import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+process.stdin.once("data", () => {
+  process.stdout.write("x".repeat(2 * 1024 * 1024 + 1));
+});
+setInterval(() => {}, 1000);
+`, "utf8");
+	const client = new RpcProcessClient({ command: process.execPath, args: [script], cwd: directory });
+	await expect(client.start()).rejects.toThrow("RPC record exceeded");
+	const pid = Number(await Bun.file(pidFile).text());
+	expect(processExists(pid)).toBe(false);
+}, 5_000);
+
+test("keeps stderr inside its advertised byte limit", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "pi-subagent-rpc-stderr-"));
+	directories.push(directory);
+	const script = join(directory, "stderr-rpc.mjs");
+	await writeFile(script, `
+process.stderr.write("é".repeat(20_000));
+process.stdin.once("data", (chunk) => {
+  const message = JSON.parse(String(chunk).trim());
+  process.stdout.write(JSON.stringify({ type: "response", id: message.id, command: message.type, success: true, data: {} }) + "\\n");
+});
+setInterval(() => {}, 1000);
+`, "utf8");
+	const client = new RpcProcessClient({ command: process.execPath, args: [script], cwd: directory });
+	await client.start();
+	for (let attempt = 0; attempt < 100 && !client.getStderr().includes("earlier stderr omitted"); attempt += 1) await Bun.sleep(5);
+	expect(client.getStderr()).toStartWith("[earlier stderr omitted]\n");
+	expect(Buffer.byteLength(client.getStderr())).toBeLessThanOrEqual(16 * 1024);
+	await client.stop();
+});
+
 test("waits for SIGKILL to close a child that ignores SIGTERM", async () => {
 	if (process.platform === "win32") return;
 	const directory = await mkdtemp(join(tmpdir(), "pi-subagent-rpc-kill-"));

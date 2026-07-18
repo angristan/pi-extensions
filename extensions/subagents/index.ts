@@ -26,6 +26,8 @@ const DEFAULT_WAIT_MS = 30_000;
 const MAX_WAIT_MS = 5 * 60_000;
 const RESULT_BYTES = 24 * 1024;
 const TOOL_OUTPUT_BYTES = 48 * 1024;
+const MAX_TASK_CHARS = 16_000;
+const MAX_MESSAGE_CHARS = 16_000;
 const TOOL_BRANCH = "  └ ";
 const TOOL_INDENT = "    ";
 const OVERLAY_WIDTH = 58;
@@ -71,6 +73,8 @@ interface ManagedAgent extends AgentSnapshot {
 	waiting: number;
 	suppressNotifications: boolean;
 	generation: number;
+	cleanupComplete: boolean;
+	closePromise?: Promise<void>;
 }
 
 interface ToolDetails {
@@ -82,6 +86,7 @@ interface ToolDetails {
 
 export interface SubagentsOptions {
 	createClient?: AgentClientFactory;
+	createContextFork?: typeof createContextFork;
 	registerOverlayCard?: typeof registerOverlayCard;
 	maxAgents?: number;
 }
@@ -96,6 +101,13 @@ function sanitizeTerminal(text: string): string {
 function compact(text: string, limit = 100): string {
 	const oneLine = sanitizeTerminal(text).replace(/\s+/g, " ").trim();
 	return oneLine.length > limit ? `${oneLine.slice(0, limit - 1)}…` : oneLine;
+}
+
+function boundedInput(value: unknown, label: string, maxChars: number): string {
+	const text = String(value ?? "").trim();
+	if (!text) throw new Error(`${label} requires non-empty text`);
+	if (text.length > maxChars) throw new Error(`${label} must be at most ${maxChars} characters`);
+	return text;
 }
 
 export function boundedText(text: string, maxBytes: number): string {
@@ -125,6 +137,7 @@ function usageText(agent: AgentSnapshot): string {
 	if (agent.usage.input) parts.push(`↑${tokenText(agent.usage.input)}`);
 	if (agent.usage.output) parts.push(`↓${tokenText(agent.usage.output)}`);
 	if (agent.usage.cacheRead) parts.push(`R${tokenText(agent.usage.cacheRead)}`);
+	if (agent.usage.cacheWrite) parts.push(`W${tokenText(agent.usage.cacheWrite)}`);
 	if (agent.usage.cost) parts.push(`$${agent.usage.cost.toFixed(4)}`);
 	if (agent.model) parts.push(agent.model);
 	return parts.join(" · ");
@@ -437,12 +450,15 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	if (isSubagentChild()) return;
 	const agents = new Map<string, ManagedAgent>();
 	const createClient = options.createClient ?? ((clientOptions: AgentClientOptions) => new RpcProcessClient(clientOptions));
+	const forkContext = options.createContextFork ?? createContextFork;
 	const registerCard = options.registerOverlayCard ?? registerOverlayCard;
 	const maxAgents = options.maxAgents ?? DEFAULT_MAX_AGENTS;
 	let activeCtx: any;
 	let generation = 0;
+	let sessionActive = false;
+	let spawnReservations = 0;
 
-	const openAgents = () => [...agents.values()].filter((agent) => agent.client && agent.status !== "closed");
+	const openAgents = () => [...agents.values()].filter((agent) => agent.client);
 	const orderedAgents = () => [...agents.values()].sort((a, b) => Number(isActive(b)) - Number(isActive(a)) || b.startedAt - a.startedAt);
 	const activeAgents = () => orderedAgents().filter((agent) => agent.client && isActive(agent));
 	const overlayCard = registerCard({
@@ -459,7 +475,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	const updateStatus = () => {
 		overlayCard.invalidate();
 		if (!activeCtx) return;
-		const count = [...agents.values()].filter(isActive).length;
+		const count = activeAgents().length;
 		activeCtx.ui.setStatus(STATUS_KEY, count > 0 ? `${count} subagent${count === 1 ? "" : "s"} running · /agents to view` : undefined);
 	};
 	const resolveAgent = (idOrPrefix: string): ManagedAgent | undefined => {
@@ -470,10 +486,33 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		return matches.length === 1 ? matches[0] : undefined;
 	};
 	const trimClosed = () => {
-		const closed = [...agents.values()].filter((agent) => agent.status === "closed").sort((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0));
+		const closed = [...agents.values()]
+			.filter((agent) => agent.status === "closed" && agent.cleanupComplete)
+			.sort((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0));
 		while (closed.length > MAX_RETAINED_CLOSED) {
 			const oldest = closed.shift();
 			if (oldest) agents.delete(oldest.id);
+		}
+	};
+	const reserveSpawn = (): { generation: number; release(): void } => {
+		if (!sessionActive) throw new Error("Cannot spawn a subagent outside an active parent session");
+		if (openAgents().length + spawnReservations >= maxAgents) {
+			throw new Error(`At most ${maxAgents} subagents may remain open; close one before spawning another`);
+		}
+		spawnReservations += 1;
+		let released = false;
+		return {
+			generation,
+			release() {
+				if (released) return;
+				released = true;
+				spawnReservations = Math.max(0, spawnReservations - 1);
+			},
+		};
+	};
+	const assertCurrentSession = (expectedGeneration: number) => {
+		if (!sessionActive || generation !== expectedGeneration) {
+			throw new Error("Parent session ended while spawning subagent");
 		}
 	};
 	const notifyCompletion = (agent: ManagedAgent) => {
@@ -499,6 +538,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		queueMicrotask(() => notifyCompletion(agent));
 	};
 	const handleEvent = (agent: ManagedAgent, event: RpcAgentEvent) => {
+		if (agent.status === "closed") return;
 		if (event.type === "agent_start") {
 			agent.status = "running";
 			updateStatus();
@@ -511,24 +551,22 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			overlayCard.invalidate();
 			return;
 		}
-		if ((event.type === "message_update" || event.type === "message_end") && event.message?.role === "assistant") {
-			const text = assistantText(event.message);
-			if (text) agent.output = boundedText(text, RESULT_BYTES);
-			if (event.type === "message_end") {
-				agent.usage.turns += 1;
-				const usage = event.message.usage;
-				if (usage) {
-					agent.usage.input += usage.input || 0;
-					agent.usage.output += usage.output || 0;
-					agent.usage.cacheRead += usage.cacheRead || 0;
-					agent.usage.cacheWrite += usage.cacheWrite || 0;
-					agent.usage.cost += usage.cost?.total || 0;
-				}
-				if (event.message.provider && event.message.model) agent.model = `${event.message.provider}/${event.message.model}`;
-				if (event.message.stopReason === "error" || event.message.stopReason === "aborted") {
-					agent.error = event.message.errorMessage || `Agent ${event.message.stopReason}`;
-				}
+		if (event.type === "message_end" && event.message?.role === "assistant") {
+			agent.output = boundedText(assistantText(event.message), RESULT_BYTES);
+			agent.usage.turns += 1;
+			const usage = event.message.usage;
+			if (usage) {
+				agent.usage.input += usage.input || 0;
+				agent.usage.output += usage.output || 0;
+				agent.usage.cacheRead += usage.cacheRead || 0;
+				agent.usage.cacheWrite += usage.cacheWrite || 0;
+				agent.usage.cost += usage.cost?.total || 0;
 			}
+			if (event.message.provider && event.message.model) agent.model = `${event.message.provider}/${event.message.model}`;
+			if (event.message.stopReason === "error" || event.message.stopReason === "aborted") {
+				const error = event.message.errorMessage || `Agent ${event.message.stopReason}`;
+				agent.error = boundedText(sanitizeTerminal(error), 4 * 1024);
+			} else agent.error = undefined;
 			return;
 		}
 		if (event.type === "extension_error") {
@@ -539,33 +577,48 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		if (event.type === "agent_settled") finishRun(agent, agent.error ? "failed" : "completed", agent.error);
 	};
 	const closeAgent = async (agent: ManagedAgent, suppressNotification = true) => {
-		if (agent.status === "closed") return;
 		agent.suppressNotifications ||= suppressNotification;
+		if (agent.closePromise) return agent.closePromise;
+		if (agent.status === "closed" && !agent.client && agent.cleanupComplete) return;
 		agent.status = "closed";
 		agent.endedAt ??= Date.now();
 		if (!agent.runSettled) {
 			agent.runSettled = true;
 			agent.resolveCompletion();
 		}
-		const client = agent.client;
-		agent.client = undefined;
-		try { await client?.stop(); } finally { await agent.fork.cleanup(); }
 		updateStatus();
-		trimClosed();
+		const client = agent.client;
+		const operation = (async () => {
+			try {
+				await client?.stop();
+				if (agent.client === client) agent.client = undefined;
+				await agent.fork.cleanup();
+				agent.cleanupComplete = true;
+			} finally {
+				updateStatus();
+				if (agent.cleanupComplete) trimClosed();
+			}
+		})();
+		agent.closePromise = operation;
+		try {
+			await operation;
+		} finally {
+			if (agent.closePromise === operation) agent.closePromise = undefined;
+		}
 	};
 	const startAgent = async (task: string, ctx: any): Promise<ManagedAgent> => {
-		if (openAgents().length >= maxAgents) throw new Error(`At most ${maxAgents} subagents may remain open; close one before spawning another`);
-		const normalizedTask = task.trim();
-		if (!normalizedTask) throw new Error("spawn requires a non-empty task");
+		const normalizedTask = boundedInput(task, "spawn task", MAX_TASK_CHARS);
+		const reservation = reserveSpawn();
 		const seed = normalizedTask.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 16) || "agent";
 		let id: string;
 		do { id = `${seed}-${randomBytes(3).toString("hex")}`; } while (agents.has(id));
-		const fork = await createContextFork(ctx);
-		let client: AgentClient;
-		let agent: ManagedAgent;
+		let fork: ContextFork | undefined;
+		let agent: ManagedAgent | undefined;
 		try {
+			fork = await forkContext(ctx);
+			assertCurrentSession(reservation.generation);
 			const invocation = getPiInvocation(buildArgs(pi, ctx, fork));
-			client = createClient({
+			const client = createClient({
 				command: invocation.command,
 				args: invocation.args,
 				cwd: ctx.cwd,
@@ -589,40 +642,64 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				runSettled: false,
 				waiting: 0,
 				suppressNotifications: false,
-				generation,
+				generation: reservation.generation,
+				cleanupComplete: false,
 			};
 			agents.set(id, agent);
-			client.onEvent((event) => handleEvent(agent, event));
+			reservation.release();
+			client.onEvent((event) => handleEvent(agent!, event));
 			client.onExit((error) => {
-				agent.client = undefined;
-				void agent.fork.cleanup().then(
+				if (agent!.client === client) agent!.client = undefined;
+				updateStatus();
+				void agent!.fork.cleanup().then(
 					() => {
-						if (isActive(agent)) finishRun(agent, "failed", error.message);
-						else if (agent.status !== "closed") { agent.status = "closed"; agent.endedAt ??= Date.now(); updateStatus(); }
+						agent!.cleanupComplete = true;
+						if (isActive(agent!)) finishRun(agent!, "failed", error.message);
+						else {
+							if (agent!.status !== "closed") {
+								agent!.status = "closed";
+								agent!.endedAt ??= Date.now();
+								updateStatus();
+							}
+							trimClosed();
+						}
 					},
 					(cleanupError) => {
 						const message = `${error.message}; context cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`;
-						if (isActive(agent)) finishRun(agent, "failed", message);
-						else if (agent.status !== "closed") { agent.status = "closed"; agent.error = message; agent.endedAt ??= Date.now(); updateStatus(); }
+						if (isActive(agent!)) finishRun(agent!, "failed", message);
+						else {
+							agent!.status = "closed";
+							agent!.error = boundedText(sanitizeTerminal(message), 4 * 1024);
+							agent!.endedAt ??= Date.now();
+							updateStatus();
+						}
 					},
 				);
 			});
-		} catch (error) {
-			agents.delete(id);
-			await fork.cleanup();
-			throw error;
-		}
-		updateStatus();
-		try {
+			updateStatus();
 			await client.start();
+			assertCurrentSession(reservation.generation);
+			if (agent.status === "closed") throw new Error("Subagent closed during startup");
 			agent.status = "running";
 			await client.prompt(childTask(id, normalizedTask));
+			assertCurrentSession(reservation.generation);
 			updateStatus();
 			return agent;
 		} catch (error) {
-			finishRun(agent, "failed", error instanceof Error ? error.message : String(error));
-			await closeAgent(agent, true);
+			if (agent) {
+				if (isActive(agent)) finishRun(agent, "failed", error instanceof Error ? error.message : String(error));
+				try {
+					await closeAgent(agent, true);
+				} catch (cleanupError) {
+					throw new AggregateError([error, cleanupError], "Subagent startup and cleanup both failed");
+				}
+			} else if (fork) {
+				try { await fork.cleanup(); }
+				catch (cleanupError) { throw new AggregateError([error, cleanupError], "Subagent context creation and cleanup both failed"); }
+			}
 			throw error;
+		} finally {
+			reservation.release();
 		}
 	};
 	const waitForAgents = async (targets: ManagedAgent[], timeoutMs: number, signal?: AbortSignal): Promise<{ timedOut: boolean; interrupted: boolean }> => {
@@ -674,9 +751,9 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			type: "object",
 			properties: {
 				action: { type: "string", enum: ["spawn", "send", "wait", "list", "close"], description: "Lifecycle action" },
-				task: { type: "string", description: "Concrete task for spawn" },
+				task: { type: "string", maxLength: MAX_TASK_CHARS, description: "Concrete task for spawn" },
 				agent_id: { type: "string", description: "Agent ID or unambiguous prefix for send or close" },
-				message: { type: "string", description: "Follow-up instruction for send" },
+				message: { type: "string", maxLength: MAX_MESSAGE_CHARS, description: "Follow-up instruction for send" },
 				agent_ids: { type: "array", items: { type: "string" }, description: "Agent IDs or prefixes for wait; defaults to all running agents" },
 				timeout_ms: { type: "integer", minimum: 0, maximum: MAX_WAIT_MS, description: `Wait timeout in milliseconds (default ${DEFAULT_WAIT_MS})` },
 			},
@@ -695,9 +772,22 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				const agent = resolveAgent(String(params.agent_id ?? ""));
 				if (!agent) throw new Error(`Subagent not found or prefix is ambiguous: ${params.agent_id ?? ""}`);
 				if (!agent.client || agent.status === "closed") throw new Error(`Subagent ${agent.id} is closed`);
-				const message = String(params.message ?? "").trim();
-				if (!message) throw new Error("send requires a non-empty message");
+				const message = boundedInput(params.message, "send message", MAX_MESSAGE_CHARS);
 				const beginFollowUp = async () => {
+					const client = agent.client;
+					if (!client || agent.status === "closed") throw new Error(`Subagent ${agent.id} is closed`);
+					const previous = {
+						status: agent.status,
+						startedAt: agent.startedAt,
+						endedAt: agent.endedAt,
+						output: agent.output,
+						error: agent.error,
+						activity: agent.activity,
+						suppressNotifications: agent.suppressNotifications,
+						completion: agent.completion,
+						resolveCompletion: agent.resolveCompletion,
+						runSettled: agent.runSettled,
+					};
 					agent.status = "running";
 					agent.startedAt = Date.now();
 					agent.endedAt = undefined;
@@ -706,26 +796,31 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 					agent.activity = [`follow-up: ${compact(message, 100)}`];
 					agent.suppressNotifications = false;
 					newCompletion(agent);
+					const rejectedRunResolve = agent.resolveCompletion;
 					updateStatus();
-					await agent.client!.prompt(message);
-				};
-				try {
-					if (isActive(agent)) {
-						try {
-							await agent.client.steer(message);
-							agent.activity.push(`steered: ${compact(message, 100)}`);
-							if (agent.activity.length > 12) agent.activity.shift();
-						} catch (error) {
-							// The child may settle between our status check and the RPC
-							// command. In that case continue it as a fresh prompt.
-							if (!isActive(agent) && agent.client) await beginFollowUp();
-							else throw error;
+					try {
+						await client.prompt(message);
+					} catch (error) {
+						if (agent.client === client && isActive(agent) && !agent.runSettled) {
+							Object.assign(agent, previous);
+							rejectedRunResolve();
+							updateStatus();
 						}
-					} else await beginFollowUp();
-				} catch (error) {
-					if (isActive(agent)) finishRun(agent, "failed", error instanceof Error ? error.message : String(error));
-					throw error;
-				}
+						throw error;
+					}
+				};
+				if (isActive(agent)) {
+					try {
+						await agent.client.steer(message);
+						agent.activity.push(`steered: ${compact(message, 100)}`);
+						if (agent.activity.length > 12) agent.activity.shift();
+					} catch (error) {
+						// The child may settle between our status check and the RPC
+						// command. In that case continue it as a fresh prompt.
+						if (!isActive(agent) && agent.client) await beginFollowUp();
+						else throw error;
+					}
+				} else await beginFollowUp();
 				updateStatus();
 				const data = snapshot(agent);
 				return { content: [{ type: "text", text: `Sent follow-up to ${agent.id}.` }], details: { action: "send", agents: [data] } satisfies ToolDetails };
@@ -784,17 +879,25 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 
 	pi.on("session_start", (_event, ctx) => {
 		generation += 1;
+		sessionActive = true;
 		activeCtx = ctx;
 		updateStatus();
 	});
 	pi.on("session_shutdown", async () => {
+		sessionActive = false;
 		generation += 1;
 		const current = [...agents.values()];
 		for (const agent of current) agent.suppressNotifications = true;
-		await Promise.all(current.map((agent) => closeAgent(agent, true)));
-		activeCtx?.ui.setStatus(STATUS_KEY, undefined);
+		const settled = await Promise.allSettled(current.map((agent) => closeAgent(agent, true)));
+		const failures = settled
+			.filter((result): result is PromiseRejectedResult => result.status === "rejected")
+			.map((result) => result.reason);
+		const ctx = activeCtx;
+		activeCtx = undefined;
 		agents.clear();
 		overlayCard.unregister();
-		activeCtx = undefined;
+		try { ctx?.ui.setStatus(STATUS_KEY, undefined); }
+		catch (error) { failures.push(error); }
+		if (failures.length > 0) throw new AggregateError(failures, "Failed to clean up one or more subagents");
 	});
 }

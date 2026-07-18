@@ -95,20 +95,24 @@ session:
 - The child runs in the same working directory and sees the same project files.
 - Child dialogs are cancelled because no interactive UI is attached to the RPC process.
 - Follow-ups reuse the same child conversation.
-- Session shutdown and `/reload` terminate every child and remove temporary sessions.
+- Session shutdown and `/reload` cancel pending spawns, terminate every child process tree, and remove temporary sessions.
 - A child cannot spawn grandchildren.
 
-Up to six child processes may remain open at once. Completed children do not
-expire automatically: they remain available for follow-ups and count toward
-that limit until `close` is called. The parent is instructed to close a child
-after collecting its final result when no further follow-up is needed. Closed
-child summaries remain visible for the current parent session.
+Up to six child processes may remain open at once. Capacity is reserved before
+asynchronous startup, so concurrent `spawn` calls cannot exceed the limit.
+Completed children do not expire automatically: they remain available for
+follow-ups and count toward that limit until `close` is called. The parent is
+instructed to close a child after collecting its final result when no further
+follow-up is needed. Closed child summaries remain visible for the current
+parent session.
 
-## Output limits
+## Input and output limits
 
+- Spawn tasks and follow-up messages are capped at 16,000 characters each.
 - One child result is capped at 24 KiB.
 - Combined `wait` output is capped below Pi's 50 KiB tool-result limit.
-- Child stderr is retained as a bounded tail for failures.
+- Individual RPC records are capped at 2 MiB.
+- Child stderr is retained as a bounded 16 KiB tail for failures.
 
 ## Concurrency warning
 

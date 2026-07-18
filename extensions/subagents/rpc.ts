@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -7,6 +7,7 @@ const RPC_TIMEOUT_MS = 30_000;
 const STOP_GRACE_MS = 1_000;
 const KILL_CLOSE_MS = 1_000;
 const STDERR_LIMIT_BYTES = 16 * 1024;
+const STDOUT_LINE_LIMIT_BYTES = 2 * 1024 * 1024;
 const CHILD_ENV = "PI_SUBAGENT_CHILD";
 
 export interface RpcAgentEvent {
@@ -40,6 +41,12 @@ let exitReaperArmed = false;
 
 function killProcessGroup(pid: number | undefined, signal: NodeJS.Signals): void {
 	if (!pid) return;
+	if (process.platform === "win32") {
+		const args = ["/PID", String(pid), "/T"];
+		if (signal === "SIGKILL") args.push("/F");
+		const result = spawnSync("taskkill", args, { stdio: "ignore", windowsHide: true });
+		if (!result.error && result.status === 0) return;
+	}
 	try {
 		if (process.platform !== "win32") process.kill(-pid, signal);
 		else process.kill(pid, signal);
@@ -60,31 +67,53 @@ function armExitReaper(): void {
 function boundedStderr(current: string, chunk: string): string {
 	const combined = current + chunk;
 	if (Buffer.byteLength(combined) <= STDERR_LIMIT_BYTES) return combined;
-	let tail = combined.slice(-STDERR_LIMIT_BYTES);
-	while (Buffer.byteLength(tail) > STDERR_LIMIT_BYTES) tail = tail.slice(1);
-	return `[earlier stderr omitted]\n${tail}`;
+	const marker = "[earlier stderr omitted]\n";
+	const available = Math.max(0, STDERR_LIMIT_BYTES - Buffer.byteLength(marker));
+	let tail = combined.slice(-available);
+	while (Buffer.byteLength(tail) > available) tail = tail.slice(1);
+	return marker + tail;
 }
 
-function attachJsonlReader(stream: NodeJS.ReadableStream, onLine: (line: string) => void): () => void {
+function attachJsonlReader(
+	stream: NodeJS.ReadableStream,
+	onLine: (line: string) => void,
+	onError: (error: Error) => void,
+): () => void {
 	const decoder = new StringDecoder("utf8");
 	let buffer = "";
+	let failed = false;
+	const failOversizedRecord = () => {
+		if (failed) return;
+		failed = true;
+		buffer = "";
+		onError(new Error(`Agent RPC record exceeded ${STDOUT_LINE_LIMIT_BYTES} bytes`));
+	};
 	const drain = () => {
 		for (;;) {
 			const newline = buffer.indexOf("\n");
 			if (newline < 0) return;
 			let line = buffer.slice(0, newline);
 			buffer = buffer.slice(newline + 1);
+			if (Buffer.byteLength(line) > STDOUT_LINE_LIMIT_BYTES) {
+				failOversizedRecord();
+				return;
+			}
 			if (line.endsWith("\r")) line = line.slice(0, -1);
 			onLine(line);
+			if (failed) return;
 		}
 	};
 	const onData = (chunk: Buffer | string) => {
+		if (failed) return;
 		buffer += typeof chunk === "string" ? chunk : decoder.write(chunk);
 		drain();
+		if (!failed && Buffer.byteLength(buffer) > STDOUT_LINE_LIMIT_BYTES) failOversizedRecord();
 	};
 	const onEnd = () => {
+		if (failed) return;
 		buffer += decoder.end();
-		if (buffer) onLine(buffer.endsWith("\r") ? buffer.slice(0, -1) : buffer);
+		if (Buffer.byteLength(buffer) > STDOUT_LINE_LIMIT_BYTES) failOversizedRecord();
+		else if (buffer) onLine(buffer.endsWith("\r") ? buffer.slice(0, -1) : buffer);
 		buffer = "";
 	};
 	stream.on("data", onData);
@@ -158,7 +187,14 @@ export class RpcProcessClient implements AgentClient {
 			const error = new Error(`Agent process exited (code=${code} signal=${signal})${this.stderr ? `: ${this.stderr.trim()}` : ""}`);
 			this.fail(error);
 		});
-		this.stopReading = attachJsonlReader(child.stdout, (line) => this.handleLine(line));
+		this.stopReading = attachJsonlReader(
+			child.stdout,
+			(line) => this.handleLine(line),
+			(error) => {
+				this.fail(error);
+				void this.stop().catch(() => { /* exit reaper remains armed */ });
+			},
+		);
 		try {
 			await this.send({ type: "get_state" });
 		} catch (error) {

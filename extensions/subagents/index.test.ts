@@ -4,7 +4,7 @@ import { readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { createContextFork } from "./context";
+import { createContextFork, forkableMessages } from "./context";
 import registerSubagents, { boundedText } from "./index";
 import type { AgentClient, AgentClientOptions, RpcAgentEvent } from "./rpc";
 
@@ -14,15 +14,16 @@ interface OverlayRegistration {
 	unregistered: boolean;
 }
 
-function assistant(text: string, stopReason = "stop"): any {
+function assistant(text: string, stopReason = "stop", errorMessage?: string): any {
 	return {
 		role: "assistant",
-		content: [{ type: "text", text }],
+		content: text ? [{ type: "text", text }] : [],
 		api: "test",
 		provider: "test-provider",
 		model: "test-model",
 		usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 3, totalTokens: 20, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 } },
 		stopReason,
+		errorMessage,
 		timestamp: Date.now(),
 	};
 }
@@ -34,11 +35,23 @@ class FakeClient implements AgentClient {
 	readonly steering: string[] = [];
 	started = false;
 	stopped = false;
+	stopError?: Error;
+	promptError?: Error;
+	steerError?: Error;
 	constructor(readonly options: AgentClientOptions) {}
 	async start() { this.started = true; }
-	async stop() { this.stopped = true; }
-	async prompt(message: string) { this.prompts.push(message); }
-	async steer(message: string) { this.steering.push(message); }
+	async stop() {
+		if (this.stopError) throw this.stopError;
+		this.stopped = true;
+	}
+	async prompt(message: string) {
+		if (this.promptError) throw this.promptError;
+		this.prompts.push(message);
+	}
+	async steer(message: string) {
+		if (this.steerError) throw this.steerError;
+		this.steering.push(message);
+	}
 	async abort() {}
 	onEvent(listener: (event: RpcAgentEvent) => void) { this.events.add(listener); return () => this.events.delete(listener); }
 	onExit(listener: (error: Error) => void) { this.exits.add(listener); return () => this.exits.delete(listener); }
@@ -71,7 +84,13 @@ afterEach(async () => {
 	}
 });
 
-function createHarness(options: { maxAgents?: number; withPendingToolCall?: boolean; firstTurn?: boolean; failClientCreation?: boolean } = {}): Harness {
+function createHarness(options: {
+	maxAgents?: number;
+	withPendingToolCall?: boolean;
+	firstTurn?: boolean;
+	failClientCreation?: boolean;
+	forkContext?: typeof createContextFork;
+} = {}): Harness {
 	const tools = new Map<string, any>();
 	const commands = new Map<string, any>();
 	const messageRenderers = new Map<string, (...args: any[]) => any>();
@@ -116,6 +135,7 @@ function createHarness(options: { maxAgents?: number; withPendingToolCall?: bool
 	let overlay: OverlayRegistration | undefined;
 	registerSubagents(pi as any, {
 		maxAgents: options.maxAgents,
+		createContextFork: options.forkContext,
 		registerOverlayCard(definition) {
 			overlay = { definition, invalidations: 0, unregistered: false };
 			return {
@@ -160,6 +180,8 @@ describe("subagents", () => {
 		expect(harness.tool.parameters.required).toEqual(["reasoning", "action"]);
 		expect(harness.tool.parameters.properties).not.toHaveProperty("agent_type");
 		expect(harness.tool.parameters.properties).not.toHaveProperty("model");
+		expect(harness.tool.parameters.properties.task.maxLength).toBe(16_000);
+		expect(harness.tool.parameters.properties.message.maxLength).toBe(16_000);
 		expect(harness.tool.description).toContain("inherit the current model");
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("action=close") && guideline.includes("consume a process slot"))).toBe(true);
 	});
@@ -273,6 +295,7 @@ describe("subagents", () => {
 		const expanded = rendered(harness.tool.renderResult(waited, { isPartial: false, expanded: true }, renderTheme, { args: waitArgs }), 60);
 		expect(expanded.join("\n")).toContain("API review complete.");
 		expect(expanded.join("\n")).toContain("1 turn");
+		expect(expanded.join("\n")).toContain("W3");
 		expect(expanded.every((line) => visibleWidth(line) <= 60)).toBe(true);
 
 		const second = await spawnAgent(harness, "Slow task");
@@ -309,6 +332,19 @@ describe("subagents", () => {
 		expect(expandedLines.join("\n")).toContain("Renderer matches the shared design.");
 	});
 
+	test("uses the final assistant result after a successful retry", async () => {
+		const harness = createHarness();
+		await spawnAgent(harness, "Retry transient failures");
+		harness.clients[0].emit({ type: "message_update", message: assistant("partial output") });
+		let listed = await harness.tool.execute("list", { action: "list" }, undefined, undefined, harness.ctx);
+		expect(listed.details.agents[0].output).toBe("");
+		harness.clients[0].emit({ type: "message_end", message: assistant("", "error", "temporary failure") });
+		harness.clients[0].emit({ type: "message_end", message: assistant("Recovered result") });
+		harness.clients[0].emit({ type: "agent_settled" });
+		listed = await harness.tool.execute("list", { action: "list" }, undefined, undefined, harness.ctx);
+		expect(listed.details.agents[0]).toMatchObject({ status: "completed", error: undefined, output: "Recovered result" });
+	});
+
 	test("forks inherited context before the unresolved delegating tool call", async () => {
 		const harness = createHarness({ withPendingToolCall: true });
 		await spawnAgent(harness, "Inspect context");
@@ -319,6 +355,22 @@ describe("subagents", () => {
 		const messages = child.buildSessionContext().messages;
 		expect(messages.some((message: any) => message.role === "user" && message.content === "Delegate this")).toBe(true);
 		expect(messages.some((message: any) => message.role === "assistant" && message.content?.some?.((part: any) => part.type === "toolCall"))).toBe(false);
+	});
+
+	test("forks before a sequential tool batch with unresolved sibling calls", () => {
+		const user = { role: "user", content: "Delegate after asking" };
+		const assistantMessage = {
+			role: "assistant",
+			content: [
+				{ type: "toolCall", id: "question-call", name: "questionnaire", arguments: {} },
+				{ type: "toolCall", id: "agent-call", name: "agents", arguments: { action: "spawn" } },
+			],
+		};
+		const questionResult = { role: "toolResult", toolCallId: "question-call", toolName: "questionnaire", content: [] };
+		const context = { messages: [user, assistantMessage, questionResult] } as any;
+		expect(forkableMessages(context)).toEqual([user]);
+		const agentResult = { role: "toolResult", toolCallId: "agent-call", toolName: "agents", content: [] };
+		expect(forkableMessages({ messages: [...context.messages, agentResult] } as any)).toEqual([...context.messages, agentResult]);
 	});
 
 	test("creates a usable context file for first-turn delegation", async () => {
@@ -339,6 +391,21 @@ describe("subagents", () => {
 		await expect(harness.tool.execute("close", { action: "close" }, undefined, undefined, harness.ctx)).rejects.toThrow("not found");
 		expect(harness.clients[0].steering).toHaveLength(0);
 		expect(harness.clients[0].stopped).toBe(false);
+	});
+
+	test("rejects oversized tasks and follow-ups before dispatch", async () => {
+		const harness = createHarness();
+		const taskLimit = harness.tool.parameters.properties.task.maxLength;
+		const messageLimit = harness.tool.parameters.properties.message.maxLength;
+		await expect(spawnAgent(harness, "x".repeat(taskLimit + 1))).rejects.toThrow("at most");
+		expect(harness.clients).toHaveLength(0);
+		const started = await spawnAgent(harness);
+		await expect(harness.tool.execute("send", {
+			action: "send",
+			agent_id: started.details.agents[0].id,
+			message: "x".repeat(messageLimit + 1),
+		}, undefined, undefined, harness.ctx)).rejects.toThrow("at most");
+		expect(harness.clients[0].steering).toHaveLength(0);
 	});
 
 	test("removes the context fork when client setup fails", async () => {
@@ -391,6 +458,31 @@ describe("subagents", () => {
 		expect(harness.overlay.definition.renderBody(54, 6, renderTheme)[2]).toContain("follow-up: Now inspect");
 	});
 
+	test("preserves child state when steer or follow-up dispatch is rejected", async () => {
+		const harness = createHarness();
+		const started = await spawnAgent(harness);
+		const id = started.details.agents[0].id;
+		harness.clients[0].steerError = new Error("not streaming");
+		await expect(harness.tool.execute("send-running", {
+			action: "send", agent_id: id, message: "Race with completion",
+		}, undefined, undefined, harness.ctx)).rejects.toThrow("not streaming");
+		let listed = await harness.tool.execute("list", { action: "list" }, undefined, undefined, harness.ctx);
+		expect(listed.details.agents[0]).toMatchObject({ status: "running", error: undefined });
+
+		harness.clients[0].steerError = undefined;
+		harness.clients[0].complete("Initial result");
+		await Bun.sleep(0);
+		const notificationCount = harness.sentMessages.length;
+		harness.clients[0].promptError = new Error("prompt rejected");
+		await expect(harness.tool.execute("send-idle", {
+			action: "send", agent_id: id, message: "Rejected follow-up",
+		}, undefined, undefined, harness.ctx)).rejects.toThrow("prompt rejected");
+		await Bun.sleep(0);
+		listed = await harness.tool.execute("list", { action: "list" }, undefined, undefined, harness.ctx);
+		expect(listed.details.agents[0]).toMatchObject({ status: "completed", error: undefined, output: "Initial result" });
+		expect(harness.sentMessages).toHaveLength(notificationCount);
+	});
+
 	test("enforces the open-agent limit until a child is closed", async () => {
 		const harness = createHarness({ maxAgents: 2 });
 		const first = await spawnAgent(harness, "First");
@@ -399,6 +491,67 @@ describe("subagents", () => {
 		await harness.tool.execute("close", { action: "close", agent_id: first.details.agents[0].id }, undefined, undefined, harness.ctx);
 		expect(harness.clients[0].stopped).toBe(true);
 		await expect(spawnAgent(harness, "Third")).resolves.toBeDefined();
+	});
+
+	test("reserves concurrent spawn slots before asynchronous context creation", async () => {
+		const harness = createHarness({ maxAgents: 2 });
+		const outcomes = await Promise.allSettled([
+			spawnAgent(harness, "First concurrent task"),
+			spawnAgent(harness, "Second concurrent task"),
+			spawnAgent(harness, "Third concurrent task"),
+		]);
+		expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(2);
+		expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(1);
+		const listed = await harness.tool.execute("list", { action: "list" }, undefined, undefined, harness.ctx);
+		expect(listed.details.agents).toHaveLength(2);
+	});
+
+	test("cancels a spawn that outlives parent session shutdown", async () => {
+		let releaseContext!: () => void;
+		const contextGate = new Promise<void>((resolve) => { releaseContext = resolve; });
+		const harness = createHarness({
+			forkContext: async (ctx) => {
+				await contextGate;
+				return createContextFork(ctx);
+			},
+		});
+		const spawning = spawnAgent(harness, "Race with parent shutdown");
+		const observed = spawning.then(
+			() => undefined,
+			(error) => error instanceof Error ? error : new Error(String(error)),
+		);
+		const shutdown = harness.handlers.get("session_shutdown")?.({ reason: "reload" }, harness.ctx);
+		releaseContext();
+		await shutdown;
+		const error = await observed;
+		expect(error?.message).toContain("Parent session ended");
+		expect(harness.clients).toHaveLength(0);
+		expect(harness.overlay.unregistered).toBe(true);
+	});
+
+	test("retries close after stop failure and still clears live UI", async () => {
+		const harness = createHarness();
+		const started = await spawnAgent(harness);
+		const id = started.details.agents[0].id;
+		harness.clients[0].stopError = new Error("stop failed");
+		await expect(harness.tool.execute("close", { action: "close", agent_id: id }, undefined, undefined, harness.ctx)).rejects.toThrow("stop failed");
+		expect(harness.overlay.definition.visible()).toBe(false);
+		expect(harness.statuses.get("subagents")).toBeUndefined();
+		expect(harness.clients[0].stopped).toBe(false);
+		harness.clients[0].stopError = undefined;
+		await expect(harness.tool.execute("close", { action: "close", agent_id: id }, undefined, undefined, harness.ctx)).resolves.toBeDefined();
+		expect(harness.clients[0].stopped).toBe(true);
+	});
+
+	test("finishes shutdown cleanup when one child stop fails", async () => {
+		const harness = createHarness();
+		await spawnAgent(harness, "First shutdown task");
+		await spawnAgent(harness, "Second shutdown task");
+		harness.clients[0].stopError = new Error("first stop failed");
+		await expect(harness.handlers.get("session_shutdown")?.({ reason: "quit" }, harness.ctx)).rejects.toThrow("Failed to clean up");
+		expect(harness.clients[1].stopped).toBe(true);
+		expect(harness.overlay.unregistered).toBe(true);
+		expect(harness.statuses.get("subagents")).toBeUndefined();
 	});
 
 	test("bounds aggregate model-visible output", () => {

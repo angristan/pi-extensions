@@ -18,18 +18,30 @@ export interface ContextFork {
 	cleanup(): Promise<void>;
 }
 
-function hasToolCall(message: any): boolean {
-	return message?.role === "assistant"
-		&& Array.isArray(message.content)
-		&& message.content.some((part: any) => part?.type === "toolCall");
+function toolCallIds(message: any): Array<string | undefined> {
+	if (message?.role !== "assistant" || !Array.isArray(message.content)) return [];
+	return message.content
+		.filter((part: any) => part?.type === "toolCall")
+		.map((part: any) => typeof part.id === "string" ? part.id : undefined);
 }
 
 export function forkableMessages(context: SessionContext): any[] {
 	const messages = [...context.messages];
-	// Tool execution sees the current assistant message already persisted. A child
-	// cannot inherit that unresolved tool call because its matching result does not
-	// exist yet, so fork immediately before the delegating assistant turn.
-	if (hasToolCall(messages.at(-1))) messages.pop();
+	const resolvedToolCalls = new Set<string>();
+	// Sequential sibling tools may append results after the current assistant
+	// message before `agents` executes. Find the newest assistant batch and fork
+	// before it whenever any call still lacks a matching result.
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		const message = messages[index];
+		if (message?.role === "toolResult" && typeof message.toolCallId === "string") {
+			resolvedToolCalls.add(message.toolCallId);
+			continue;
+		}
+		if (message?.role !== "assistant") continue;
+		const ids = toolCallIds(message);
+		if (ids.length === 0) return messages;
+		return ids.some((id) => !id || !resolvedToolCalls.has(id)) ? messages.slice(0, index) : messages;
+	}
 	return messages;
 }
 
