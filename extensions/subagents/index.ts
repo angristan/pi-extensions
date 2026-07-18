@@ -74,6 +74,7 @@ interface ManagedAgent extends AgentSnapshot {
 	resolveCompletion: () => void;
 	runSettled: boolean;
 	waiting: number;
+	completionDelivery: "none" | "automatic" | "wait";
 	suppressNotifications: boolean;
 	generation: number;
 	cleanupComplete: boolean;
@@ -83,6 +84,7 @@ interface ManagedAgent extends AgentSnapshot {
 interface ToolDetails {
 	action: string;
 	agents: AgentSnapshot[];
+	alreadyReportedAgentIds?: string[];
 	timedOut?: boolean;
 	interrupted?: boolean;
 }
@@ -379,32 +381,60 @@ function agentSummary(agent: AgentSnapshot, theme: any): string {
 	return `${mark} ${identity} · ${metadata}`;
 }
 
+type DetailLabel = "prompt" | "result" | "usage" | "error";
+
+function detailPrefix(label: DetailLabel, theme: any, indent = TOOL_INDENT, failed = false): string {
+	const labelColor = label === "result"
+		? (failed ? "error" : "success")
+		: label === "error"
+			? "error"
+			: "muted";
+	return `${indent}${theme.fg(labelColor, label.padEnd(6))}  `;
+}
+
 function detailLine(
-	label: "prompt" | "result",
+	label: DetailLabel,
 	content: string,
 	width: number,
 	theme: any,
 	indent = TOOL_INDENT,
 	failed = false,
 ): string {
-	const labelColor = label === "prompt" ? "muted" : failed ? "error" : "success";
-	const contentColor = label === "prompt" ? "dim" : "text";
-	const prefix = `${indent}${theme.fg(labelColor, label.padEnd(6))}  `;
+	const contentColor = label === "prompt" || label === "usage" ? "dim" : label === "error" ? "error" : "text";
+	const prefix = detailPrefix(label, theme, indent, failed);
 	const contentWidth = Math.max(1, width - visibleWidth(prefix));
 	return `${prefix}${theme.fg(contentColor, truncateToWidth(content, contentWidth, "…"))}`;
 }
 
-function expandedAgentLines(agent: AgentSnapshot, width: number, theme: any, includeUsage = true): string[] {
-	const lines: string[] = [];
-	const usage = includeUsage ? usageText(agent) : "";
-	if (usage) lines.push(`${TOOL_INDENT}${theme.fg("dim", usage)}`);
-	if (agent.error) lines.push(`${TOOL_INDENT}${theme.fg("error", compact(agent.error, 240))}`);
-	if (agent.output) {
-		const contentWidth = Math.max(1, width - visibleWidth(TOOL_INDENT));
-		lines.push(...new Markdown(agent.output, 0, 0, getMarkdownTheme()).render(contentWidth).map((line) => `${TOOL_INDENT}${line}`));
-	} else if (agent.status === "starting" || agent.status === "running") {
-		lines.push(`${TOOL_INDENT}${theme.fg("dim", "still running")}`);
+function expandedResultLines(agent: AgentSnapshot, width: number, theme: any): string[] {
+	if (!agent.output) return [];
+	const prefix = detailPrefix("result", theme, TOOL_INDENT, agent.status === "failed");
+	const contentWidth = Math.max(1, width - visibleWidth(prefix));
+	const rendered = new Markdown(agent.output, 0, 0, getMarkdownTheme()).render(contentWidth);
+	const continuation = " ".repeat(visibleWidth(prefix));
+	return rendered.map((line, index) => `${index === 0 ? prefix : continuation}${line}`);
+}
+
+function isSettled(agent: AgentSnapshot): boolean {
+	return agent.status === "completed" || agent.status === "failed";
+}
+
+function agentBodyLines(
+	agent: AgentSnapshot,
+	width: number,
+	theme: any,
+	options: { prompt?: string; showResult?: boolean; showUsage?: boolean; expanded?: boolean } = {},
+): string[] {
+	const lines = [`${TOOL_BRANCH}${agentSummary(agent, theme)}`];
+	if (options.prompt) lines.push(detailLine("prompt", compact(options.prompt, 240), width, theme));
+	if (options.showResult && agent.output) {
+		lines.push(...(options.expanded
+			? expandedResultLines(agent, width, theme)
+			: [detailLine("result", compact(agent.output, RESULT_PREVIEW_CHARS), width, theme, TOOL_INDENT, agent.status === "failed")]));
 	}
+	if (options.showResult && agent.error) lines.push(detailLine("error", compact(agent.error, 240), width, theme));
+	const usage = options.showUsage ? usageText(agent) : "";
+	if (usage) lines.push(detailLine("usage", usage, width, theme));
 	return lines;
 }
 
@@ -441,18 +471,28 @@ function renderAgentResult(result: any, options: ToolRenderOptions, theme: any, 
 				`${TOOL_BRANCH}${theme.fg("error", compact(fallback || "Unknown agent error", 240))}`,
 			];
 		}
+		const alreadyReported = new Set(details?.alreadyReportedAgentIds ?? []);
+		const visibleAgents = details?.agents?.filter((agent) => !alreadyReported.has(agent.id)) ?? [];
+		if (action === "wait" && details?.agents?.length && visibleAgents.length === 0) return [];
 		const lines = [toolHeadline(false, false, actionVerb(action, false, details), reasoningDetail(args, theme, false), theme)];
-		if (!details?.agents?.length) {
+		if (visibleAgents.length === 0) {
 			lines.push(`${TOOL_BRANCH}${theme.fg("dim", action === "wait" ? "no running agents" : "no agents in this session")}`);
 			return lines;
 		}
-		for (const agent of details.agents) {
-			lines.push(`${TOOL_BRANCH}${agentSummary(agent, theme)}`);
-			lines.push(detailLine("prompt", compact(agent.task, 240), width, theme));
-			if (!options?.expanded && agent.output) {
-				lines.push(detailLine("result", compact(agent.output, RESULT_PREVIEW_CHARS), width, theme, TOOL_INDENT, agent.status === "failed"));
-			}
-			if (options?.expanded) lines.push(...expandedAgentLines(agent, width, theme));
+		for (const agent of visibleAgents) {
+			const completed = isSettled(agent);
+			const prompt = action === "close"
+				? undefined
+				: action === "send"
+					? compact(String(args?.message ?? ""), 240)
+					: agent.task;
+			const showsCompletion = (action === "wait" || action === "list") && completed;
+			lines.push(...agentBodyLines(agent, width, theme, {
+				prompt,
+				showResult: showsCompletion,
+				showUsage: showsCompletion,
+				expanded: Boolean(options?.expanded),
+			}));
 		}
 		return lines;
 	});
@@ -462,22 +502,15 @@ function renderAgentResult(result: any, options: ToolRenderOptions, theme: any, 
 class CompletionComponent implements Component {
 	private readonly component: AgentToolLines;
 	constructor(agent: AgentSnapshot, expanded: boolean, theme: any) {
-		this.component = new AgentToolLines((width) => {
-			const failed = agent.status === "failed";
-			const detail = theme.fg("accent", theme.bold(agent.name ?? agent.id));
-			const metadata = [`${agent.contextMode} context`, agent.status, usageText(agent)].filter(Boolean).join(" · ");
-			const lines = [
-				toolHeadline(false, failed, failed ? "Agent failed" : "Agent completed", detail, theme),
-				`${TOOL_BRANCH}${theme.fg("muted", metadata)}`,
-				detailLine("prompt", compact(agent.task, 240), width, theme),
-			];
-			if (!expanded && agent.output) {
-				lines.push(detailLine("result", compact(agent.output, RESULT_PREVIEW_CHARS), width, theme, TOOL_INDENT, failed));
-			}
-			if (agent.error) lines.push(`${TOOL_INDENT}${theme.fg("error", compact(agent.error, 240))}`);
-			if (expanded && agent.output) lines.push(...expandedAgentLines({ ...agent, error: undefined }, width, theme, false));
-			return lines;
-		});
+		this.component = new AgentToolLines((width) => [
+			toolHeadline(false, agent.status === "failed", agent.status === "failed" ? "Agent failed" : "Agent completed", "", theme),
+			...agentBodyLines(agent, width, theme, {
+				prompt: agent.task,
+				showResult: true,
+				showUsage: true,
+				expanded,
+			}),
+		]);
 	}
 	render(width: number): string[] { return this.component.render(width); }
 	invalidate(): void { this.component.invalidate(); }
@@ -553,8 +586,9 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		}
 	};
 	const notifyCompletion = (agent: ManagedAgent) => {
-		if (agent.suppressNotifications || agent.waiting > 0 || agent.generation !== generation || agent.status === "closed") return;
+		if (agent.suppressNotifications || agent.waiting > 0 || agent.completionDelivery !== "none" || agent.generation !== generation || agent.status === "closed") return;
 		const data = snapshot(agent);
+		agent.completionDelivery = "automatic";
 		try {
 			pi.sendMessage({
 				customType: COMPLETION_MESSAGE_TYPE,
@@ -562,7 +596,9 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				display: true,
 				details: data,
 			}, { deliverAs: "steer", triggerTurn: true });
-		} catch { /* session may be shutting down */ }
+		} catch {
+			agent.completionDelivery = "none";
+		}
 	};
 	const finishRun = (agent: ManagedAgent, status: "completed" | "failed", error?: string) => {
 		if (agent.runSettled || agent.status === "closed") return;
@@ -681,6 +717,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				resolveCompletion,
 				runSettled: false,
 				waiting: 0,
+				completionDelivery: "none",
 				suppressNotifications: false,
 				generation: reservation.generation,
 				cleanupComplete: false,
@@ -827,6 +864,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 						output: agent.output,
 						error: agent.error,
 						activity: agent.activity,
+						completionDelivery: agent.completionDelivery,
 						suppressNotifications: agent.suppressNotifications,
 						completion: agent.completion,
 						resolveCompletion: agent.resolveCompletion,
@@ -838,6 +876,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 					agent.output = "";
 					agent.error = undefined;
 					agent.activity = [`follow-up: ${compact(message, 100)}`];
+					agent.completionDelivery = "none";
 					agent.suppressNotifications = false;
 					newCompletion(agent);
 					const rejectedRunResolve = agent.resolveCompletion;
@@ -881,10 +920,16 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				const timeoutMs = params.timeout_ms ?? DEFAULT_WAIT_MS;
 				if (!Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_WAIT_MS) throw new Error(`timeout_ms must be an integer between 0 and ${MAX_WAIT_MS}`);
 				const waited = await waitForAgents(targets, timeoutMs, signal);
+				const alreadyReportedAgentIds = targets
+					.filter((agent) => agent.completionDelivery === "automatic")
+					.map((agent) => agent.id);
+				for (const agent of targets) {
+					if (!isActive(agent) && agent.completionDelivery === "none") agent.completionDelivery = "wait";
+				}
 				const data = targets.map(snapshot);
 				return {
 					content: [{ type: "text", text: `${waited.interrupted ? "Wait interrupted.\n" : waited.timedOut ? "Wait timed out.\n" : ""}${formatAgents(data, true)}` }],
-					details: { action: "wait", agents: data, ...waited } satisfies ToolDetails,
+					details: { action: "wait", agents: data, alreadyReportedAgentIds, ...waited } satisfies ToolDetails,
 				};
 			}
 			if (params.action === "list") {

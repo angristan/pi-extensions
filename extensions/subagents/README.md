@@ -40,21 +40,28 @@ Send the API child a follow-up asking it to verify the upstream documentation.
 ```
 
 Completed children inject a compact result into the parent conversation and
-wake the parent if it is idle. Calling `wait` suppresses that automatic message
-for the children being awaited, so their results appear only once.
+wake the parent if it is idle. Each run has one completion owner: `wait` renders
+the result when it collects the run; otherwise the automatic completion does.
+A late `wait` hides its duplicate card when the automatic result was already
+reported.
 
 ## UI
 
 Calls use semantic theme colors: an accent progress headline becomes a success
 or error headline when settled. Identity and status come first, followed by an
-explicit dimmed prompt and, once available, a short emphasized result preview.
+explicit dimmed prompt and, once available, a short emphasized result preview
+and usage line. Waited and automatic completions share the exact same body.
 
 ```text
-• Waited for agents Collect delegated review
+• Agent completed
   └ ✓ api review · api-review-a1b2c3 · forked context · completed
     prompt  Inspect the API changes
     result  The API is sound; one missing edge-case test was identified.
+    usage   2 turns · ↑18k · ↓1.2k · R31k · $0.0842 · provider/model
 ```
+
+Spawn cards show identity and prompt. Send cards show identity and the follow-up
+prompt. Close cards show identity only, avoiding repeated historical details.
 
 In TUI mode, actively running children also appear in the shared top-right
 overlay stack:
@@ -72,8 +79,7 @@ overlay stack:
 Each active child gets three rows for identity and usage, a dedicated task
 preview, and latest activity. Elapsed startup time is intentionally omitted. The
 token total combines input, output, cache-read, and cache-write usage across the
-persistent conversation. Completed
-and failed children disappear from the live overlay as soon as they settle, but
+persistent conversation. Completed and failed children disappear from the live overlay as soon as they settle, but
 remain available through `/agents` while their conversation is open. The card
 hides automatically when no children are running. It shows up to three detailed
 children and uses an `/agents` overflow hint when space permits. The card hides
@@ -87,10 +93,10 @@ The footer still reports active children:
 ```
 
 Collapsed rows show the child name or generated ID, context mode, status, prompt,
-and a one-line result preview when available. Prompt always precedes result. Use
-`/agents` to list children and inspect their latest result. Child completion
-messages use the same card design and show task, context mode, status, model,
-turns, tokens, and cost. Expand `wait` or `list` results and completion messages
+and a one-line result preview when available. Prompt always precedes result, and
+completed runs always show turns, tokens, cost, and model on the final usage row.
+Use `/agents` to list children and inspect their latest result. Child completion
+messages use the same body as completed `wait` and `list` results. Expand `wait` or `list` results and completion messages
 with `Ctrl+O` to see the child's rendered output.
 
 ## Context and lifecycle

@@ -291,13 +291,16 @@ describe("subagents", () => {
 	test("renders wait timeouts, expanded results, and errors semantically", async () => {
 		const harness = createHarness();
 		const first = await spawnAgent(harness, "Inspect API");
-		harness.clients[0].complete("API review complete.");
 		const waitArgs = { reasoning: "Collect delegated review", action: "wait", agent_ids: [first.details.agents[0].id], timeout_ms: 1_000 };
-		const waited = await harness.tool.execute("wait", waitArgs, undefined, undefined, harness.ctx);
+		const waiting = harness.tool.execute("wait", waitArgs, undefined, undefined, harness.ctx);
+		harness.clients[0].complete("API review complete.");
+		const waited = await waiting;
 		const collapsed = rendered(harness.tool.renderResult(waited, { isPartial: false, expanded: false }, renderTheme, { args: waitArgs }));
 		expect(collapsed[0]).toBe("• Waited for agents Collect delegated review");
 		expect(collapsed[2]).toBe("    prompt  Inspect API");
 		expect(collapsed[3]).toBe("    result  API review complete.");
+		expect(collapsed[4]).toContain("    usage   1 turn · ↑10 · ↓5 · R2 · W3 · $0.0100 · test-provider/test-model");
+		expect(harness.sentMessages).toHaveLength(0);
 		const expanded = rendered(harness.tool.renderResult(waited, { isPartial: false, expanded: true }, renderTheme, { args: waitArgs }), 60);
 		expect(expanded.join("\n")).toContain("API review complete.");
 		expect(expanded.join("\n")).toContain("1 turn");
@@ -331,9 +334,16 @@ describe("subagents", () => {
 		const message = harness.sentMessages[0].message;
 		const renderer = harness.messageRenderers.get("subagent-result")!;
 		const compactLines = rendered(renderer(message, { expanded: false }, renderTheme));
-		expect(compactLines[0]).toContain("• Agent completed");
+		expect(compactLines[0]).toBe("• Agent completed");
+		expect(compactLines[1]).toContain("└ ✓ review-renderer-");
+		expect(compactLines[1]).toContain("forked context · completed");
 		expect(compactLines[2]).toBe("    prompt  Review renderer");
 		expect(compactLines[3]).toBe("    result  Renderer matches the shared design.");
+		expect(compactLines[4]).toContain("    usage   1 turn · ↑10 · ↓5 · R2 · W3 · $0.0100 · test-provider/test-model");
+		const waitArgs = { reasoning: "Collect reported result", action: "wait", agent_ids: [message.details.id], timeout_ms: 1_000 };
+		const waited = await harness.tool.execute("wait", waitArgs, undefined, undefined, harness.ctx);
+		expect(waited.details.alreadyReportedAgentIds).toEqual([message.details.id]);
+		expect(rendered(harness.tool.renderResult(waited, { isPartial: false, expanded: false }, renderTheme, { args: waitArgs }))).toEqual([]);
 		const expandedLines = rendered(renderer(message, { expanded: true }, renderTheme));
 		expect(expandedLines.join("\n")).toContain("Renderer matches the shared design.");
 	});
@@ -406,8 +416,16 @@ describe("subagents", () => {
 			args: { action: "spawn", task: "Review the renderer", name: "renderer review" },
 		}).render(100);
 		expect(styled[2]).toContain("prompt  \x1b[2mReview the renderer\x1b[0m");
-		await harness.tool.execute("send", { action: "send", agent_id: agent.id, message: "Check tests too" }, undefined, undefined, harness.ctx);
+		const sendArgs = { reasoning: "Refine delegated review", action: "send", agent_id: agent.id, message: "Check tests too" };
+		const sent = await harness.tool.execute("send", sendArgs, undefined, undefined, harness.ctx);
 		expect(harness.clients[0].steering).toEqual(["Check tests too"]);
+		const sentLines = rendered(harness.tool.renderResult(sent, { isPartial: false, expanded: false }, renderTheme, { args: sendArgs }));
+		expect(sentLines[2]).toBe("    prompt  Check tests too");
+		const closeArgs = { reasoning: "Release delegated reviewer", action: "close", agent_id: agent.id };
+		const closed = await harness.tool.execute("close", closeArgs, undefined, undefined, harness.ctx);
+		const closedLines = rendered(harness.tool.renderResult(closed, { isPartial: false, expanded: false }, renderTheme, { args: closeArgs }));
+		expect(closedLines).toHaveLength(2);
+		expect(closedLines[1]).toContain("closed");
 	});
 
 	test("rejects invalid context inheritance values", async () => {
