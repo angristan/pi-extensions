@@ -3,9 +3,10 @@
 Run generic child agents in isolated persistent conversations while the parent
 continues working.
 
-There are no named roles or agent presets. Give each child a concise name when
-spawning it; the name labels the transcript while the generated ID still targets
-follow-ups. Every child inherits the current model, thinking level, active tools,
+There are no named roles or agent presets. Every spawn requires a concise name
+that is unique, case-insensitively, for the parent session. Names are the public
+identity for follow-ups and lifecycle actions; internal process IDs are never
+displayed. Every child inherits the current model, thinking level, active tools,
 working directory, and project instructions.
 By default it also inherits compaction-aware conversation context; set
 `fork_context: false` for a fresh conversation containing only the explicit task.
@@ -19,14 +20,17 @@ tools.
 
 | Action | Fields | Behavior |
 |---|---|---|
-| `spawn` | `task`, `name?`, `fork_context?` | Start a named child and immediately return its generated ID; context inheritance defaults to `true` |
-| `send` | `agent_id`, `message` | Steer a running child or continue an idle child |
-| `wait` | `agent_ids?`, `timeout_ms?` | Wait for selected children, or every running child |
+| `spawn` | `task`, `name`, `fork_context?` | Start a uniquely named child; context inheritance defaults to `true` |
+| `send` | `agent_name`, `message` | Steer a running child or continue an idle child |
+| `wait` | `agent_names?`, `timeout_ms?` | Wait for selected children, or every running child |
 | `list` | — | List child status without waiting |
-| `close` | `agent_id` | Stop the child process and release its context |
+| `close` | `agent_name` | Stop the child process and release its context |
 
-Multiple `spawn` calls can execute concurrently. Parallelism is therefore a
-normal consequence of spawning independent tasks rather than a separate mode.
+Multiple `spawn` calls can execute concurrently. Name reservations are atomic,
+so case-insensitive duplicates fail immediately even during concurrent startup.
+Names remain reserved after close for the rest of the parent session. Parallelism
+is therefore a normal consequence of spawning independent tasks rather than a
+separate mode.
 
 Example requests:
 
@@ -51,12 +55,13 @@ Calls match the shared native-tool visual language: the state bullet carries
 progress, success, or error color; the verb is neutral bold text; and only the
 reasoning phrase uses the theme accent. Agent names are neutral bold text, prompt
 labels and metadata recede, prompt text and usage values stay dim, and the
-`result` label carries success or error color while result text remains readable. Identity and status come first,
-followed by prompt, result preview, and usage. Waited and automatic completions share the exact same body.
+`result` label carries success or error color while result text remains readable.
+Identity and status come first, followed by prompt, result preview, and usage.
+Waited and automatic completions share the exact same body.
 
 ```text
 • Agent completed
-  └ ✓ api review · api-review-a1b2c3 · forked context · completed
+  └ ✓ api review · forked context · completed
     prompt  Inspect the API changes
     result  The API is sound; one missing edge-case test was identified.
     usage   2 turns · ↑18k · ↓1.2k · R31k · $0.0842 · provider/model
@@ -82,8 +87,8 @@ Each active child gets three rows for identity and usage, a dedicated task
 preview, and latest activity. Elapsed startup time is intentionally omitted. The
 token total combines input, output, cache-read, and cache-write usage across the
 persistent conversation. Completed and failed children disappear from the live
-overlay as soon as they settle, but remain available through `/agents` while their conversation is open. The card
-hides automatically when no children are running. It shows up to three detailed
+overlay as soon as they settle, but remain available through `/agents` while
+their conversation is open. The card hides automatically when no children are running. It shows up to three detailed
 children and uses an `/agents` overflow hint when space permits. The card hides
 on terminals narrower than 90 columns or shorter than 10 rows. Use `/overlay`
 or `Ctrl+Shift+O` to toggle the shared overlay stack.
@@ -94,12 +99,12 @@ The footer still reports active children:
 2 subagents running · /agents to view
 ```
 
-Collapsed rows show the child name or generated ID, context mode, status, prompt,
-and a one-line result preview when available. Prompt always precedes result, and
+Collapsed rows show the child name, context mode, status, prompt, and a one-line
+result preview when available. Prompt always precedes result, and
 completed runs always show turns, tokens, cost, and model on the final usage row.
 Use `/agents` to list children and inspect their latest result. Child completion
-messages use the same body as completed `wait` and `list` results. Expand `wait` or `list` results and completion messages
-with `Ctrl+O` to see the child's rendered output.
+messages use the same body as completed `wait` and `list` results. Expand `wait`
+or `list` results and completion messages with `Ctrl+O` to see the child's rendered output.
 
 ## Context and lifecycle
 

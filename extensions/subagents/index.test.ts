@@ -157,8 +157,11 @@ function createHarness(options: {
 	return harness;
 }
 
+let agentNameSequence = 0;
+
 async function spawnAgent(harness: Harness, task = "Inspect the repository") {
-	return harness.tool.execute("call", { action: "spawn", task }, undefined, undefined, harness.ctx);
+	const name = `test-agent-${++agentNameSequence}`;
+	return harness.tool.execute("call", { action: "spawn", task, name }, undefined, undefined, harness.ctx);
 }
 
 const renderTheme = {
@@ -183,7 +186,7 @@ describe("subagents", () => {
 		const harness = createHarness();
 		expect(harness.tool).toBeDefined();
 		expect(Object.keys(harness.tool.parameters.properties)).toEqual([
-			"reasoning", "action", "task", "fork_context", "name", "agent_id", "message", "agent_ids", "timeout_ms",
+			"reasoning", "action", "task", "fork_context", "name", "agent_name", "message", "agent_names", "timeout_ms",
 		]);
 		expect(harness.tool.parameters.required).toEqual(["reasoning", "action"]);
 		expect(harness.tool.parameters.properties).not.toHaveProperty("agent_type");
@@ -192,9 +195,11 @@ describe("subagents", () => {
 		expect(harness.tool.parameters.properties.message.maxLength).toBe(16_000);
 		expect(harness.tool.description).toContain("inherit the current model");
 		expect(harness.tool.parameters.properties.fork_context.description).toContain("default true");
-		expect(harness.tool.parameters.properties.name).toMatchObject({ maxLength: 80, description: expect.stringContaining("human-readable") });
+		expect(harness.tool.parameters.properties.name).toMatchObject({ maxLength: 80, description: expect.stringContaining("Required unique") });
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("fork_context=false") && guideline.includes("defaults to true"))).toBe(true);
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("action=close") && guideline.includes("consume a process slot"))).toBe(true);
+		expect(harness.tool.prepareArguments({ action: "send", agent_id: "legacy-id" })).toEqual({ action: "send", agent_name: "legacy-id" });
+		expect(harness.tool.prepareArguments({ action: "wait", agent_ids: ["legacy-a"] })).toEqual({ action: "wait", agent_names: ["legacy-a"] });
 	});
 
 	test("spawns immediately, inherits runtime choices, and reports completion", async () => {
@@ -209,12 +214,17 @@ describe("subagents", () => {
 		const toolsArg = client.options.args[client.options.args.indexOf("--tools") + 1];
 		expect(toolsArg).toBe("read,grep");
 		expect(started.details.agents[0].status).toBe("running");
+		expect(client.prompts[0]).toContain(`Child agent name: ${started.details.agents[0].name}`);
+		expect(started.content[0].text).toContain(`Started ${started.details.agents[0].name}`);
+		expect(started.content[0].text).not.toContain(started.details.agents[0].id);
 		expect(harness.statuses.get("subagents")).toContain("1 subagent running");
 
 		client.complete("Found the relevant files.\u001b]0;unsafe\u0007");
 		await Bun.sleep(0);
 		expect(harness.sentMessages).toHaveLength(1);
 		expect(harness.sentMessages[0].message.content).toContain("Found the relevant files.");
+		expect(harness.sentMessages[0].message.content).toContain(`Agent: ${started.details.agents[0].name}`);
+		expect(harness.sentMessages[0].message.content).not.toContain(started.details.agents[0].id);
 		expect(harness.sentMessages[0].message.content).not.toContain("\u001b");
 		expect(harness.sentMessages[0].options).toEqual({ deliverAs: "steer", triggerTurn: true });
 		expect(harness.statuses.get("subagents")).toBeUndefined();
@@ -227,12 +237,12 @@ describe("subagents", () => {
 		expect(card.visible()).toBe(false);
 
 		const started = await spawnAgent(harness, "Inspect a very long repository task whose description must fit the overlay");
-		const id = started.details.agents[0].id;
+		const name = started.details.agents[0].name;
 		expect(card.visible()).toBe(true);
 		expect(card.title(renderTheme)).toContain("Agents ● 1 running");
 		let body = card.renderBody(54, 6, renderTheme);
 		expect(body).toHaveLength(3);
-		expect(body[0]).toContain(id.slice(-7));
+		expect(body[0]).toContain(name);
 		expect(body[0]).toContain("0 tok");
 		expect(body[1]).toContain("Inspect a very long repository task");
 		expect(body[2]).toContain("working");
@@ -250,10 +260,10 @@ describe("subagents", () => {
 		expect(card.visible()).toBe(false);
 		expect(card.renderBody(54, 6, renderTheme)).toEqual([]);
 		const listed = await harness.tool.execute("list", { action: "list" }, undefined, undefined, harness.ctx);
-		expect(listed.details.agents.find((agent: any) => agent.id === id)?.status).toBe("completed");
+		expect(listed.details.agents.find((agent: any) => agent.name === name)?.status).toBe("completed");
 		expect(harness.clients[0].stopped).toBe(false);
 
-		await harness.tool.execute("close", { action: "close", agent_id: id }, undefined, undefined, harness.ctx);
+		await harness.tool.execute("close", { action: "close", agent_name: name }, undefined, undefined, harness.ctx);
 		expect(harness.clients[0].stopped).toBe(true);
 		await harness.handlers.get("session_shutdown")?.({ reason: "quit" }, harness.ctx);
 		expect(harness.overlay.unregistered).toBe(true);
@@ -273,7 +283,7 @@ describe("subagents", () => {
 
 	test("uses native-style partial and settled cards without duplicate rows", async () => {
 		const harness = createHarness();
-		const args = { reasoning: "Delegate repository inspection", action: "spawn", task: "Inspect the repository" };
+		const args = { reasoning: "Delegate repository inspection", action: "spawn", task: "Inspect the repository", name: "repository inspector" };
 		const call = harness.tool.renderCall(args, renderTheme, { isPartial: true, args });
 		expect(rendered(call)).toEqual([
 			"• Spawning agent Delegate repository inspection",
@@ -292,7 +302,8 @@ describe("subagents", () => {
 		const lines = rendered(settled);
 		expect(lines[0]).toBe("• Spawned agent Delegate repository inspection");
 		expect(settled.render(100)[0]).toContain("\x1b[32m•\x1b[0m \x1b[1mSpawned agent\x1b[0m");
-		expect(lines[1]).toContain(`└ ● ${result.details.agents[0].id} · forked context · running`);
+		expect(lines[1]).toBe("  └ ● repository inspector · forked context · running");
+		expect(lines.join("\n")).not.toContain(result.details.agents[0].id);
 		expect(lines[2]).toBe("    prompt  Inspect the repository");
 		expect(lines.join("\n")).not.toMatch(/\b\d+ms\b/);
 		expect(lines.every((line) => visibleWidth(line) <= 100)).toBe(true);
@@ -301,7 +312,7 @@ describe("subagents", () => {
 	test("renders wait timeouts, expanded results, and errors semantically", async () => {
 		const harness = createHarness();
 		const first = await spawnAgent(harness, "Inspect API");
-		const waitArgs = { reasoning: "Collect delegated review", action: "wait", agent_ids: [first.details.agents[0].id], timeout_ms: 1_000 };
+		const waitArgs = { reasoning: "Collect delegated review", action: "wait", agent_names: [first.details.agents[0].name], timeout_ms: 1_000 };
 		const waiting = harness.tool.execute("wait", waitArgs, undefined, undefined, harness.ctx);
 		harness.clients[0].complete("API review complete.");
 		const waited = await waiting;
@@ -318,7 +329,7 @@ describe("subagents", () => {
 		expect(expanded.every((line) => visibleWidth(line) <= 60)).toBe(true);
 
 		const second = await spawnAgent(harness, "Slow task");
-		const timeoutArgs = { reasoning: "Check slow task", action: "wait", agent_ids: [second.details.agents[0].id], timeout_ms: 0 };
+		const timeoutArgs = { reasoning: "Check slow task", action: "wait", agent_names: [second.details.agents[0].name], timeout_ms: 0 };
 		const timeout = await harness.tool.execute("timeout", timeoutArgs, undefined, undefined, harness.ctx);
 		const timedOut = rendered(harness.tool.renderResult(timeout, { isPartial: false, expanded: false }, renderTheme, { args: timeoutArgs }));
 		expect(timedOut[0]).toBe("• Wait timed out Check slow task");
@@ -345,17 +356,18 @@ describe("subagents", () => {
 		const renderer = harness.messageRenderers.get("subagent-result")!;
 		const compactLines = rendered(renderer(message, { expanded: false }, renderTheme));
 		expect(compactLines[0]).toBe("• Agent completed");
-		expect(compactLines[1]).toContain("└ ✓ review-renderer-");
+		expect(compactLines[1]).toContain(`└ ✓ ${message.details.name}`);
+		expect(compactLines.join("\n")).not.toContain(message.details.id);
 		expect(compactLines[1]).toContain("forked context · completed");
 		expect(compactLines[2]).toBe("    prompt  Review renderer");
 		expect(compactLines[3]).toBe("    result  Renderer matches the shared design.");
 		expect(compactLines[4]).toContain("    usage   1 turn · ↑10 · ↓5 · R2 · W3 · $0.0100 · test-provider/test-model");
 		const styledLines = renderer(message, { expanded: false }, semanticTheme).render(100);
-		expect(styledLines[1]).toContain("\x1b[39mreview-renderer-");
+		expect(styledLines[1]).toContain(`\x1b[39m${message.details.name}\x1b[0m`);
 		expect(styledLines[2]).toContain("\x1b[90mprompt\x1b[0m  \x1b[2mReview renderer\x1b[0m");
 		expect(styledLines[3]).toContain("\x1b[32mresult\x1b[0m  \x1b[39mRenderer matches the shared design.\x1b[0m");
 		expect(styledLines[4]).toContain("\x1b[90musage \x1b[0m  \x1b[2m1 turn");
-		const waitArgs = { reasoning: "Collect reported result", action: "wait", agent_ids: [message.details.id], timeout_ms: 1_000 };
+		const waitArgs = { reasoning: "Collect reported result", action: "wait", agent_names: [message.details.name], timeout_ms: 1_000 };
 		const waited = await harness.tool.execute("wait", waitArgs, undefined, undefined, harness.ctx);
 		expect(waited.details.alreadyReportedAgentIds).toEqual([message.details.id]);
 		expect(rendered(harness.tool.renderResult(waited, { isPartial: false, expanded: false }, renderTheme, { args: waitArgs }))).toEqual([]);
@@ -394,10 +406,11 @@ describe("subagents", () => {
 			action: "spawn",
 			task: "Inspect without history",
 			fork_context: false,
+			name: "history-free inspector",
 		}, undefined, undefined, harness.ctx);
 		expect(started.details.agents[0].contextMode).toBe("fresh");
 		const lines = rendered(harness.tool.renderResult(started, { isPartial: false, expanded: false }, renderTheme, {
-			args: { action: "spawn", task: "Inspect without history", fork_context: false },
+			args: { action: "spawn", task: "Inspect without history", fork_context: false, name: "history-free inspector" },
 		}));
 		expect(lines[1]).toContain("fresh context");
 		const args = harness.clients[0].options.args;
@@ -407,7 +420,7 @@ describe("subagents", () => {
 		expect(harness.clients[0].prompts[0]).toContain("No parent conversation was inherited");
 	});
 
-	test("uses a supplied name while lifecycle actions keep the generated ID", async () => {
+	test("uses names for lifecycle actions while IDs remain internal", async () => {
 		const harness = createHarness();
 		const started = await harness.tool.execute("call", {
 			action: "spawn",
@@ -421,7 +434,8 @@ describe("subagents", () => {
 			args: { action: "spawn", task: "Review the renderer", name: "renderer review" },
 		}));
 		expect(lines[0]).toBe("• Spawned agent");
-		expect(lines[1]).toContain("└ ● renderer review · renderer-rev");
+		expect(lines[1]).toBe("  └ ● renderer review · forked context · running");
+		expect(lines.join("\n")).not.toContain(agent.id);
 		expect(lines[2]).toBe("    prompt  Review the renderer");
 		const styled = harness.tool.renderResult(started, { isPartial: false, expanded: false }, semanticTheme, {
 			args: { action: "spawn", task: "Review the renderer", name: "renderer review" },
@@ -429,16 +443,40 @@ describe("subagents", () => {
 		expect(styled[1]).toContain("\x1b[35m●\x1b[0m \x1b[39mrenderer review\x1b[0m");
 		expect(styled[1]).toContain("\x1b[35mrunning\x1b[0m");
 		expect(styled[2]).toContain("\x1b[90mprompt\x1b[0m  \x1b[2mReview the renderer\x1b[0m");
-		const sendArgs = { reasoning: "Refine delegated review", action: "send", agent_id: agent.id, message: "Check tests too" };
+		const sendArgs = { reasoning: "Refine delegated review", action: "send", agent_name: agent.name, message: "Check tests too" };
 		const sent = await harness.tool.execute("send", sendArgs, undefined, undefined, harness.ctx);
 		expect(harness.clients[0].steering).toEqual(["Check tests too"]);
 		const sentLines = rendered(harness.tool.renderResult(sent, { isPartial: false, expanded: false }, renderTheme, { args: sendArgs }));
 		expect(sentLines[2]).toBe("    prompt  Check tests too");
-		const closeArgs = { reasoning: "Release delegated reviewer", action: "close", agent_id: agent.id };
+		const closeArgs = { reasoning: "Release delegated reviewer", action: "close", agent_name: agent.name };
 		const closed = await harness.tool.execute("close", closeArgs, undefined, undefined, harness.ctx);
 		const closedLines = rendered(harness.tool.renderResult(closed, { isPartial: false, expanded: false }, renderTheme, { args: closeArgs }));
 		expect(closedLines).toHaveLength(2);
 		expect(closedLines[1]).toContain("closed");
+	});
+
+	test("requires unique case-insensitive names across concurrent and closed agents", async () => {
+		const harness = createHarness();
+		await expect(harness.tool.execute("missing-name", {
+			action: "spawn",
+			task: "Missing name",
+		}, undefined, undefined, harness.ctx)).rejects.toThrow("requires an agent name");
+
+		const attempts = await Promise.allSettled([
+			harness.tool.execute("first-name", { action: "spawn", task: "First", name: "API reviewer" }, undefined, undefined, harness.ctx),
+			harness.tool.execute("duplicate-name", { action: "spawn", task: "Second", name: "  api   REVIEWER  " }, undefined, undefined, harness.ctx),
+		]);
+		expect(attempts.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+		const rejected = attempts.find((result): result is PromiseRejectedResult => result.status === "rejected");
+		expect(String(rejected?.reason)).toContain("Agent name already exists");
+
+		const active = (await harness.tool.execute("list", { action: "list" }, undefined, undefined, harness.ctx)).details.agents[0];
+		await harness.tool.execute("close", { action: "close", agent_name: active.name }, undefined, undefined, harness.ctx);
+		await expect(harness.tool.execute("reuse-name", {
+			action: "spawn",
+			task: "Third",
+			name: "api reviewer",
+		}, undefined, undefined, harness.ctx)).rejects.toThrow("Agent name already exists");
 	});
 
 	test("rejects invalid context inheritance values", async () => {
@@ -446,6 +484,7 @@ describe("subagents", () => {
 		await expect(harness.tool.execute("call", {
 			action: "spawn",
 			task: "Inspect context",
+			name: "context inspector",
 			fork_context: "false",
 		}, undefined, undefined, harness.ctx)).rejects.toThrow("fork_context must be a boolean");
 		expect(harness.clients).toHaveLength(0);
@@ -478,7 +517,7 @@ describe("subagents", () => {
 		expect(messages[0].content).toBe("Delegate this");
 	});
 
-	test("rejects missing IDs instead of resolving them as empty prefixes", async () => {
+	test("rejects missing agent names", async () => {
 		const harness = createHarness();
 		await spawnAgent(harness);
 		await expect(harness.tool.execute("send", { action: "send", message: "wrong target" }, undefined, undefined, harness.ctx)).rejects.toThrow("not found");
@@ -496,7 +535,7 @@ describe("subagents", () => {
 		const started = await spawnAgent(harness);
 		await expect(harness.tool.execute("send", {
 			action: "send",
-			agent_id: started.details.agents[0].id,
+			agent_name: started.details.agents[0].name,
 			message: "x".repeat(messageLimit + 1),
 		}, undefined, undefined, harness.ctx)).rejects.toThrow("at most");
 		expect(harness.clients[0].steering).toHaveLength(0);
@@ -530,7 +569,7 @@ describe("subagents", () => {
 		}, 5);
 		const result = await harness.tool.execute("wait", {
 			action: "wait",
-			agent_ids: [first.details.agents[0].id, second.details.agents[0].id],
+			agent_names: [first.details.agents[0].name, second.details.agents[0].name],
 			timeout_ms: 1_000,
 		}, undefined, undefined, harness.ctx);
 		expect(result.content[0].text).toContain("First result");
@@ -542,12 +581,12 @@ describe("subagents", () => {
 	test("steers a running agent and prompts an idle agent", async () => {
 		const harness = createHarness();
 		const started = await spawnAgent(harness);
-		const id = started.details.agents[0].id;
-		await harness.tool.execute("send-running", { action: "send", agent_id: id, message: "Focus on tests" }, undefined, undefined, harness.ctx);
+		const name = started.details.agents[0].name;
+		await harness.tool.execute("send-running", { action: "send", agent_name: name, message: "Focus on tests" }, undefined, undefined, harness.ctx);
 		expect(harness.clients[0].steering).toEqual(["Focus on tests"]);
 		expect(harness.overlay.definition.renderBody(54, 6, renderTheme)[2]).toContain("steered: Focus on tests");
 		harness.clients[0].complete("Initial result");
-		await harness.tool.execute("send-idle", { action: "send", agent_id: id, message: "Now inspect docs" }, undefined, undefined, harness.ctx);
+		await harness.tool.execute("send-idle", { action: "send", agent_name: name, message: "Now inspect docs" }, undefined, undefined, harness.ctx);
 		expect(harness.clients[0].prompts.at(-1)).toBe("Now inspect docs");
 		expect(harness.overlay.definition.renderBody(54, 6, renderTheme)[2]).toContain("follow-up: Now inspect");
 	});
@@ -555,10 +594,10 @@ describe("subagents", () => {
 	test("preserves child state when steer or follow-up dispatch is rejected", async () => {
 		const harness = createHarness();
 		const started = await spawnAgent(harness);
-		const id = started.details.agents[0].id;
+		const name = started.details.agents[0].name;
 		harness.clients[0].steerError = new Error("not streaming");
 		await expect(harness.tool.execute("send-running", {
-			action: "send", agent_id: id, message: "Race with completion",
+			action: "send", agent_name: name, message: "Race with completion",
 		}, undefined, undefined, harness.ctx)).rejects.toThrow("not streaming");
 		let listed = await harness.tool.execute("list", { action: "list" }, undefined, undefined, harness.ctx);
 		expect(listed.details.agents[0]).toMatchObject({ status: "running", error: undefined });
@@ -569,7 +608,7 @@ describe("subagents", () => {
 		const notificationCount = harness.sentMessages.length;
 		harness.clients[0].promptError = new Error("prompt rejected");
 		await expect(harness.tool.execute("send-idle", {
-			action: "send", agent_id: id, message: "Rejected follow-up",
+			action: "send", agent_name: name, message: "Rejected follow-up",
 		}, undefined, undefined, harness.ctx)).rejects.toThrow("prompt rejected");
 		await Bun.sleep(0);
 		listed = await harness.tool.execute("list", { action: "list" }, undefined, undefined, harness.ctx);
@@ -582,7 +621,7 @@ describe("subagents", () => {
 		const first = await spawnAgent(harness, "First");
 		await spawnAgent(harness, "Second");
 		await expect(spawnAgent(harness, "Third")).rejects.toThrow("At most 2 subagents");
-		await harness.tool.execute("close", { action: "close", agent_id: first.details.agents[0].id }, undefined, undefined, harness.ctx);
+		await harness.tool.execute("close", { action: "close", agent_name: first.details.agents[0].name }, undefined, undefined, harness.ctx);
 		expect(harness.clients[0].stopped).toBe(true);
 		await expect(spawnAgent(harness, "Third")).resolves.toBeDefined();
 	});
@@ -626,14 +665,14 @@ describe("subagents", () => {
 	test("retries close after stop failure and still clears live UI", async () => {
 		const harness = createHarness();
 		const started = await spawnAgent(harness);
-		const id = started.details.agents[0].id;
+		const name = started.details.agents[0].name;
 		harness.clients[0].stopError = new Error("stop failed");
-		await expect(harness.tool.execute("close", { action: "close", agent_id: id }, undefined, undefined, harness.ctx)).rejects.toThrow("stop failed");
+		await expect(harness.tool.execute("close", { action: "close", agent_name: name }, undefined, undefined, harness.ctx)).rejects.toThrow("stop failed");
 		expect(harness.overlay.definition.visible()).toBe(false);
 		expect(harness.statuses.get("subagents")).toBeUndefined();
 		expect(harness.clients[0].stopped).toBe(false);
 		harness.clients[0].stopError = undefined;
-		await expect(harness.tool.execute("close", { action: "close", agent_id: id }, undefined, undefined, harness.ctx)).resolves.toBeDefined();
+		await expect(harness.tool.execute("close", { action: "close", agent_name: name }, undefined, undefined, harness.ctx)).resolves.toBeDefined();
 		expect(harness.clients[0].stopped).toBe(true);
 	});
 

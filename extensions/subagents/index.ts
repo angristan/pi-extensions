@@ -116,10 +116,16 @@ function boundedInput(value: unknown, label: string, maxChars: number): string {
 	return text;
 }
 
-function optionalName(value: unknown): string | undefined {
-	if (value === undefined) return undefined;
-	if (typeof value !== "string") throw new Error("agent name must be a string");
-	return boundedInput(value, "agent name", MAX_AGENT_NAME_CHARS);
+function normalizeAgentName(value: unknown): string {
+	if (typeof value !== "string") throw new Error("spawn requires an agent name");
+	const name = sanitizeTerminal(value).replace(/\s+/g, " ").trim();
+	if (!name) throw new Error("spawn requires an agent name");
+	if (name.length > MAX_AGENT_NAME_CHARS) throw new Error(`agent name must be at most ${MAX_AGENT_NAME_CHARS} characters`);
+	return name;
+}
+
+function agentNameKey(name: string): string {
+	return name.toLowerCase();
 }
 
 export function boundedText(text: string, maxBytes: number): string {
@@ -163,13 +169,6 @@ function statusColor(status: AgentStatus): string {
 	if (status === "completed") return "success";
 	if (status === "failed") return "error";
 	return "muted";
-}
-
-function compactAgentId(id: string, width: number): string {
-	if (visibleWidth(id) <= width) return id;
-	if (width < 9) return truncateToWidth(id, width, "…");
-	const suffix = id.slice(-7);
-	return `${truncateToWidth(id, Math.max(1, width - visibleWidth(suffix) - 1), "")}…${suffix}`;
 }
 
 function overlayTokenCount(agent: AgentSnapshot): number {
@@ -253,7 +252,7 @@ function snapshot(agent: ManagedAgent): AgentSnapshot {
 }
 
 function formatAgent(agent: AgentSnapshot, includeOutput: boolean): string {
-	const identity = agent.name ? `${agent.name} · ${agent.id}` : agent.id;
+	const identity = agent.name ?? "unnamed agent";
 	const lines = [`${statusSymbol(agent.status)} ${identity} · ${agent.contextMode} context · ${agent.status}`, `task: ${sanitizeTerminal(agent.task)}`];
 	if (agent.error) lines.push(`error: ${agent.error}`);
 	const usage = usageText(agent);
@@ -279,16 +278,17 @@ function buildArgs(pi: ExtensionAPI, ctx: any, fork: ContextFork): string[] {
 	return args;
 }
 
-function childTask(id: string, task: string, inheritedContext: boolean): string {
+function childTask(name: string, task: string, inheritedContext: boolean): string {
 	const contextNote = inheritedContext
 		? "The inherited conversation is context, not a request to continue unrelated work."
 		: "No parent conversation was inherited; rely on the explicit task and available project instructions.";
-	return `${CHILD_PROMPT}\n${contextNote}\n\nChild agent id: ${id}\n\nTask:\n${task.trim()}`;
+	return `${CHILD_PROMPT}\n${contextNote}\n\nChild agent name: ${name}\n\nTask:\n${task.trim()}`;
 }
 
 function messageContent(agent: AgentSnapshot): string {
 	return boundedText([
-		`<subagent_result id="${agent.id}" status="${agent.status}">`,
+		`<subagent_result status="${agent.status}">`,
+		`Agent: ${sanitizeTerminal(agent.name ?? "unnamed agent")}`,
 		`Task: ${sanitizeTerminal(agent.task)}`,
 		agent.error ? `Error: ${agent.error}` : "",
 		agent.output ? `Result:\n${agent.output}` : "Result: (no final text)",
@@ -354,16 +354,16 @@ function actionVerb(action: unknown, partial: boolean, details?: ToolDetails): s
 function actionDetail(args: Record<string, unknown> | undefined): string {
 	if (!args) return "";
 	if (args.action === "spawn") return compact(String(args.task ?? ""), 180);
-	if (args.action === "send") return [compact(String(args.agent_id ?? ""), 48), compact(String(args.message ?? ""), 120)].filter(Boolean).join(" · ");
+	if (args.action === "send") return [compact(String(args.agent_name ?? ""), 48), compact(String(args.message ?? ""), 120)].filter(Boolean).join(" · ");
 	if (args.action === "wait") {
-		const ids = Array.isArray(args.agent_ids) && args.agent_ids.length ? args.agent_ids.join(", ") : "running agents";
+		const names = Array.isArray(args.agent_names) && args.agent_names.length ? args.agent_names.join(", ") : "running agents";
 		const timeout = Number.isInteger(args.timeout_ms)
 			? (args.timeout_ms === 0 ? "no wait" : `${formatElapsed(args.timeout_ms as number)} timeout`)
 			: "";
-		return [compact(ids, 120), timeout].filter(Boolean).join(" · ");
+		return [compact(names, 120), timeout].filter(Boolean).join(" · ");
 	}
 	if (args.action === "list") return "current session";
-	return compact(String(args.agent_id ?? ""), 80);
+	return compact(String(args.agent_name ?? ""), 80);
 }
 
 function reasoningDetail(args: Record<string, unknown> | undefined, theme: any, partial: boolean): string {
@@ -374,9 +374,7 @@ function reasoningDetail(args: Record<string, unknown> | undefined, theme: any, 
 
 function agentSummary(agent: AgentSnapshot, theme: any): string {
 	const mark = theme.fg(statusColor(agent.status), statusSymbol(agent.status));
-	const identity = agent.name
-		? `${theme.fg("text", theme.bold(agent.name))} ${theme.fg("dim", `· ${compactAgentId(agent.id, 20)}`)}`
-		: theme.fg("text", theme.bold(agent.id));
+	const identity = theme.fg("text", theme.bold(agent.name ?? "unnamed agent"));
 	const metadata = `${theme.fg("muted", `${agent.contextMode} context`)} · ${theme.fg(statusColor(agent.status), agent.status)}`;
 	return `${mark} ${identity} · ${metadata}`;
 }
@@ -529,6 +527,8 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	let generation = 0;
 	let sessionActive = false;
 	let spawnReservations = 0;
+	const usedAgentNames = new Set<string>();
+	const reservedAgentNames = new Set<string>();
 
 	const openAgents = () => [...agents.values()].filter((agent) => agent.client);
 	const orderedAgents = () => [...agents.values()].sort((a, b) => Number(isActive(b)) - Number(isActive(a)) || b.startedAt - a.startedAt);
@@ -550,12 +550,12 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		const count = activeAgents().length;
 		activeCtx.ui.setStatus(STATUS_KEY, count > 0 ? `${count} subagent${count === 1 ? "" : "s"} running · /agents to view` : undefined);
 	};
-	const resolveAgent = (idOrPrefix: string): ManagedAgent | undefined => {
-		const query = idOrPrefix.trim();
+	const resolveAgent = (nameOrLegacyId: string): ManagedAgent | undefined => {
+		const query = sanitizeTerminal(nameOrLegacyId).replace(/\s+/g, " ").trim();
 		if (!query) return undefined;
-		if (agents.has(query)) return agents.get(query);
-		const matches = [...agents.values()].filter((agent) => agent.id.startsWith(query));
-		return matches.length === 1 ? matches[0] : undefined;
+		const key = agentNameKey(query);
+		return [...agents.values()].find((agent) => agent.name && agentNameKey(agent.name) === key)
+			?? agents.get(query);
 	};
 	const trimClosed = () => {
 		const closed = [...agents.values()]
@@ -566,20 +566,30 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			if (oldest) agents.delete(oldest.id);
 		}
 	};
-	const reserveSpawn = (): { generation: number; release(): void } => {
+	const reserveSpawn = (name: string): { generation: number; commit(): void; release(): void } => {
 		if (!sessionActive) throw new Error("Cannot spawn a subagent outside an active parent session");
+		const key = agentNameKey(name);
+		if (usedAgentNames.has(key) || reservedAgentNames.has(key)) throw new Error(`Agent name already exists: ${name}`);
 		if (openAgents().length + spawnReservations >= maxAgents) {
 			throw new Error(`At most ${maxAgents} subagents may remain open; close one before spawning another`);
 		}
 		spawnReservations += 1;
+		reservedAgentNames.add(key);
 		let released = false;
+		const release = () => {
+			if (released) return;
+			released = true;
+			reservedAgentNames.delete(key);
+			spawnReservations = Math.max(0, spawnReservations - 1);
+		};
 		return {
 			generation,
-			release() {
+			commit() {
 				if (released) return;
-				released = true;
-				spawnReservations = Math.max(0, spawnReservations - 1);
+				usedAgentNames.add(key);
+				release();
 			},
+			release,
 		};
 	};
 	const assertCurrentSession = (expectedGeneration: number) => {
@@ -683,9 +693,9 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	};
 	const startAgent = async (task: string, ctx: any, inheritContext = true, name?: string): Promise<ManagedAgent> => {
 		const normalizedTask = boundedInput(task, "spawn task", MAX_TASK_CHARS);
-		const normalizedName = optionalName(name);
-		const reservation = reserveSpawn();
-		const seed = (normalizedName ?? normalizedTask).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 16) || "agent";
+		const normalizedName = normalizeAgentName(name);
+		const reservation = reserveSpawn(normalizedName);
+		const seed = normalizedName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 16) || "agent";
 		let id: string;
 		do { id = `${seed}-${randomBytes(3).toString("hex")}`; } while (agents.has(id));
 		let fork: ContextFork | undefined;
@@ -725,7 +735,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				cleanupComplete: false,
 			};
 			agents.set(id, agent);
-			reservation.release();
+			reservation.commit();
 			client.onEvent((event) => handleEvent(agent!, event));
 			client.onExit((error) => {
 				if (agent!.client === client) agent!.client = undefined;
@@ -760,7 +770,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			assertCurrentSession(reservation.generation);
 			if (agent.status === "closed") throw new Error("Subagent closed during startup");
 			agent.status = "running";
-			await client.prompt(childTask(id, normalizedTask, inheritContext));
+			await client.prompt(childTask(normalizedName, normalizedTask, inheritContext));
 			assertCurrentSession(reservation.generation);
 			updateStatus();
 			return agent;
@@ -817,11 +827,11 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	pi.registerTool({
 		name: TOOL_NAME,
 		label: "Agents",
-		description: "Spawn and coordinate generic child agents with isolated persistent context. Actions: spawn starts one and returns its ID immediately; send continues it; wait collects one or more results; list shows status; close stops and releases it. Children inherit the current model, tools, working directory, and project instructions; conversation context is inherited by default and can be disabled per spawn. Completion results also arrive automatically.",
+		description: "Spawn and coordinate uniquely named child agents with isolated persistent context. Actions: spawn starts one immediately; send continues it by name; wait collects one or more named results; list shows status; close stops and releases it. Children inherit the current model, tools, working directory, and project instructions; conversation context is inherited by default and can be disabled per spawn. Completion results also arrive automatically.",
 		promptSnippet: "Spawn and coordinate isolated child agents for explicitly delegated work",
 		promptGuidelines: [
 			"Use agents only when the user or applicable project instructions request delegation, subagents, or parallel agent work.",
-			"Call agents with action=spawn for concrete independent tasks; give each child a concise task-specific name; multiple spawn calls can run concurrently, and the parent should continue useful non-overlapping work.",
+			"Call agents with action=spawn for concrete independent tasks; give each child a concise task-specific name that is unique in the current session; multiple spawn calls can run concurrently, and the parent should continue useful non-overlapping work.",
 			"Set fork_context=false for self-contained tasks that do not need the parent conversation; it defaults to true.",
 			"Use agents action=wait only when blocked on child results; completed children report back automatically.",
 			"After collecting a child's final result, call agents with action=close when no further follow-up is needed; completed children remain open and consume a process slot until closed.",
@@ -833,32 +843,39 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				action: { type: "string", enum: ["spawn", "send", "wait", "list", "close"], description: "Lifecycle action" },
 				task: { type: "string", maxLength: MAX_TASK_CHARS, description: "Concrete task for spawn" },
 				fork_context: { type: "boolean", description: "Whether spawn inherits the parent conversation (default true)" },
-				name: { type: "string", maxLength: MAX_AGENT_NAME_CHARS, description: "Short human-readable name for a spawned agent" },
-				agent_id: { type: "string", description: "Agent ID or unambiguous prefix for send or close" },
+				name: { type: "string", maxLength: MAX_AGENT_NAME_CHARS, description: "Required unique human-readable name for spawn" },
+				agent_name: { type: "string", description: "Agent name for send or close" },
 				message: { type: "string", maxLength: MAX_MESSAGE_CHARS, description: "Follow-up instruction for send" },
-				agent_ids: { type: "array", items: { type: "string" }, description: "Agent IDs or prefixes for wait; defaults to all running agents" },
+				agent_names: { type: "array", items: { type: "string" }, description: "Agent names for wait; defaults to all running agents" },
 				timeout_ms: { type: "integer", minimum: 0, maximum: MAX_WAIT_MS, description: `Wait timeout in milliseconds (default ${DEFAULT_WAIT_MS})` },
 			},
 			required: ["action"],
 		} as any),
+		prepareArguments(args: any) {
+			if (!args || typeof args !== "object") return args;
+			const { agent_id, agent_ids, ...current } = args;
+			if (current.agent_name === undefined && typeof agent_id === "string") current.agent_name = agent_id;
+			if (current.agent_names === undefined && Array.isArray(agent_ids)) current.agent_names = agent_ids;
+			return current;
+		},
 		async execute(_toolCallId: string, params: any, signal: AbortSignal | undefined, _onUpdate: any, ctx: any) {
 			if (params.action === "spawn") {
 				if (params.fork_context !== undefined && typeof params.fork_context !== "boolean") throw new Error("fork_context must be a boolean");
 				const agent = await startAgent(String(params.task ?? ""), ctx, params.fork_context ?? true, params.name);
 				const data = snapshot(agent);
 				return {
-					content: [{ type: "text", text: `Started ${agent.name ? `${agent.name} (${agent.id})` : agent.id} for: ${agent.task}\nContinue non-overlapping work; its result will arrive automatically.` }],
+					content: [{ type: "text", text: `Started ${agent.name} for: ${agent.task}\nContinue non-overlapping work; its result will arrive automatically.` }],
 					details: { action: "spawn", agents: [data] } satisfies ToolDetails,
 				};
 			}
 			if (params.action === "send") {
-				const agent = resolveAgent(String(params.agent_id ?? ""));
-				if (!agent) throw new Error(`Subagent not found or prefix is ambiguous: ${params.agent_id ?? ""}`);
-				if (!agent.client || agent.status === "closed") throw new Error(`Subagent ${agent.id} is closed`);
+				const agent = resolveAgent(String(params.agent_name ?? ""));
+				if (!agent) throw new Error(`Agent not found: ${params.agent_name ?? ""}`);
+				if (!agent.client || agent.status === "closed") throw new Error(`Agent ${agent.name} is closed`);
 				const message = boundedInput(params.message, "send message", MAX_MESSAGE_CHARS);
 				const beginFollowUp = async () => {
 					const client = agent.client;
-					if (!client || agent.status === "closed") throw new Error(`Subagent ${agent.id} is closed`);
+					if (!client || agent.status === "closed") throw new Error(`Agent ${agent.name} is closed`);
 					const previous = {
 						status: agent.status,
 						startedAt: agent.startedAt,
@@ -908,14 +925,14 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				} else await beginFollowUp();
 				updateStatus();
 				const data = snapshot(agent);
-				return { content: [{ type: "text", text: `Sent follow-up to ${agent.id}.` }], details: { action: "send", agents: [data] } satisfies ToolDetails };
+				return { content: [{ type: "text", text: `Sent follow-up to ${agent.name}.` }], details: { action: "send", agents: [data] } satisfies ToolDetails };
 			}
 			if (params.action === "wait") {
-				const requested: string[] = Array.isArray(params.agent_ids) ? params.agent_ids : [];
+				const requested: string[] = Array.isArray(params.agent_names) ? params.agent_names : [];
 				const targets = requested.length > 0
-					? requested.map((id) => {
-						const agent = resolveAgent(id);
-						if (!agent) throw new Error(`Subagent not found or prefix is ambiguous: ${id}`);
+					? requested.map((name) => {
+						const agent = resolveAgent(name);
+						if (!agent) throw new Error(`Agent not found: ${name}`);
 						return agent;
 					})
 					: orderedAgents().filter(isActive);
@@ -939,11 +956,11 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				return { content: [{ type: "text", text: formatAgents(data, false) }], details: { action: "list", agents: data } satisfies ToolDetails };
 			}
 			if (params.action === "close") {
-				const agent = resolveAgent(String(params.agent_id ?? ""));
-				if (!agent) throw new Error(`Subagent not found or prefix is ambiguous: ${params.agent_id ?? ""}`);
+				const agent = resolveAgent(String(params.agent_name ?? ""));
+				if (!agent) throw new Error(`Agent not found: ${params.agent_name ?? ""}`);
 				await closeAgent(agent);
 				const data = snapshot(agent);
-				return { content: [{ type: "text", text: `Closed ${agent.id}.` }], details: { action: "close", agents: [data] } satisfies ToolDetails };
+				return { content: [{ type: "text", text: `Closed ${agent.name}.` }], details: { action: "close", agents: [data] } satisfies ToolDetails };
 			}
 			throw new Error(`Unknown agents action: ${params.action}`);
 		},
