@@ -70,3 +70,28 @@ test("aggregates assistant usage and resolves missing historical costs", () => {
 	expect(totals).toMatchObject({ input: 30, output: 12, cacheRead: 30, cacheWrite: 10, cost: 0.35 });
 	expect(totals.sessionCacheHit).toBeCloseTo(42.857, 2);
 });
+
+test("merges persisted subagent tokens and cost into session totals", () => {
+	const entries = [
+		{ type: "message", message: { role: "assistant", usage: { input: 10, output: 5, cacheRead: 20, cacheWrite: 0, cost: { total: 0.25 } } } },
+		{
+			type: "custom",
+			customType: "subagent-usage",
+			data: {
+				version: 1,
+				provider: "test-provider",
+				model: "child-model",
+				usage: { input: 30, output: 7, cacheRead: 40, cacheWrite: 3, cost: 0 },
+			},
+		},
+	];
+	const resolved: string[] = [];
+	const totals = usageTotals(entries, (source) => {
+		resolved.push(`${source.provider}/${source.model}`);
+		return 0.15;
+	});
+
+	expect(totals).toMatchObject({ input: 40, output: 12, cacheRead: 60, cacheWrite: 3, cost: 0.4 });
+	expect(totals.sessionCacheHit).toBeCloseTo(58.252, 2);
+	expect(resolved).toEqual(["test-provider/child-model"]);
+});

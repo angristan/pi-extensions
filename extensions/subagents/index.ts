@@ -16,6 +16,7 @@ import {
 	type AgentClientOptions,
 	type RpcAgentEvent,
 } from "./rpc.js";
+import { SUBAGENT_USAGE_ENTRY_TYPE, SUBAGENT_USAGE_EVENT, persistedSubagentUsage } from "./usage.js";
 
 const TOOL_NAME = "agents";
 const COMPLETION_MESSAGE_TYPE = "subagent-result";
@@ -646,6 +647,11 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				agent.usage.cacheRead += usage.cacheRead || 0;
 				agent.usage.cacheWrite += usage.cacheWrite || 0;
 				agent.usage.cost += usage.cost?.total || 0;
+			}
+			const persistedUsage = persistedSubagentUsage(event.message);
+			if (persistedUsage && sessionActive && agent.generation === generation) {
+				pi.appendEntry(SUBAGENT_USAGE_ENTRY_TYPE, persistedUsage);
+				pi.events.emit(SUBAGENT_USAGE_EVENT, persistedUsage);
 			}
 			if (event.message.provider && event.message.model) agent.model = `${event.message.provider}/${event.message.model}`;
 			if (event.message.stopReason === "error" || event.message.stopReason === "aborted") {

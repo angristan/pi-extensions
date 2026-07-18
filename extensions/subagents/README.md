@@ -102,8 +102,12 @@ The footer still reports active children:
 Collapsed rows show the child name, context mode, status, prompt, and a one-line
 result preview when available. Prompt always precedes result, and
 completed runs always show turns, tokens, cost, and model on the final usage row.
-Use `/agents` to list children and inspect their latest result. Child completion
-messages use the same body as completed `wait` and `list` results. Expand `wait`
+Each billed child response also writes a durable parent-session usage record.
+The footer folds those input, output, cache, and cost values directly into the
+session totals, including after reload, without showing a separate child subtotal.
+The parent's live context percentage remains parent-only because child contexts
+are independent. Use `/agents` to list children and inspect their latest result.
+Child completion messages use the same body as completed `wait` and `list` results. Expand `wait`
 or `list` results and completion messages with `Ctrl+O` to see the child's rendered output.
 
 ## Context and lifecycle

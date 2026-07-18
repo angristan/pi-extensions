@@ -130,7 +130,9 @@ function createHarness(options: {
 		on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
 		getActiveTools() { return ["read", "grep", "agents"]; },
 		getThinkingLevel() { return "medium"; },
+		appendEntry(customType: string, data: any) { parent.appendCustomEntry(customType, data); },
 		sendMessage(message: any, messageOptions: any) { sentMessages.push({ message, options: messageOptions }); },
+		events: { emit() {}, on() { return () => {}; } },
 	};
 	let overlay: OverlayRegistration | undefined;
 	registerSubagents(pi as any, {
@@ -228,6 +230,17 @@ describe("subagents", () => {
 		expect(harness.sentMessages[0].message.content).not.toContain("\u001b");
 		expect(harness.sentMessages[0].options).toEqual({ deliverAs: "steer", triggerTurn: true });
 		expect(harness.statuses.get("subagents")).toBeUndefined();
+		const usageEntry = harness.parent.getEntries().at(-1);
+		expect(usageEntry).toMatchObject({
+			type: "custom",
+			customType: "subagent-usage",
+			data: {
+				version: 1,
+				provider: "test-provider",
+				model: "test-model",
+				usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 3, cost: 0.01 },
+			},
+		});
 	});
 
 	test("shows active agents in the shared overlay and hides them after completion", async () => {

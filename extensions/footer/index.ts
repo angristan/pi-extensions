@@ -2,6 +2,7 @@ import { calculateCost, type AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
+import { SUBAGENT_USAGE_EVENT, subagentUsageFromEntry } from "../subagents/usage.js";
 
 const FOOTER_INDENT = " ";
 const SEPARATOR = " │ ";
@@ -138,7 +139,13 @@ export function contextRemainingPercent(tokens: number | undefined, contextWindo
 	return Math.round(Math.min(100, Math.max(0, (used / effectiveWindow) * 100)));
 }
 
-type MissingCostResolver = (message: AssistantMessage) => number | undefined;
+interface UsageCostSource {
+	provider?: string;
+	model?: string;
+	usage: any;
+}
+
+type MissingCostResolver = (source: UsageCostSource) => number | undefined;
 
 export function usageTotals(entries: readonly any[], resolveMissingCost?: MissingCostResolver): UsageTotals {
 	const totals: UsageTotals = {
@@ -149,18 +156,27 @@ export function usageTotals(entries: readonly any[], resolveMissingCost?: Missin
 		cost: 0,
 	};
 	for (const entry of entries) {
-		if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
-		const message = entry.message as AssistantMessage;
-		const usage = message.usage;
-		if (!usage) continue;
+		let source: UsageCostSource | undefined;
+		let recordedCost = 0;
+		if (entry.type === "message" && entry.message?.role === "assistant") {
+			const message = entry.message as AssistantMessage;
+			if (!message.usage) continue;
+			source = message;
+			recordedCost = Math.max(0, message.usage.cost?.total ?? 0);
+		} else {
+			const delegated = subagentUsageFromEntry(entry);
+			if (!delegated) continue;
+			source = delegated;
+			recordedCost = delegated.usage.cost;
+		}
+		const usage = source.usage;
 		totals.input += Math.max(0, usage.input ?? 0);
 		totals.output += Math.max(0, usage.output ?? 0);
 		totals.cacheRead += Math.max(0, usage.cacheRead ?? 0);
 		totals.cacheWrite += Math.max(0, usage.cacheWrite ?? 0);
-		const recordedCost = Math.max(0, usage.cost?.total ?? 0);
 		totals.cost += recordedCost > 0
 			? recordedCost
-			: Math.max(0, resolveMissingCost?.(message) ?? 0);
+			: Math.max(0, resolveMissingCost?.(source) ?? 0);
 	}
 	const sessionPrompt = totals.input + totals.cacheRead + totals.cacheWrite;
 	totals.sessionCacheHit = sessionPrompt > 0
@@ -314,9 +330,9 @@ export default function (pi: ExtensionAPI) {
 		// configured when the response was recorded. Resolve each distinct model once
 		// and calculate those missing values without mutating the session transcript.
 		const resolvedModels = new Map<string, any | null>();
-		cachedUsageTotals = usageTotals(ctx.sessionManager.getEntries(), (message) => {
-			const provider = (message as any).provider;
-			const modelId = (message as any).model;
+		cachedUsageTotals = usageTotals(ctx.sessionManager.getEntries(), (source) => {
+			const provider = source.provider;
+			const modelId = source.model;
 			if (!provider || !modelId) return undefined;
 			const key = `${provider}\u0000${modelId}`;
 			if (!resolvedModels.has(key)) {
@@ -325,7 +341,7 @@ export default function (pi: ExtensionAPI) {
 			const model = resolvedModels.get(key);
 			if (!model) return undefined;
 
-			const usage = message.usage;
+			const usage = source.usage;
 			const calculatedUsage = {
 				...usage,
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
@@ -577,6 +593,10 @@ export default function (pi: ExtensionAPI) {
 	pi.on("message_end", (event) => {
 		if (event.message.role !== "assistant") return;
 		invalidateUsageTotals();
+	});
+	pi.events.on(SUBAGENT_USAGE_EVENT, () => {
+		invalidateUsageTotals();
+		requestRender?.();
 	});
 	pi.on("agent_settled", (_event, ctx) => {
 		activeCtx = ctx;
