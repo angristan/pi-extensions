@@ -46,13 +46,13 @@ for the children being awaited, so their results appear only once.
 ## UI
 
 Calls use semantic theme colors: an accent progress headline becomes a success
-or error headline when settled. The child prompt occupies its own second line;
-identity and status follow beneath it.
+or error headline when settled. Identity and status come first; the child prompt
+is the final, dimmed line.
 
 ```text
 • Spawned agent Delegate API review
-  └ Inspect the API changes
-    ● api review · api-review-a1b2c3 · forked context · running
+  └ ● api review · api-review-a1b2c3 · forked context · running
+    Inspect the API changes
 ```
 
 In TUI mode, actively running children also appear in the shared top-right
@@ -69,8 +69,9 @@ overlay stack:
 ```
 
 Each active child gets three rows for identity and usage, a dedicated task
-preview, and latest activity. Elapsed startup time is intentionally omitted. The token total combines input, output,
-cache-read, and cache-write usage across the persistent conversation. Completed
+preview, and latest activity. Elapsed startup time is intentionally omitted. The
+token total combines input, output, cache-read, and cache-write usage across the
+persistent conversation. Completed
 and failed children disappear from the live overlay as soon as they settle, but
 remain available through `/agents` while their conversation is open. The card
 hides automatically when no children are running. It shows up to three detailed

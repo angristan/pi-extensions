@@ -403,7 +403,7 @@ function renderAgentCall(args: Record<string, unknown>, theme: any, context: Too
 		const detail = actionDetail(args);
 		return [
 			toolHeadline(true, false, actionVerb(args.action, true), reasoningDetail(args, theme, true), theme),
-			...(detail ? [`${TOOL_BRANCH}${theme.fg("text", detail)}`] : []),
+			...(detail ? [`${TOOL_BRANCH}${theme.fg(args.action === "spawn" ? "dim" : "text", detail)}`] : []),
 		];
 	});
 	return component;
@@ -429,9 +429,9 @@ function renderAgentResult(result: any, options: ToolRenderOptions, theme: any, 
 			return lines;
 		}
 		for (const agent of details.agents) {
-			const taskWidth = Math.max(1, width - visibleWidth(TOOL_BRANCH));
-			lines.push(`${TOOL_BRANCH}${theme.fg("text", truncateToWidth(compact(agent.task, 240), taskWidth, "…"))}`);
-			lines.push(`${TOOL_INDENT}${agentSummary(agent, theme)}`);
+			const taskWidth = Math.max(1, width - visibleWidth(TOOL_INDENT));
+			lines.push(`${TOOL_BRANCH}${agentSummary(agent, theme)}`);
+			lines.push(`${TOOL_INDENT}${theme.fg("dim", truncateToWidth(compact(agent.task, 240), taskWidth, "…"))}`);
 			if (options?.expanded) lines.push(...expandedAgentLines(agent, width, theme));
 		}
 		return lines;
@@ -449,8 +449,8 @@ class CompletionComponent implements Component {
 			const task = truncateToWidth(compact(agent.task, 240), Math.max(1, width - visibleWidth(TOOL_BRANCH)), "…");
 			const lines = [
 				toolHeadline(false, failed, failed ? "Agent failed" : "Agent completed", detail, theme),
-				`${TOOL_BRANCH}${theme.fg("text", task)}`,
-				`${TOOL_INDENT}${theme.fg("muted", metadata)}`,
+				`${TOOL_BRANCH}${theme.fg("muted", metadata)}`,
+				`${TOOL_INDENT}${theme.fg("dim", task)}`,
 			];
 			if (agent.error) lines.push(`${TOOL_INDENT}${theme.fg("error", compact(agent.error, 240))}`);
 			if (expanded && agent.output) lines.push(...expandedAgentLines({ ...agent, error: undefined }, width, theme, false));
