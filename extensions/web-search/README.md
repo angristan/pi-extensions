@@ -67,11 +67,14 @@ Search output truncates only between complete records. Page output is capped at
 are rejected, and result URLs are normalized and deduplicated.
 
 Provider attempts and reported credit usage are retained in bounded result
-details. Fallbacks render explicitly:
+details. Search transcript rows show clickable full URLs plus available source
+and date metadata; titles and snippets remain agent-facing without adding visual
+noise to the transcript. Fallbacks render explicitly:
 
 ```text
 • Searched “auth middleware docs”
   └ 10 results · via Exa · <1s
+    1. https://example.com/docs · 2026-04-21
 
 • Opened https://example.com/docs
   └ 420 lines · 31KB · via Exa → Firecrawl · 1 credit · 1.2s

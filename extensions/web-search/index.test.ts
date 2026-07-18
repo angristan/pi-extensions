@@ -20,17 +20,6 @@ mock.module("@earendil-works/pi-tui", () => ({
 	hyperlink: (text: string, url: string) => `<link:${url}>${text}</link>`,
 	truncateToWidth: (text: string, width: number, suffix = "…") => text.length <= width ? text : `${text.slice(0, Math.max(0, width - suffix.length))}${suffix}`,
 	visibleWidth: (text: string) => text.replace(/<[^>]+>/g, "").length,
-	wrapTextWithAnsi: (text: string, width: number) => {
-		const rows: string[] = [];
-		let current = "";
-		for (const word of text.split(/\s+/)) {
-			if (!current) current = word;
-			else if (`${current} ${word}`.length <= width) current += ` ${word}`;
-			else { rows.push(current); current = word; }
-		}
-		if (current) rows.push(current);
-		return rows;
-	},
 }));
 mock.module("../better-native-pi/core.js", () => ({
 	fitToolLine: (line: string) => line,
@@ -130,21 +119,21 @@ describe("web search renderer", () => {
 		expect(render(webSearch, toolResult, { query: "Kimi pricing", startDate: "2026-04-01", endDate: "2026-04-30" })).toMatchSnapshot();
 	});
 
-	test("caps wrapped snippets at two lines on a word boundary", () => {
-		const evidence = "A static site is HTML, CSS, and JavaScript that a server hands to a browser without rendering anything per request. No database query, no partial text.";
+	test("shows clickable full URLs without titles, domains, or snippets", () => {
 		const toolResult = createSearchToolResult({
 			provider: "exa",
 			tool: "web_search",
 			query: "static sites",
 			limit: 1,
 			elapsedMs: 100,
-			results: [{ ...result(1, "exa"), snippets: [evidence] }],
+			results: [result(1, "exa")],
 		});
-		const lines = render(webSearch, toolResult, { query: "static sites" }, { width: 48 });
-		const evidenceLines = lines.filter((line) => line.startsWith("       <dim>"));
-		expect(evidenceLines).toHaveLength(2);
-		expect(evidenceLines[1]).toEndWith("JavaScript that a server hands to a…</dim>");
-		expect(evidenceLines.join(" ")).not.toContain("database query");
+		const output = render(webSearch, toolResult, { query: "static sites" }).join("\n");
+		expect(output).toContain("<link:https://www.example1.com/article><mdLink>https://www.example1.com/article</mdLink></link>");
+		expect(output).toContain("<mdLink>2026-04-21</mdLink>");
+		expect(output).not.toContain("Result 1");
+		expect(output).not.toContain("<accent>example1.com</accent>");
+		expect(output).not.toContain("Evidence 1");
 	});
 
 	test("compacts timestamps and omits unavailable dates", () => {

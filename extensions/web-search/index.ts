@@ -1,5 +1,5 @@
 import { type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Container, hyperlink, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import { Container, hyperlink, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 // Reuse better-native-pi's palette and helpers so the search rows are
 // visually identical to the built-in tools' tidy rendering (same bullets,
@@ -114,28 +114,14 @@ function compactError(text: string, fallback: string): string {
 	return truncateToWidth(normalized || fallback, 160, "…");
 }
 
-function ellipsizeAtWordBoundary(line: string, width: number): string {
-	const available = Math.max(1, width - visibleWidth("…"));
-	if (visibleWidth(line) <= available) return `${line}…`;
-	const words = line.trimEnd().split(/\s+/);
-	while (words.length > 1 && visibleWidth(words.join(" ")) > available) words.pop();
-	const body = words.join(" ");
-	return `${visibleWidth(body) <= available ? body : truncateToWidth(body, available, "")}…`;
-}
-
-function wrapEvidence(text: string, width: number): string[] {
-	const rows = wrapTextWithAnsi(text.replace(/\s+/g, " ").trim(), Math.max(1, width));
-	if (rows.length <= 2) return rows;
-	return [rows[0]!, ellipsizeAtWordBoundary(rows[1]!, width)];
-}
-
-function sourceLabel(result: SearchDisplayItem): string {
-	const label = result.title || result.url || "untitled";
-	return truncateToWidth(sanitizeSearchText(label, 600), 110, "…");
-}
-
 function resultUrl(result: SearchDisplayItem): string | undefined {
 	return normalizeHttpUrl(result.url);
+}
+
+function sourceUrl(result: SearchDisplayItem): string {
+	const url = resultUrl(result);
+	if (url) return url;
+	return sanitizeSearchText(result.url ?? "", 2_048) || "URL unavailable";
 }
 
 function resultWebsite(result: SearchDisplayItem): string | undefined {
@@ -293,31 +279,22 @@ function renderSearchResult(
 	const detail = searchDetail(args, details);
 	const searchEngine = sharedSearchEngine(details);
 	const max = expanded ? 10 : 5;
-	component.update((width) => {
+	component.update(() => {
 		const lines = [headlineRow(false, false, "Searched", detail), `${BRANCH}${searchSummary(details, searchEngine, theme)}`];
 		const shownResults = results.slice(0, max);
 		for (const [index, item] of shownResults.entries()) {
-			const label = sourceLabel(item);
 			const url = resultUrl(item);
-			const rendered = url ? hyperlink(theme.fg("text", label), url) : theme.fg("text", label);
+			const label = sourceUrl(item);
+			const rendered = url ? hyperlink(theme.fg("mdLink", label), url) : theme.fg("muted", label);
 			const website = resultWebsite(item);
 			const itemSearchEngine = resultSearchEngine(item);
 			const itemDate = formatDisplayDate(item.date);
 			const via = !searchEngine && itemSearchEngine && itemSearchEngine.toLowerCase() !== website?.toLowerCase() ? `via ${itemSearchEngine}` : undefined;
 			const meta = [
-				website ? theme.fg("accent", website) : undefined,
 				via ? theme.fg("muted", via) : undefined,
 				itemDate ? theme.fg("mdLink", itemDate) : undefined,
 			].filter(Boolean).join(theme.fg("dim", " · "));
-			lines.push(`${INDENT}${theme.fg("syntaxNumber", `${index + 1}.`)} ${rendered}${meta ? ` ${theme.fg("dim", "—")} ${meta}` : ""}`);
-			const evidence = item.snippets?.[0] ?? item.description;
-			if (evidence) {
-				const prefix = `${INDENT}   `;
-				const contentWidth = Math.max(1, width - visibleWidth(prefix));
-				for (const row of wrapEvidence(evidence, contentWidth)) {
-					lines.push(`${prefix}${theme.fg("dim", row)}`);
-				}
-			}
+			lines.push(`${INDENT}${theme.fg("syntaxNumber", `${index + 1}.`)} ${rendered}${meta ? ` ${theme.fg("dim", "·")} ${meta}` : ""}`);
 		}
 		const shown = shownResults.length;
 		const remaining = Math.max(0, details.resultCount - shown);
