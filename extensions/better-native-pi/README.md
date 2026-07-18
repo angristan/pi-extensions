@@ -39,7 +39,9 @@ Markdown renderer with the dedicated shell tokenizer for syntax highlighting.
 Long commands wrap at top-level shell operators and quote-aware word boundaries;
 the box spans the full available transcript width.
 `Ctrl+O` (`app.tools.expand`) reveals full commands, raw output, or full written
-content without duplicating an already-shown diff.
+content without duplicating an already-shown diff. Read results backed by
+`image-store` render their live sidecar inline in the same tool row; resumed
+images stay unloaded until expanded.
 
 Exploration groups wait until a tool actually starts executing before rendering
 live rows. This avoids flashing streamed JSON fragments such as half-written
@@ -69,5 +71,5 @@ volatile-render churn for both.
 ## Dependencies
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** [`background-jobs`](../background-jobs/), [`code-blocks`](../code-blocks/), [`hyperlinks`](../hyperlinks/).
+- **Depends on extensions:** [`background-jobs`](../background-jobs/), [`code-blocks`](../code-blocks/), [`hyperlinks`](../hyperlinks/), [`image-store`](../image-store/).
 - **Used by extensions:** [`background-jobs`](../background-jobs/), [`web-search`](../web-search/).

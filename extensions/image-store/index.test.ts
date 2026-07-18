@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { getCapabilities, setCapabilities } from "@earendil-works/pi-tui";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,7 @@ import imageStoreExtension, {
 	markerFor,
 	refsFromText,
 	rehydrateMessages,
+	renderStoredImagePreviews,
 } from "./index";
 
 const temporaryDirectories: string[] = [];
@@ -81,16 +83,14 @@ describe("content-addressed storage", () => {
 });
 
 describe("extension hooks", () => {
-	test("externalizes tool images, appends a lazy preview, and restores provider context", async () => {
+	test("externalizes tool images, renders a lazy preview, and restores provider context", async () => {
 		const directory = await temporaryDirectory();
 		process.env.PI_CODING_AGENT_DIR = directory;
 		const handlers = new Map<string, (...args: any[]) => any>();
-		const entries: Array<{ type: string; data: any }> = [];
-		let renderer: ((entry: any, options: any, theme: any) => any) | undefined;
 		const pi = {
 			on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
-			appendEntry(type: string, data: any) { entries.push({ type, data }); },
-			registerEntryRenderer(_type: string, value: any) { renderer = value; },
+			appendEntry() {},
+			registerEntryRenderer() {},
 			registerCommand() {},
 		};
 		imageStoreExtension(pi as any);
@@ -101,9 +101,6 @@ describe("extension hooks", () => {
 		}, { ui: { notify() {} } });
 
 		expect(JSON.stringify(result)).not.toContain(data);
-		expect(entries).toHaveLength(1);
-		expect(entries[0]?.data.label).toBe("screenshot.png");
-		expect(renderer).toBeDefined();
 
 		const context = await handlers.get("context")?.({
 			messages: [{ role: "toolResult", content: result.content, details: result.details }],
@@ -113,23 +110,25 @@ describe("extension hooks", () => {
 			{ type: "image", data, mimeType: "image/png" },
 		]);
 
-		await handlers.get("session_start")?.({}, {});
 		const stored = new ContentAddressedImageStore(directory);
-		await rm(stored.pathFor(entries[0]!.data.ref), { force: true });
 		const theme = { fg: (_color: string, text: string) => text };
-		const themeKey = Symbol.for("@earendil-works/pi-coding-agent:theme");
-		const previousTheme = (globalThis as any)[themeKey];
-		(globalThis as any)[themeKey] = theme;
+		const live = renderStoredImagePreviews(result.details, stored, theme, false);
+		expect(live).toBeDefined();
+		const previousCapabilities = getCapabilities();
+		setCapabilities({ images: null, trueColor: true, hyperlinks: true });
 		try {
-			const collapsed = renderer?.({ data: entries[0]!.data }, { expanded: false }, theme);
-			const expanded = renderer?.({ data: entries[0]!.data }, { expanded: true }, theme);
-			expect(collapsed.render(100).join("\n")).toContain("preview");
-			expect(collapsed.render(100).join("\n")).not.toContain("unavailable");
-			expect(expanded.render(100).join("\n")).toContain("sidecar unavailable");
+			expect(live!.render(100).join("\n")).toContain("[Image");
 		} finally {
-			if (previousTheme === undefined) delete (globalThis as any)[themeKey];
-			else (globalThis as any)[themeKey] = previousTheme;
+			setCapabilities(previousCapabilities);
 		}
+
+		await handlers.get("session_start")?.({}, {});
+		stored.clearCache();
+		await rm(stored.pathFor(result.details.__pi_image_store.refs[0]), { force: true });
+		const collapsed = renderStoredImagePreviews(result.details, stored, theme, false);
+		const expanded = renderStoredImagePreviews(result.details, stored, theme, true);
+		expect(collapsed!.render(100)).toEqual([]);
+		expect(expanded!.render(100).join("\n")).toContain("sidecar unavailable");
 	});
 
 	test("externalizes pasted images without retaining base64", async () => {

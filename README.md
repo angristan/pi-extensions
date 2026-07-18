@@ -124,6 +124,8 @@ right. Extensions not shown have no internal extension dependency.
 background-jobs <------> better-native-pi ------> code-blocks
                            |
                            +---------------------> hyperlinks
+                           |
+                           +---------------------> image-store
 web-search --------------> better-native-pi
 doctor ------------------> accent-color
 overlay-stack -----------> accent-color

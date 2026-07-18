@@ -33,8 +33,14 @@ import {
 	createWriteToolDefinition,
 	generateDiffString,
 } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import {
+	ContentAddressedImageStore,
+	renderStoredImagePreviews,
+	type StoredImagePreviewState,
+} from "../image-store/index.js";
 import {
 	EXPLORATION_DETAILS_KEY,
 	enableExplorationToolRendering,
@@ -50,7 +56,38 @@ import {
 	withReasoning,
 } from "./core.js";
 
+function withStoredImagePreviews(
+	base: Component,
+	toolName: string,
+	result: any,
+	options: any,
+	theme: any,
+	store: ContentAddressedImageStore,
+	invalidate?: () => void,
+	state?: StoredImagePreviewState,
+): Component {
+	if (toolName !== "read") return base;
+	const previews = renderStoredImagePreviews(
+		result?.details,
+		store,
+		theme,
+		options?.expanded ?? false,
+		invalidate,
+		state,
+	);
+	if (!previews) return base;
+	return {
+		render: (width: number) => [...base.render(width), ...previews.render(width)],
+		invalidate: () => {
+			base.invalidate?.();
+			previews.invalidate?.();
+		},
+	};
+}
+
 export default function fileTools(pi: ExtensionAPI) {
+	const imageStore = new ContentAddressedImageStore();
+
 	// Exploration grouping and the compact tool renderers are deliberately
 	// coupled: the group renderer owns read/list/search rows.
 	enableExplorationToolRendering();
@@ -155,7 +192,18 @@ export default function fileTools(pi: ExtensionAPI) {
 			renderResult: (result: any, options: any, theme: any, context: any) => {
 				if (!options?.isPartial && result?.details?.[EXPLORATION_DETAILS_KEY]) {
 					const exploration = renderExplorationResult(name, result, options, theme, context);
-					if (exploration !== undefined) return exploration;
+					if (exploration !== undefined) {
+						return withStoredImagePreviews(
+							exploration,
+							name,
+							result,
+							options,
+							theme,
+							imageStore,
+							context?.invalidate,
+							context?.state,
+						);
+					}
 				}
 				if (options?.isPartial) return new Container();
 				const isError = context?.isError ?? result?.isError ?? false;
@@ -163,13 +211,23 @@ export default function fileTools(pi: ExtensionAPI) {
 				const startedAt = startedAtByCallId.get(toolCallId ?? "");
 				const args = context?.args ?? {};
 				const elapsedMs = startedAt === undefined ? 0 : Date.now() - startedAt;
-				return new WidthAwareLines(() => buildToolBlock(name, args, result, {
+				const block = new WidthAwareLines(() => buildToolBlock(name, args, result, {
 					isError,
 					expanded: options?.expanded ?? false,
 					elapsedMs,
 					theme,
 					cwd: context?.cwd,
 				}), diffPalette(theme));
+				return withStoredImagePreviews(
+					block,
+					name,
+					result,
+					options,
+					theme,
+					imageStore,
+					context?.invalidate,
+					context?.state,
+				);
 			},
 		});
 	}

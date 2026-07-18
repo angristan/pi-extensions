@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { keyHint } from "@earendil-works/pi-coding-agent";
+import { convertToPng, keyHint } from "@earendil-works/pi-coding-agent";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
-import { Image, Text, type Component } from "@earendil-works/pi-tui";
+import { getCapabilities, Image, Text, type Component } from "@earendil-works/pi-tui";
 import { createHash, randomUUID } from "node:crypto";
 import {
 	createReadStream,
@@ -26,6 +26,7 @@ export const DETAILS_KEY = "__pi_image_store";
 const STORE_DIRECTORY = "image-store";
 const MAX_CACHE_BYTES = 32 * 1024 * 1024;
 const MAX_LIVE_PREVIEWS = 3;
+const LIVE_REGISTRY = Symbol.for("pi.image-store.live-registry");
 const MARKER_SOURCE = String.raw`\[image [0-9a-f]{8}\]\(pi-image:\/\/sha256\/([0-9a-f]{64})\?mime=([^&)\s]+)&bytes=([0-9]+)\)`;
 const JSON_DIGEST_SOURCE = String.raw`"digest"\s*:\s*"([0-9a-f]{64})"`;
 const BLOB_FILENAME = /^([0-9a-f]{64})\.[a-z0-9]+$/;
@@ -51,6 +52,34 @@ interface StoredBlob {
 	digest: string;
 	path: string;
 	bytes: number;
+}
+
+interface LiveRegistry {
+	order: string[];
+	digests: Set<string>;
+}
+
+function liveRegistry(): LiveRegistry {
+	const globals = globalThis as typeof globalThis & { [LIVE_REGISTRY]?: LiveRegistry };
+	return globals[LIVE_REGISTRY] ??= { order: [], digests: new Set() };
+}
+
+function markLive(digest: string): void {
+	const registry = liveRegistry();
+	const previous = registry.order.indexOf(digest);
+	if (previous >= 0) registry.order.splice(previous, 1);
+	registry.order.push(digest);
+	registry.digests.add(digest);
+	while (registry.order.length > MAX_LIVE_PREVIEWS) registry.digests.delete(registry.order.shift()!);
+}
+
+function clearLive(): void {
+	liveRegistry().order.length = 0;
+	liveRegistry().digests.clear();
+}
+
+export function isStoredImageLive(digest: string): boolean {
+	return liveRegistry().digests.has(digest);
 }
 
 function markerPattern(): RegExp {
@@ -234,7 +263,7 @@ async function rehydrateText(
 	return content;
 }
 
-function refsFromDetails(message: any): StoredImageRef[] {
+export function refsFromDetails(message: any): StoredImageRef[] {
 	const details = message?.details?.[DETAILS_KEY] as StoredImageDetails | undefined;
 	if (details?.version !== 1 || !Array.isArray(details.refs)) return [];
 	return details.refs.filter((ref) =>
@@ -286,38 +315,91 @@ export async function rehydrateMessages(messages: any[], store: ContentAddressed
 	}));
 }
 
-class StoredImagePreview implements Component {
+interface PreviewConversion {
+	converted?: { data: string; mimeType: string };
+	started: boolean;
+	failed: boolean;
+}
+
+export interface StoredImagePreviewState {
+	imageStoreConversions?: Map<string, PreviewConversion>;
+}
+
+export class StoredImagePreview implements Component {
 	private image?: Image;
-	private failed = false;
+	private readonly localConversion: PreviewConversion = { started: false, failed: false };
 
 	constructor(
 		private readonly entry: StoredImageEntry,
 		private readonly store: ContentAddressedImageStore,
 		private readonly theme: any,
 		private readonly visible: () => boolean,
+		private readonly options: {
+			heading?: boolean;
+			hiddenWhenCollapsed?: boolean;
+			invalidate?: () => void;
+			state?: StoredImagePreviewState;
+		} = {},
 	) {}
+
+	private conversion(): PreviewConversion {
+		if (!this.options.state) return this.localConversion;
+		const conversions = this.options.state.imageStoreConversions ??= new Map();
+		let conversion = conversions.get(this.entry.ref.digest);
+		if (!conversion) {
+			conversion = { started: false, failed: false };
+			conversions.set(this.entry.ref.digest, conversion);
+		}
+		return conversion;
+	}
 
 	render(width: number): string[] {
 		const { ref, label } = this.entry;
 		const summary = `${label ? `${label} · ` : ""}${ref.digest.slice(0, 8)} · ${formatBytes(ref.bytes)}`;
 		if (!this.visible()) {
 			this.image = undefined;
+			if (this.options.hiddenWhenCollapsed) return [];
 			const hint = keyHint("app.tools.expand", "preview");
 			return new Text(this.theme.fg("dim", `↳ image ${summary} (${hint})`), 1, 0).render(width);
 		}
 
-		if (!this.image && !this.failed) {
+		let preparing = false;
+		const conversion = this.conversion();
+		if (!this.image && !conversion.failed) {
 			try {
-				this.image = new Image(this.store.loadSync(ref), ref.mimeType, this.theme, {
-					maxWidthCells: Math.max(20, Math.min(80, width - 2)),
-					maxHeightCells: 24,
-				});
+				const source = conversion.converted ?? { data: this.store.loadSync(ref), mimeType: ref.mimeType };
+				if (getCapabilities().images === "kitty" && source.mimeType !== "image/png") {
+					preparing = true;
+					if (!conversion.started) {
+						conversion.started = true;
+						void convertToPng(source.data, source.mimeType).then((converted) => {
+							if (converted) conversion.converted = converted;
+							else conversion.failed = true;
+							this.options.invalidate?.();
+						}).catch(() => {
+							conversion.failed = true;
+							this.options.invalidate?.();
+						});
+					}
+				} else {
+					this.image = new Image(source.data, source.mimeType, {
+						fallbackColor: (text: string) => this.theme.fg("toolOutput", text),
+					}, {
+						maxWidthCells: Math.max(20, Math.min(80, width - 2)),
+						maxHeightCells: 24,
+					});
+				}
 			} catch {
-				this.failed = true;
+				conversion.failed = true;
 			}
 		}
-		const heading = new Text(this.theme.fg("dim", `↳ image ${summary}`), 1, 0).render(width);
-		if (this.failed || !this.image) {
+		const heading = this.options.heading === false
+			? []
+			: new Text(this.theme.fg("dim", `↳ image ${summary}`), 1, 0).render(width);
+		if (preparing && !conversion.converted) {
+			return [...heading, ...new Text(this.theme.fg("dim", "  preparing image preview…"), 0, 0).render(width)];
+		}
+		if (conversion.failed || !this.image) {
 			return [...heading, ...new Text(this.theme.fg("warning", "  sidecar unavailable"), 0, 0).render(width)];
 		}
 		return [...heading, ...this.image.render(width)];
@@ -326,6 +408,29 @@ class StoredImagePreview implements Component {
 	invalidate(): void {
 		this.image?.invalidate();
 	}
+}
+
+export function renderStoredImagePreviews(
+	details: unknown,
+	store: ContentAddressedImageStore,
+	theme: any,
+	expanded: boolean,
+	invalidate?: () => void,
+	state?: StoredImagePreviewState,
+): Component | undefined {
+	const refs = refsFromDetails({ details });
+	if (refs.length === 0) return undefined;
+	const previews = refs.map((ref) => new StoredImagePreview(
+		{ version: 1, ref },
+		store,
+		theme,
+		() => expanded || isStoredImageLive(ref.digest),
+		{ heading: false, hiddenWhenCollapsed: true, invalidate, state },
+	));
+	return {
+		render: (width: number) => previews.flatMap((preview) => preview.render(width)),
+		invalidate: () => previews.forEach((preview) => preview.invalidate()),
+	};
 }
 
 async function listFiles(root: string): Promise<string[]> {
@@ -380,25 +485,9 @@ function formatBytes(bytes: number): string {
 	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function labelFromInput(input: Record<string, unknown>): string | undefined {
-	return typeof input.path === "string" ? input.path : undefined;
-}
-
 export default function imageStoreExtension(pi: ExtensionAPI) {
 	const agentDirectory = configDirectory();
 	const store = new ContentAddressedImageStore(agentDirectory);
-	const liveDigests: string[] = [];
-	const liveSet = new Set<string>();
-
-	const markLive = (digest: string) => {
-		const previous = liveDigests.indexOf(digest);
-		if (previous >= 0) liveDigests.splice(previous, 1);
-		liveDigests.push(digest);
-		liveSet.add(digest);
-		while (liveDigests.length > MAX_LIVE_PREVIEWS) {
-			liveSet.delete(liveDigests.shift()!);
-		}
-	};
 
 	const appendPreview = (ref: StoredImageRef, label?: string) => {
 		markLive(ref.digest);
@@ -406,14 +495,12 @@ export default function imageStoreExtension(pi: ExtensionAPI) {
 	};
 
 	pi.on("session_start", () => {
-		liveDigests.length = 0;
-		liveSet.clear();
+		clearLive();
 		store.clearCache();
 	});
 
 	pi.on("session_shutdown", () => {
-		liveDigests.length = 0;
-		liveSet.clear();
+		clearLive();
 		store.clearCache();
 	});
 
@@ -442,7 +529,7 @@ export default function imageStoreExtension(pi: ExtensionAPI) {
 	pi.on("tool_result", async (event, ctx) => {
 		if (!event.content.some((block) => block.type === "image")) return;
 		const { content, refs } = await externalizeContent(event.content, store);
-		for (const ref of refs) appendPreview(ref, labelFromInput(event.input));
+		for (const ref of refs) markLive(ref.digest);
 		if (refs.length === 0) {
 			ctx.ui.notify("Could not externalize tool image", "warning");
 			return;
@@ -466,7 +553,7 @@ export default function imageStoreExtension(pi: ExtensionAPI) {
 	pi.registerEntryRenderer<StoredImageEntry>(ENTRY_TYPE, (entry, options, theme) => {
 		const data = entry.data;
 		if (data?.version !== 1 || !data.ref) return undefined;
-		return new StoredImagePreview(data, store, theme, () => options.expanded || liveSet.has(data.ref.digest));
+		return new StoredImagePreview(data, store, theme, () => options.expanded || isStoredImageLive(data.ref.digest));
 	});
 
 	pi.registerCommand("image-store", {

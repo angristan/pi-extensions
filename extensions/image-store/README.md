@@ -15,9 +15,9 @@ still receives the original image.
 
 ## Terminal behavior
 
-- The three newest images created in the current runtime render inline.
-- Older and resumed images render as compact references.
-- Expand tool output with `Ctrl+O` to load an older image on demand.
+- The three newest tool images render inline in their native `read` rows.
+- Older and resumed tool images stay unloaded until expanded with `Ctrl+O`.
+- Pasted images use compact transcript references and expand on demand.
 - Decoded images use a bounded in-memory cache; collapsed history is not loaded.
 - Supported terminals are the same as pi's built-in image component: Kitty,
   iTerm2, Ghostty, WezTerm, and Warp.
@@ -54,3 +54,4 @@ deleting anything.
 - **Runtime:** Pi extension and TUI APIs.
 - **npm packages:** None.
 - **Depends on extensions:** None.
+- **Used by extensions:** [`better-native-pi`](../better-native-pi/).
