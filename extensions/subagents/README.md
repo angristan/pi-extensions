@@ -7,10 +7,10 @@ There are no named roles or agent presets. Every spawn requires a concise name
 that is unique, case-insensitively, for the parent session. Names are the public
 identity for follow-ups and lifecycle actions; internal process IDs are never
 displayed. Every child inherits the current model, thinking level, active tools,
-working directory, and project instructions.
-By default it also inherits compaction-aware conversation context; set
-`fork_context: false` for a fresh conversation containing only the explicit task.
-The explicit child task is the only specialization.
+working directory, and project instructions. Conversation context defaults to
+`fresh`; choose `compacted` when prior decisions matter or `forked` only when the
+exact active parent conversation is required. The explicit child task is the only
+specialization.
 
 ## Agent tool
 
@@ -20,7 +20,7 @@ tools.
 
 | Action | Fields | Behavior |
 |---|---|---|
-| `spawn` | `task`, `name`, `fork_context?` | Start a uniquely named child; context inheritance defaults to `true` |
+| `spawn` | `task`, `name`, `context?` | Start a uniquely named child; context is `fresh` (default), `compacted`, or `forked` |
 | `send` | `agent_name`, `message` | Steer a running child or continue an idle child |
 | `wait` | `agent_names?`, `timeout_ms?` | Wait for selected children, or every running child |
 | `list` | — | List child status without waiting |
@@ -115,9 +115,10 @@ or `list` results and completion messages with `Ctrl+O` to see the child's rende
 Each child is a persistent `pi --mode rpc` subprocess backed by a temporary
 session:
 
-- By default, the active parent context is copied with compaction already applied.
-- Set `fork_context: false` to start without parent conversation messages while retaining project instructions and runtime configuration.
-- When context is inherited, the unresolved assistant tool-call turn is excluded from the fork.
+- `fresh` (default) starts without parent conversation messages while retaining project instructions and runtime configuration.
+- `compacted` generates a concise parent-conversation summary before child startup. Concurrent spawns from the same parent position reuse one summary.
+- `forked` copies the active parent context with existing compaction applied.
+- For `compacted` and `forked`, the unresolved assistant tool-call turn is excluded.
 - The child runs in the same working directory and sees the same project files.
 - Child dialogs are cancelled because no interactive UI is attached to the RPC process.
 - Follow-ups reuse the same child conversation.

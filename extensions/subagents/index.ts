@@ -5,7 +5,14 @@ import { Container, Markdown, Text, truncateToWidth, visibleWidth, type Componen
 import { fitToolLine, formatElapsed, withReasoning } from "../better-native-pi/core.js";
 import { BOLD, GREEN, MAGENTA, RED, RESET } from "../better-native-pi/render.js";
 import { registerOverlayCard } from "../overlay-stack/index.js";
-import { createContextFork, type ContextFork } from "./context.js";
+import {
+	compactContext,
+	createContextFork,
+	parentContextMessages,
+	type CompactContext,
+	type ContextFork,
+	type ContextMode,
+} from "./context.js";
 import {
 	RpcProcessClient,
 	childEnvironment,
@@ -57,7 +64,7 @@ export interface AgentSnapshot {
 	id: string;
 	name?: string;
 	task: string;
-	contextMode: "forked" | "fresh";
+	contextMode: ContextMode;
 	status: AgentStatus;
 	cwd: string;
 	model?: string;
@@ -94,6 +101,7 @@ interface ToolDetails {
 export interface SubagentsOptions {
 	createClient?: AgentClientFactory;
 	createContextFork?: typeof createContextFork;
+	compactContext?: CompactContext;
 	registerOverlayCard?: typeof registerOverlayCard;
 	maxAgents?: number;
 }
@@ -279,10 +287,12 @@ function buildArgs(pi: ExtensionAPI, ctx: any, fork: ContextFork): string[] {
 	return args;
 }
 
-function childTask(name: string, task: string, inheritedContext: boolean): string {
-	const contextNote = inheritedContext
-		? "The inherited conversation is context, not a request to continue unrelated work."
-		: "No parent conversation was inherited; rely on the explicit task and available project instructions.";
+function childTask(name: string, task: string, contextMode: ContextMode): string {
+	const contextNote = contextMode === "fresh"
+		? "No parent conversation was inherited; rely on the explicit task and available project instructions."
+		: contextMode === "compacted"
+			? "A compacted parent-conversation summary was inherited as context, not as a request to continue unrelated work."
+			: "The forked parent conversation is context, not a request to continue unrelated work.";
 	return `${CHILD_PROMPT}\n${contextNote}\n\nChild agent name: ${name}\n\nTask:\n${task.trim()}`;
 }
 
@@ -522,12 +532,14 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	const agents = new Map<string, ManagedAgent>();
 	const createClient = options.createClient ?? ((clientOptions: AgentClientOptions) => new RpcProcessClient(clientOptions));
 	const forkContext = options.createContextFork ?? createContextFork;
+	const summarizeContext = options.compactContext ?? compactContext;
 	const registerCard = options.registerOverlayCard ?? registerOverlayCard;
 	const maxAgents = options.maxAgents ?? DEFAULT_MAX_AGENTS;
 	let activeCtx: any;
 	let generation = 0;
 	let sessionActive = false;
 	let spawnReservations = 0;
+	let compactedSnapshot: { key: string; promise: Promise<string> } | undefined;
 	const usedAgentNames = new Set<string>();
 	const reservedAgentNames = new Set<string>();
 
@@ -597,6 +609,16 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		if (!sessionActive || generation !== expectedGeneration) {
 			throw new Error("Parent session ended while spawning subagent");
 		}
+	};
+	const compactedContextFor = (ctx: any, signal?: AbortSignal): Promise<string> => {
+		const key = `${generation}:${ctx.sessionManager.getLeafId() ?? "empty"}`;
+		if (compactedSnapshot?.key === key) return compactedSnapshot.promise;
+		const promise = summarizeContext(ctx, parentContextMessages(ctx), signal).catch((error) => {
+			if (compactedSnapshot?.promise === promise) compactedSnapshot = undefined;
+			throw error;
+		});
+		compactedSnapshot = { key, promise };
+		return promise;
 	};
 	const notifyCompletion = (agent: ManagedAgent) => {
 		if (agent.suppressNotifications || agent.waiting > 0 || agent.completionDelivery !== "none" || agent.generation !== generation || agent.status === "closed") return;
@@ -697,7 +719,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			if (agent.closePromise === operation) agent.closePromise = undefined;
 		}
 	};
-	const startAgent = async (task: string, ctx: any, inheritContext = true, name?: string): Promise<ManagedAgent> => {
+	const startAgent = async (task: string, ctx: any, contextMode: ContextMode = "fresh", name?: string, signal?: AbortSignal): Promise<ManagedAgent> => {
 		const normalizedTask = boundedInput(task, "spawn task", MAX_TASK_CHARS);
 		const normalizedName = normalizeAgentName(name);
 		const reservation = reserveSpawn(normalizedName);
@@ -707,7 +729,8 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		let fork: ContextFork | undefined;
 		let agent: ManagedAgent | undefined;
 		try {
-			fork = await forkContext(ctx, inheritContext);
+			const compactedSummary = contextMode === "compacted" ? await compactedContextFor(ctx, signal) : undefined;
+			fork = await forkContext(ctx, contextMode, compactedSummary);
 			assertCurrentSession(reservation.generation);
 			const invocation = getPiInvocation(buildArgs(pi, ctx, fork));
 			const client = createClient({
@@ -721,7 +744,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				id,
 				name: normalizedName,
 				task: normalizedTask,
-				contextMode: inheritContext ? "forked" : "fresh",
+				contextMode,
 				status: "starting",
 				cwd: ctx.cwd,
 				model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
@@ -776,7 +799,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			assertCurrentSession(reservation.generation);
 			if (agent.status === "closed") throw new Error("Subagent closed during startup");
 			agent.status = "running";
-			await client.prompt(childTask(normalizedName, normalizedTask, inheritContext));
+			await client.prompt(childTask(normalizedName, normalizedTask, contextMode));
 			assertCurrentSession(reservation.generation);
 			updateStatus();
 			return agent;
@@ -833,12 +856,12 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	pi.registerTool({
 		name: TOOL_NAME,
 		label: "Agents",
-		description: "Spawn and coordinate uniquely named child agents with isolated persistent context. Actions: spawn starts one immediately; send continues it by name; wait collects one or more named results; list shows status; close stops and releases it. Children inherit the current model, tools, working directory, and project instructions; conversation context is inherited by default and can be disabled per spawn. Completion results also arrive automatically.",
+		description: "Spawn and coordinate uniquely named child agents with isolated persistent context. Actions: spawn starts one immediately; send continues it by name; wait collects one or more named results; list shows status; close stops and releases it. Children inherit the current model, tools, working directory, and project instructions. Conversation context can be fresh, compacted, or forked; fresh is the default. Completion results also arrive automatically.",
 		promptSnippet: "Spawn and coordinate isolated child agents for explicitly delegated work",
 		promptGuidelines: [
 			"Use agents only when the user or applicable project instructions request delegation, subagents, or parallel agent work.",
 			"Call agents with action=spawn for concrete independent tasks; give each child a concise task-specific name that is unique in the current session; multiple spawn calls can run concurrently, and the parent should continue useful non-overlapping work.",
-			"Set fork_context=false for self-contained tasks that do not need the parent conversation; it defaults to true.",
+			"Agents use fresh conversation context by default. Set context=compacted when prior decisions matter, or context=forked only when the exact parent conversation is required.",
 			"Use agents action=wait only when blocked on child results; completed children report back automatically.",
 			"After collecting a child's final result, call agents with action=close when no further follow-up is needed; completed children remain open and consume a process slot until closed.",
 			"Give concurrently writing child agents disjoint file scopes to avoid conflicting edits.",
@@ -848,7 +871,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			properties: {
 				action: { type: "string", enum: ["spawn", "send", "wait", "list", "close"], description: "Lifecycle action" },
 				task: { type: "string", maxLength: MAX_TASK_CHARS, description: "Concrete task for spawn" },
-				fork_context: { type: "boolean", description: "Whether spawn inherits the parent conversation (default true)" },
+				context: { type: "string", enum: ["fresh", "compacted", "forked"], description: "Conversation context for spawn (default fresh)" },
 				name: { type: "string", maxLength: MAX_AGENT_NAME_CHARS, description: "Required unique human-readable name for spawn" },
 				agent_name: { type: "string", description: "Agent name for send or close" },
 				message: { type: "string", maxLength: MAX_MESSAGE_CHARS, description: "Follow-up instruction for send" },
@@ -866,8 +889,9 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		},
 		async execute(_toolCallId: string, params: any, signal: AbortSignal | undefined, _onUpdate: any, ctx: any) {
 			if (params.action === "spawn") {
-				if (params.fork_context !== undefined && typeof params.fork_context !== "boolean") throw new Error("fork_context must be a boolean");
-				const agent = await startAgent(String(params.task ?? ""), ctx, params.fork_context ?? true, params.name);
+				const contextMode = params.context ?? "fresh";
+				if (!(["fresh", "compacted", "forked"] as const).includes(contextMode)) throw new Error("context must be fresh, compacted, or forked");
+				const agent = await startAgent(String(params.task ?? ""), ctx, contextMode, params.name, signal);
 				const data = snapshot(agent);
 				return {
 					content: [{ type: "text", text: `Started ${agent.name} for: ${agent.task}\nContinue non-overlapping work; its result will arrive automatically.` }],
@@ -993,6 +1017,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 
 	pi.on("session_start", (_event, ctx) => {
 		generation += 1;
+		compactedSnapshot = undefined;
 		sessionActive = true;
 		activeCtx = ctx;
 		updateStatus();
@@ -1000,6 +1025,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	pi.on("session_shutdown", async () => {
 		sessionActive = false;
 		generation += 1;
+		compactedSnapshot = undefined;
 		const current = [...agents.values()];
 		for (const agent of current) agent.suppressNotifications = true;
 		const settled = await Promise.allSettled(current.map((agent) => closeAgent(agent, true)));

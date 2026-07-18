@@ -4,7 +4,7 @@ import { readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { createContextFork, forkableMessages } from "./context";
+import { createContextFork, forkableMessages, type CompactContext, type ContextMode } from "./context";
 import registerSubagents, { boundedText } from "./index";
 import type { AgentClient, AgentClientOptions, RpcAgentEvent } from "./rpc";
 
@@ -90,6 +90,7 @@ function createHarness(options: {
 	firstTurn?: boolean;
 	failClientCreation?: boolean;
 	forkContext?: typeof createContextFork;
+	compactContext?: CompactContext;
 } = {}): Harness {
 	const tools = new Map<string, any>();
 	const commands = new Map<string, any>();
@@ -138,6 +139,7 @@ function createHarness(options: {
 	registerSubagents(pi as any, {
 		maxAgents: options.maxAgents,
 		createContextFork: options.forkContext,
+		compactContext: options.compactContext,
 		registerOverlayCard(definition) {
 			overlay = { definition, invalidations: 0, unregistered: false };
 			return {
@@ -161,9 +163,9 @@ function createHarness(options: {
 
 let agentNameSequence = 0;
 
-async function spawnAgent(harness: Harness, task = "Inspect the repository") {
+async function spawnAgent(harness: Harness, task = "Inspect the repository", context?: ContextMode) {
 	const name = `test-agent-${++agentNameSequence}`;
-	return harness.tool.execute("call", { action: "spawn", task, name }, undefined, undefined, harness.ctx);
+	return harness.tool.execute("call", { action: "spawn", task, name, ...(context ? { context } : {}) }, undefined, undefined, harness.ctx);
 }
 
 const renderTheme = {
@@ -188,7 +190,7 @@ describe("subagents", () => {
 		const harness = createHarness();
 		expect(harness.tool).toBeDefined();
 		expect(Object.keys(harness.tool.parameters.properties)).toEqual([
-			"reasoning", "action", "task", "fork_context", "name", "agent_name", "message", "agent_names", "timeout_ms",
+			"reasoning", "action", "task", "context", "name", "agent_name", "message", "agent_names", "timeout_ms",
 		]);
 		expect(harness.tool.parameters.required).toEqual(["reasoning", "action"]);
 		expect(harness.tool.parameters.properties).not.toHaveProperty("agent_type");
@@ -196,9 +198,9 @@ describe("subagents", () => {
 		expect(harness.tool.parameters.properties.task.maxLength).toBe(16_000);
 		expect(harness.tool.parameters.properties.message.maxLength).toBe(16_000);
 		expect(harness.tool.description).toContain("inherit the current model");
-		expect(harness.tool.parameters.properties.fork_context.description).toContain("default true");
+		expect(harness.tool.parameters.properties.context).toMatchObject({ enum: ["fresh", "compacted", "forked"], description: expect.stringContaining("default fresh") });
 		expect(harness.tool.parameters.properties.name).toMatchObject({ maxLength: 80, description: expect.stringContaining("Required unique") });
-		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("fork_context=false") && guideline.includes("defaults to true"))).toBe(true);
+		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("context=compacted") && guideline.includes("context=forked"))).toBe(true);
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("action=close") && guideline.includes("consume a process slot"))).toBe(true);
 		expect(harness.tool.prepareArguments({ action: "send", agent_id: "legacy-id" })).toEqual({ action: "send", agent_name: "legacy-id" });
 		expect(harness.tool.prepareArguments({ action: "wait", agent_ids: ["legacy-a"] })).toEqual({ action: "wait", agent_names: ["legacy-a"] });
@@ -315,7 +317,7 @@ describe("subagents", () => {
 		const lines = rendered(settled);
 		expect(lines[0]).toBe("• Spawned agent Delegate repository inspection");
 		expect(settled.render(100)[0]).toContain("\x1b[32m•\x1b[0m \x1b[1mSpawned agent\x1b[0m");
-		expect(lines[1]).toBe("  └ ● repository inspector · forked context · running");
+		expect(lines[1]).toBe("  └ ● repository inspector · fresh context · running");
 		expect(lines.join("\n")).not.toContain(result.details.agents[0].id);
 		expect(lines[2]).toBe("    prompt  Inspect the repository");
 		expect(lines.join("\n")).not.toMatch(/\b\d+ms\b/);
@@ -371,7 +373,7 @@ describe("subagents", () => {
 		expect(compactLines[0]).toBe("• Agent completed");
 		expect(compactLines[1]).toContain(`└ ✓ ${message.details.name}`);
 		expect(compactLines.join("\n")).not.toContain(message.details.id);
-		expect(compactLines[1]).toContain("forked context · completed");
+		expect(compactLines[1]).toContain("fresh context · completed");
 		expect(compactLines[2]).toBe("    prompt  Review renderer");
 		expect(compactLines[3]).toBe("    result  Renderer matches the shared design.");
 		expect(compactLines[4]).toContain("    usage   1 turn · ↑10 · ↓5 · R2 · W3 · $0.0100 · test-provider/test-model");
@@ -403,7 +405,7 @@ describe("subagents", () => {
 
 	test("forks inherited context before the unresolved delegating tool call", async () => {
 		const harness = createHarness({ withPendingToolCall: true });
-		await spawnAgent(harness, "Inspect context");
+		await spawnAgent(harness, "Inspect context", "forked");
 		const args = harness.clients[0].options.args;
 		const sessionPath = args[args.indexOf("--session") + 1];
 		expect(existsSync(sessionPath)).toBe(true);
@@ -413,17 +415,16 @@ describe("subagents", () => {
 		expect(messages.some((message: any) => message.role === "assistant" && message.content?.some?.((part: any) => part.type === "toolCall"))).toBe(false);
 	});
 
-	test("starts with fresh conversation context when requested", async () => {
+	test("starts with fresh conversation context by default", async () => {
 		const harness = createHarness({ withPendingToolCall: true });
 		const started = await harness.tool.execute("call", {
 			action: "spawn",
 			task: "Inspect without history",
-			fork_context: false,
 			name: "history-free inspector",
 		}, undefined, undefined, harness.ctx);
 		expect(started.details.agents[0].contextMode).toBe("fresh");
 		const lines = rendered(harness.tool.renderResult(started, { isPartial: false, expanded: false }, renderTheme, {
-			args: { action: "spawn", task: "Inspect without history", fork_context: false, name: "history-free inspector" },
+			args: { action: "spawn", task: "Inspect without history", name: "history-free inspector" },
 		}));
 		expect(lines[1]).toContain("fresh context");
 		const args = harness.clients[0].options.args;
@@ -431,6 +432,55 @@ describe("subagents", () => {
 		const messages = SessionManager.open(sessionPath).buildSessionContext().messages;
 		expect(messages).toEqual([]);
 		expect(harness.clients[0].prompts[0]).toContain("No parent conversation was inherited");
+	});
+
+	test("reuses one compacted snapshot for concurrent spawns", async () => {
+		let releaseSummary!: () => void;
+		const summaryGate = new Promise<void>((resolve) => { releaseSummary = resolve; });
+		let summaryCalls = 0;
+		const harness = createHarness({
+			compactContext: async (_ctx, messages) => {
+				summaryCalls += 1;
+				expect(messages.some((message: any) => message.role === "user" && message.content === "Original request")).toBe(true);
+				await summaryGate;
+				return "## Current work\nKeep the protocol stable.";
+			},
+		});
+		const first = harness.tool.execute("compact-first", {
+			action: "spawn", task: "Inspect API", name: "compacted API", context: "compacted",
+		}, undefined, undefined, harness.ctx);
+		const second = harness.tool.execute("compact-second", {
+			action: "spawn", task: "Inspect tests", name: "compacted tests", context: "compacted",
+		}, undefined, undefined, harness.ctx);
+		await Bun.sleep(0);
+		expect(summaryCalls).toBe(1);
+		releaseSummary();
+		const started = await Promise.all([first, second]);
+		expect(started.map((result) => result.details.agents[0].contextMode)).toEqual(["compacted", "compacted"]);
+		for (const client of harness.clients) {
+			const args = client.options.args;
+			const sessionPath = args[args.indexOf("--session") + 1];
+			const messages = SessionManager.open(sessionPath).buildSessionContext().messages;
+			expect(JSON.stringify(messages)).toContain("Compacted parent conversation");
+			expect(JSON.stringify(messages)).toContain("Keep the protocol stable");
+			expect(client.prompts[0]).toContain("A compacted parent-conversation summary was inherited");
+		}
+	});
+
+	test("retries compacted context after summary failure", async () => {
+		let summaryCalls = 0;
+		const harness = createHarness({
+			compactContext: async () => {
+				summaryCalls += 1;
+				if (summaryCalls === 1) throw new Error("summary unavailable");
+				return "Recovered summary";
+			},
+		});
+		const args = { action: "spawn", task: "Inspect API", name: "retry compact", context: "compacted" };
+		await expect(harness.tool.execute("compact-fail", args, undefined, undefined, harness.ctx)).rejects.toThrow("summary unavailable");
+		await expect(harness.tool.execute("compact-retry", args, undefined, undefined, harness.ctx)).resolves.toBeDefined();
+		expect(summaryCalls).toBe(2);
+		expect(harness.clients).toHaveLength(1);
 	});
 
 	test("uses names for lifecycle actions while IDs remain internal", async () => {
@@ -447,7 +497,7 @@ describe("subagents", () => {
 			args: { action: "spawn", task: "Review the renderer", name: "renderer review" },
 		}));
 		expect(lines[0]).toBe("• Spawned agent");
-		expect(lines[1]).toBe("  └ ● renderer review · forked context · running");
+		expect(lines[1]).toBe("  └ ● renderer review · fresh context · running");
 		expect(lines.join("\n")).not.toContain(agent.id);
 		expect(lines[2]).toBe("    prompt  Review the renderer");
 		const styled = harness.tool.renderResult(started, { isPartial: false, expanded: false }, semanticTheme, {
@@ -492,14 +542,14 @@ describe("subagents", () => {
 		}, undefined, undefined, harness.ctx)).rejects.toThrow("Agent name already exists");
 	});
 
-	test("rejects invalid context inheritance values", async () => {
+	test("rejects invalid context modes", async () => {
 		const harness = createHarness();
 		await expect(harness.tool.execute("call", {
 			action: "spawn",
 			task: "Inspect context",
 			name: "context inspector",
-			fork_context: "false",
-		}, undefined, undefined, harness.ctx)).rejects.toThrow("fork_context must be a boolean");
+			context: "stale",
+		}, undefined, undefined, harness.ctx)).rejects.toThrow("context must be fresh, compacted, or forked");
 		expect(harness.clients).toHaveLength(0);
 	});
 
@@ -521,7 +571,7 @@ describe("subagents", () => {
 
 	test("creates a usable context file for first-turn delegation", async () => {
 		const harness = createHarness({ withPendingToolCall: true, firstTurn: true });
-		await spawnAgent(harness, "Inspect first turn");
+		await spawnAgent(harness, "Inspect first turn", "forked");
 		const args = harness.clients[0].options.args;
 		const sessionPath = args[args.indexOf("--session") + 1];
 		expect(existsSync(sessionPath)).toBe(true);
@@ -564,7 +614,7 @@ describe("subagents", () => {
 
 	test("shares one cleanup operation across concurrent callers", async () => {
 		const harness = createHarness();
-		const fork = await createContextFork(harness.ctx);
+		const fork = await createContextFork(harness.ctx, "fresh");
 		const first = fork.cleanup();
 		const second = fork.cleanup();
 		expect(second).toBe(first);
@@ -656,9 +706,9 @@ describe("subagents", () => {
 		let releaseContext!: () => void;
 		const contextGate = new Promise<void>((resolve) => { releaseContext = resolve; });
 		const harness = createHarness({
-			forkContext: async (ctx) => {
+			forkContext: async (ctx, mode, compactedSummary) => {
 				await contextGate;
-				return createContextFork(ctx);
+				return createContextFork(ctx, mode, compactedSummary);
 			},
 		});
 		const spawning = spawnAgent(harness, "Race with parent shutdown");
