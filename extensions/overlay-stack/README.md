@@ -16,6 +16,8 @@ Current cards:
 
 - `goal` — order 5
 - `plan-progress` — order 10
+- `subagents` — order 15
+- `background-jobs` — order 16
 - `edit-summary` — order 20
 
 Each visible section is rendered as a separate card with the same width, accent
@@ -27,4 +29,4 @@ lower card within 80% of its height, that card is omitted rather than clipped.
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
 - **Depends on extensions:** [`accent-color`](../accent-color/).
-- **Used by extensions:** [`edit-summary`](../edit-summary/), [`plan-progress`](../plan-progress/).
+- **Used by extensions:** [`background-jobs`](../background-jobs/), [`edit-summary`](../edit-summary/), [`goal`](../goal/), [`plan-progress`](../plan-progress/), [`subagents`](../subagents/).

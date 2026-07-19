@@ -14,6 +14,7 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 import { fitToolLine, renderCommandOutput } from "../better-native-pi/core.js";
+import { registerOverlayCard } from "../overlay-stack/index.js";
 import { BoundedOutput, CursorOutput, sanitizeTerminalOutput, type CursorRead } from "./output.js";
 import {
 	CoalescedRefresh,
@@ -26,6 +27,9 @@ export { BoundedOutput, CursorOutput } from "./output.js";
 
 const ENTRY_TYPE = "background-job";
 const STATUS_KEY = "background-jobs";
+const OVERLAY_WIDTH = 58;
+const OVERLAY_JOB_ROWS = 2;
+const OVERLAY_MAX_ROWS = 7;
 const MAX_CONCURRENT_JOBS = 16;
 const MAX_RETAINED_JOBS = 50;
 const TOOL_OUTPUT_BYTES = 24 * 1024;
@@ -183,6 +187,7 @@ interface ManagedJob {
 
 interface BackgroundJobsOptions {
 	killGraceMs?: number;
+	registerOverlayCard?: typeof registerOverlayCard;
 }
 
 function isActive(job: Pick<ManagedJob, "status">): boolean {
@@ -242,6 +247,27 @@ function statusColor(status: JobStatus): string {
 	if (status === "completed") return "success";
 	if (status === "killed") return "muted";
 	return "error";
+}
+
+function renderOverlayJob(job: ManagedJob, width: number, theme: any): string[] {
+	const mark = theme.fg(statusColor(job.status), statusSymbol(job.status));
+	const name = theme.bold(compactCommand(job.description, Math.max(16, width - 4)));
+	const headline = truncateToWidth(`${mark} ${name}`, width, "…");
+	const command = compactCommand(job.command, Math.max(24, width * 2));
+	return [
+		headline,
+		truncateToWidth(theme.fg("dim", `  ${command}${job.tty ? " · tty" : ""}`), width, "…"),
+	];
+}
+
+function renderJobsOverlayBody(jobs: ManagedJob[], width: number, maxHeight: number, theme: any): string[] {
+	const rowBudget = Math.max(0, Math.min(OVERLAY_MAX_ROWS, maxHeight));
+	if (rowBudget < OVERLAY_JOB_ROWS || jobs.length === 0) return [];
+	const shownCount = Math.min(jobs.length, Math.floor(rowBudget / OVERLAY_JOB_ROWS));
+	const lines = jobs.slice(0, shownCount).flatMap((job) => renderOverlayJob(job, width, theme));
+	const hidden = jobs.length - shownCount;
+	if (hidden > 0 && lines.length < rowBudget) lines.push(theme.fg("dim", `… ${hidden} more · /ps`));
+	return lines.map((line) => truncateToWidth(line, width, "…"));
 }
 
 function snapshot(job: ManagedJob, outputLimit?: number): JobSnapshot {
@@ -538,6 +564,7 @@ class TerminalInteractionComponent {
 export default function registerBackgroundJobs(pi: ExtensionAPI, options: BackgroundJobsOptions = {}) {
 	const jobs = new Map<string, ManagedJob>();
 	const killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
+	const registerCard = options.registerOverlayCard ?? registerOverlayCard;
 	let activeCtx: any;
 	let sessionGeneration = 0;
 
@@ -557,11 +584,28 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		pi.setActiveTools([...active, ...added]);
 	};
 	const activeJobs = () => [...jobs.values()].filter(isActive);
-	const activeBackgroundJobs = () => activeJobs().filter((job) => job.backgrounded);
-	const updateStatus = () => {
-		if (!activeCtx) return;
-		const count = activeBackgroundJobs().length;
-		activeCtx.ui.setStatus(STATUS_KEY, count > 0 ? `${count} background job${count === 1 ? "" : "s"} running · /jobs to view` : undefined);
+	const activeBackgroundJobs = () => activeJobs()
+		.filter((job) => job.backgrounded)
+		.sort((a, b) => b.startedAt - a.startedAt);
+	const overlayCard = registerCard({
+		id: "background-jobs",
+		order: 16,
+		width: OVERLAY_WIDTH,
+		minBodyHeight: OVERLAY_JOB_ROWS,
+		minTerminalWidth: 90,
+		minTerminalHeight: 10,
+		visible: () => activeBackgroundJobs().length > 0,
+		title: (theme) => {
+			const count = activeBackgroundJobs().length;
+			return `${theme.bold(" Jobs ")}${theme.fg("accent", `● ${count} running`)} ${theme.fg("dim", "· /ps ")}`;
+		},
+		renderBody: (width, maxHeight, theme) => renderJobsOverlayBody(activeBackgroundJobs(), width, maxHeight, theme),
+	});
+	const updateUi = () => {
+		// Clear the legacy footer key on reload; live job state belongs in the
+		// shared top-right overlay alongside plans, goals, and subagents.
+		activeCtx?.ui.setStatus(STATUS_KEY, undefined);
+		overlayCard.invalidate();
 	};
 	const emitActivity = (job: ManagedJob) => {
 		for (const listener of [...job.activityListeners]) listener();
@@ -616,7 +660,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 				if (job.pendingClose) finalize(job, job.pendingClose.code, job.pendingClose.signal);
 			}, 25);
 		}, killGraceMs);
-		updateStatus();
+		updateUi();
 		emitActivity(job);
 		return true;
 	};
@@ -637,7 +681,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		emitActivity(job);
 		job.resolveCompletion();
 		trimRetained();
-		updateStatus();
+		updateUi();
 
 		if (!job.suppressPersistence && job.sessionGeneration === sessionGeneration) {
 			pi.appendEntry(ENTRY_TYPE, snapshot(job, PERSISTED_OUTPUT_BYTES));
@@ -727,7 +771,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		});
 		job.timeout = setTimeout(() => requestKill(job, "timeout"), timeoutSeconds * 1000);
 		job.timeout.unref?.();
-		updateStatus();
+		updateUi();
 		return job;
 	};
 	const waitForCompletion = async (job: ManagedJob, signal: AbortSignal | undefined, waitMs = DEFAULT_WAIT_COMPLETION_MS) => {
@@ -884,7 +928,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			// before returning so the next model turn can act on this terminal ID.
 			job.backgrounded = true;
 			activateTerminalTools();
-			updateStatus();
+			updateUi();
 		}
 		const outputBytes = outputBytesForTokens(params.max_output_tokens);
 		const { read, details } = readDelta(job, initialCursor, true, outputBytes);
@@ -1094,7 +1138,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			jobs.set(data.id, restoredJob(data, sessionGeneration));
 		}
 		trimRetained();
-		updateStatus();
+		updateUi();
 	});
 
 	pi.on("session_shutdown", async () => {
@@ -1107,6 +1151,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		await Promise.all(stopping.map((job) => job.completion));
 		activeCtx?.ui.setStatus(STATUS_KEY, undefined);
 		jobs.clear();
+		overlayCard.invalidate();
 		// Belt-and-suspenders: graceful shutdown reaped everything via
 		// requestKill, but clear the reaper set in case any close handler
 		// hasn't fired yet (e.g. a SIGTERM-ignoring job whose SIGKILL is still

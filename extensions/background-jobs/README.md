@@ -47,14 +47,24 @@ collapse, and `└` metadata hierarchy: `Interacted with <terminal> to <goal>`,
 `Waited for <terminal> to <goal>`, or `Read from <terminal> to <goal>`. The
 `/jobs` and `/ps` live viewer uses that same normal command-output treatment.
 
-After terminals yield into the background, the footer shows:
+After terminals yield into the background, they appear in the shared top-right
+overlay stack:
 
 ```text
-2 background jobs running · /jobs to view
+ Jobs ● 2 running · /ps
+ ● frontend dev server
+   bun run dev
+ ● test watcher
+   bun test --watch
 ```
 
-Commands that are still inside their initial foreground yield window do not show
-this footer status.
+Each terminal gets two compact rows for its description and command, with a TTY
+marker when applicable. Internal terminal IDs stay out of the overlay and remain
+available through `/ps`. The card shows up to three terminals plus an overflow hint, hides when
+none are running, and stays hidden while commands are still inside their initial
+foreground yield window. It also hides on terminals narrower than 90 columns or
+shorter than 10 rows. Use `/overlay` or `Ctrl+Shift+O` to toggle the shared stack.
+The footer remains clear so job state is not duplicated.
 
 Commands:
 
@@ -96,11 +106,11 @@ a duplicate transcript entry.
   that ignores SIGTERM (`trap '' TERM`) cannot survive an ungraceful pi exit
   (crash, `emergencyTerminalExit`, signal). Without it, such jobs were
   re-parented to PID 1 and leaked system resources.
-- Yielded command completions update footer status and any open live viewer without emitting desktop notifications or mutating historical transcript rows.
+- Yielded command lifecycle changes update the shared overlay and any open live viewer without emitting desktop notifications or mutating historical transcript rows.
 
 ## Dependencies
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** [`better-native-pi`](../better-native-pi/).
+- **Depends on extensions:** [`better-native-pi`](../better-native-pi/), [`overlay-stack`](../overlay-stack/).
 - **Used by extensions:** [`better-native-pi`](../better-native-pi/).
 - **System/service:** `expect` on macOS or util-linux `script` on Linux for PTY sessions.

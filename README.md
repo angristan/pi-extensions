@@ -129,7 +129,9 @@ background-jobs <------> better-native-pi ------> code-blocks
 web-search --------------> better-native-pi
 doctor ------------------> accent-color
 overlay-stack -----------> accent-color
+background-jobs ---------> overlay-stack
 edit-summary ------------> overlay-stack <------- plan-progress
+goal --------------------> overlay-stack <------- subagents
 ```
 
 `background-jobs` and `better-native-pi` deliberately integrate in both

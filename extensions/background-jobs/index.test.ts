@@ -18,6 +18,7 @@ interface Harness {
 	events: Array<{ name: string; payload: any }>;
 	entryRendererTypes: string[];
 	appendedEntries: Array<{ type: string; data: any }>;
+	overlay: { definition?: any; invalidations: number };
 	ctx: any;
 }
 
@@ -41,6 +42,7 @@ function createHarness(options: { killGraceMs?: number } = {}): Harness {
 	const events: Array<{ name: string; payload: any }> = [];
 	const entryRendererTypes: string[] = [];
 	const appendedEntries: Array<{ type: string; data: any }> = [];
+	const overlay: { definition?: any; invalidations: number } = { invalidations: 0 };
 	const ctx = {
 		cwd: process.cwd(),
 		mode: "tui",
@@ -66,7 +68,16 @@ function createHarness(options: { killGraceMs?: number } = {}): Harness {
 		appendEntry(type: string, data: any) { appendedEntries.push({ type, data }); },
 		events: { emit(name: string, payload: any) { events.push({ name, payload }); } },
 	};
-	registerBackgroundJobs(pi as any, options);
+	registerBackgroundJobs(pi as any, {
+		...options,
+		registerOverlayCard(definition: any) {
+			overlay.definition = definition;
+			return {
+				invalidate() { overlay.invalidations += 1; },
+				unregister() {},
+			};
+		},
+	});
 	registerBetterNativeBash(pi as any);
 	return {
 		tools,
@@ -79,6 +90,7 @@ function createHarness(options: { killGraceMs?: number } = {}): Harness {
 		events,
 		entryRendererTypes,
 		appendedEntries,
+		overlay,
 		ctx,
 	};
 }
@@ -256,6 +268,13 @@ describe("terminal tools", () => {
 		]);
 		expect([...harness.commands.keys()]).toEqual(["jobs", "ps"]);
 		expect([...harness.activeTools]).toEqual(["bash"]);
+		expect(harness.overlay.definition).toMatchObject({
+			id: "background-jobs",
+			order: 16,
+			width: 58,
+			minTerminalWidth: 90,
+		});
+		expect(harness.overlay.definition.visible()).toBe(false);
 		const bash = harness.tools.get("bash");
 		expect(bash.parameters.properties.tty).toMatchObject({ type: "boolean" });
 		expect(bash.parameters.properties["yield-time_ms"]).toMatchObject({ minimum: 250, maximum: 30_000 });
@@ -326,7 +345,7 @@ describe("terminal tools", () => {
 		expect(rendered).not.toContain(result.details.id);
 	});
 
-	test("hides footer status until a command actually yields", async () => {
+	test("shows yielded commands in the overlay instead of the footer", async () => {
 		const harness = createHarness({ killGraceMs: 50 });
 		await startHarness(harness);
 		const pending = harness.tools.get("bash").execute("exec", {
@@ -337,10 +356,20 @@ describe("terminal tools", () => {
 		try {
 			await Bun.sleep(50);
 			expect(harness.statuses.get("background-jobs")).toBeUndefined();
+			expect(harness.overlay.definition.visible()).toBe(false);
+			const invalidationsBeforeYield = harness.overlay.invalidations;
 
 			const started = await pending;
 			expect(started.details.status).toBe("running");
-			expect(harness.statuses.get("background-jobs")).toContain("1 background job running");
+			expect(harness.statuses.get("background-jobs")).toBeUndefined();
+			expect(harness.overlay.definition.visible()).toBe(true);
+			expect(harness.overlay.invalidations).toBeGreaterThan(invalidationsBeforeYield);
+			const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+			expect(harness.overlay.definition.title(theme)).toContain("Jobs ● 1 running · /ps");
+			const body = harness.overlay.definition.renderBody(54, 7, theme).join("\n");
+			expect(body).toContain("test foreground status");
+			expect(body).not.toContain(started.details.id);
+			expect(body).toContain("sleep 2");
 		} finally {
 			await shutdownHarness(harness);
 		}
@@ -359,7 +388,8 @@ describe("terminal tools", () => {
 		expect(started.content[0].text).toContain("first");
 		expect(started.content[0].text).toContain(`Use terminal_write or job_output with job_id=${started.details.id}`);
 		expect([...harness.activeTools]).toEqual(["bash", "other_tool", "job_output", "terminal_write", "job_kill"]);
-		expect(harness.statuses.get("background-jobs")).toContain("1 background job running");
+		expect(harness.statuses.get("background-jobs")).toBeUndefined();
+		expect(harness.overlay.definition.visible()).toBe(true);
 
 		const finished = await harness.tools.get("terminal_write").execute("poll", {
 			job_id: started.details.id,
@@ -370,6 +400,7 @@ describe("terminal tools", () => {
 		expect(finished.details.observedAt).toBeGreaterThanOrEqual(started.details.observedAt);
 		expect(finished.content[0].text).toContain("second");
 		expect(finished.content[0].text).not.toContain("\nfirst");
+		expect(harness.overlay.definition.visible()).toBe(false);
 		expect(harness.events).toHaveLength(0);
 		expect(harness.notifications).toHaveLength(0);
 
@@ -722,9 +753,11 @@ describe("background terminal UX", () => {
 		expect(list?.options.join("\n")).toContain("recent-two");
 
 		await harness.commands.get("jobs").handler("stop all", harness.ctx);
-		expect(harness.statuses.get("background-jobs")).toContain("2 background jobs running");
+		expect(harness.statuses.get("background-jobs")).toBeUndefined();
+		expect(harness.overlay.definition.visible()).toBe(true);
 		await shutdownHarness(harness);
 		expect(harness.statuses.get("background-jobs")).toBeUndefined();
+		expect(harness.overlay.definition.visible()).toBe(false);
 	}, 3_000);
 
 	test("waits for SIGKILL escalation during shutdown", async () => {
