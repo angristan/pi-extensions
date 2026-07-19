@@ -37,7 +37,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | [`footer`](extensions/footer/) | A status line below the transcript showing session, model, context usage, and cost |
 | [`hyperlinks`](extensions/hyperlinks/) | Render local file paths as clickable OSC 8 terminal hyperlinks, and expose the helper to other extensions |
 | [`overlay-stack`](extensions/overlay-stack/) | Composes independent top-right overlay cards and toggles them with `Ctrl+Shift+O` or `/overlay` |
-| [`petit-chat-input-bar`](extensions/petit-chat-input-bar/) | A tiny static companion sprite above the editor (a la Vibe's petit chat) |
+| [`petit-chat-input-bar`](extensions/petit-chat-input-bar/) | A tiny animated companion sprite above the editor, with smart and manual modes |
 | [`turn-separator`](extensions/turn-separator/) | Dim full-width rule between assistant messages that follow tool work, labeling long steps |
 | [`turn-stats`](extensions/turn-stats/) | Per-turn timing and token-usage entries appended to the transcript after each settled response |
 | [`working-timer`](extensions/working-timer/) | Adds a live elapsed timer to pi's built-in `Working...` row for long-running turns |

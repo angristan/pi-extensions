@@ -1,10 +1,10 @@
 # petit-chat-input-bar
 
-A tiny static companion sprite that sits above the editor (a la Vibe's petit
-chat). Purely cosmetic — no commands, no config.
+A tiny animated companion sprite that sits above the editor (a la Vibe's petit
+chat). It is purely cosmetic and uses smart animation by default.
 
-The pet is drawn in its neutral pose, anchored just above the input bar's top
-border so its feet share the border row:
+The pet is anchored just above the input bar's top border so its feet share the
+border row:
 
 ```
 ⠦ Working...                                                                    ⡠⣒⠄  ⡔⢄⠔⡄
@@ -15,12 +15,19 @@ border so its feet share the border row:
 Petit Chat World Domination │ ctx 21%/262K │ ↓ 314K cached 2.35M hit 88% │ ↑ 31K │ $0.70
 ```
 
-## Why it's static
+## Animation modes
 
-The sprite never animates. Pi periodically re-renders the TUI, and each render
-resets the scrollback viewport to the bottom — so a per-frame animation would
-yank the view down every tick. Keeping the pet on a single neutral frame avoids
-that entirely while still giving the input bar a little personality.
+```text
+/petit-chat              Show the current mode
+/petit-chat smart        Move occasionally and react more often while Pi works (default)
+/petit-chat working      Animate continuously only while Pi works
+/petit-chat always       Animate continuously
+/petit-chat static       Stay in the neutral pose
+```
+
+Animated modes call Pi's TUI renderer for each frame. Depending on the terminal,
+this may return a manually scrolled viewport to the bottom. Use
+`/petit-chat static` if animation disrupts scrollback.
 
 ## Placement
 
