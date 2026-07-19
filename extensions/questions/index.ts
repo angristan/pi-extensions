@@ -7,6 +7,7 @@ interface Details { questions: Question[]; answers: Answer[]; interrupted: boole
 
 const TERMINAL_TITLE_EVENT = "terminal-title:override";
 export const QUESTION_WAITING_EVENT = "questions:waiting";
+export const QUESTION_ANSWER_EVENT = "questions:answer";
 export const QUESTION_RESOLVED_EVENT = "questions:resolved";
 
 const parameters = {
@@ -122,6 +123,72 @@ async function secretInput(question: string, ctx: any): Promise<string | undefin
 		new SecretPrompt(question, tui, theme, done));
 }
 
+interface CollectedAnswer {
+	answer?: string;
+	cancelled: boolean;
+}
+
+async function collectAnswer(
+	pi: ExtensionAPI,
+	requestId: string,
+	question: Question,
+	prompt: string,
+	ctx: any,
+	onReady: () => void,
+): Promise<CollectedAnswer> {
+	const dialogController = new AbortController();
+	let resolveRemote!: (answer: string) => void;
+	let remoteSettled = false;
+	const remoteAnswer = new Promise<string>((resolve) => { resolveRemote = resolve; });
+	const options = Array.isArray(question.options) ? [...question.options] : [];
+	const allowOther = question.allow_other !== false || options.length === 0;
+	const stopRemoteListener = pi.events.on(QUESTION_ANSWER_EVENT, (event: unknown) => {
+		if (remoteSettled || question.secret || !event || typeof event !== "object") return;
+		const value = event as { requestId?: unknown; answer?: unknown };
+		if (value.requestId !== requestId || typeof value.answer !== "string") return;
+		const answer = value.answer.trim();
+		if (!answer || answer.length > 4_000) return;
+		if (options.length > 0 && !allowOther && !options.includes(answer)) return;
+		remoteSettled = true;
+		resolveRemote(answer);
+	});
+
+	const raceRemote = async <T>(local: Promise<T>): Promise<{ source: "local"; value: T } | { source: "remote"; value: string }> => {
+		const result = await Promise.race([
+			local.then((value) => ({ source: "local" as const, value })),
+			remoteAnswer.then((value) => ({ source: "remote" as const, value })),
+		]);
+		if (result.source === "remote") dialogController.abort();
+		return result;
+	};
+
+	try {
+		onReady();
+		if (options.length > 0) {
+			const choices = [...options];
+			if (question.allow_other !== false) choices.push("Type something…");
+			const selected = await raceRemote(ctx.ui.select(prompt, choices, { signal: dialogController.signal }));
+			if (selected.source === "remote") return { answer: selected.value, cancelled: false };
+			if (selected.value === undefined) return { cancelled: true };
+			if (selected.value !== "Type something…") return { answer: selected.value, cancelled: false };
+		}
+
+		if (question.secret) {
+			const answer = await secretInput(prompt, ctx);
+			return answer === undefined ? { cancelled: true } : { answer, cancelled: false };
+		}
+		const entered = await raceRemote(ctx.ui.input(prompt, "Type your answer", { signal: dialogController.signal }));
+		return entered.source === "remote"
+			? { answer: entered.value, cancelled: false }
+			: entered.value === undefined
+				? { cancelled: true }
+				: { answer: entered.value, cancelled: false };
+	} finally {
+		dialogController.abort();
+		stopRemoteListener();
+	}
+}
+
 function recap(details: Details, theme: any): string[] {
 	const answered = details.answers.filter(hasAnswer).length;
 	const lines = [`${theme.fg("accent", "•")} ${theme.bold("Questions")} ${answered}/${details.questions.length} answered${details.interrupted ? theme.fg("accent", " (interrupted)") : ""}`];
@@ -149,34 +216,26 @@ export default function (pi: ExtensionAPI) {
 					const prompt = numberedPrompt(question.question, index, questions.length, ctx.mode === "tui" ? ctx.ui.theme : undefined);
 					const requestId = `${toolCallId}:${index}`;
 					setAttentionTitle(pi, ctx, index, questions.length);
-					pi.events.emit(QUESTION_WAITING_EVENT, {
-						requestId,
-						question: question.question,
-						index: index + 1,
-						total: questions.length,
-						secret: question.secret === true,
-					});
 					try {
-						const options = Array.isArray(question.options) ? [...question.options] : [];
-						if (question.allow_other !== false) options.push("Type something…");
-						let answer: string | undefined;
-						if (options.length) {
-							const selected = await ctx.ui.select(prompt, options);
-							if (selected === undefined) { interrupted = true; answers.push({ id: question.id, question: question.question, cancelled: true, secret: question.secret }); break; }
-							answer = selected === "Type something…"
-								? question.secret
-									? await secretInput(prompt, ctx)
-									: await ctx.ui.input(prompt, "Type your answer")
-								: selected;
-						} else {
-							answer = question.secret
-								? await secretInput(prompt, ctx)
-								: await ctx.ui.input(prompt, "Type your answer");
+						const collected = await collectAnswer(pi, requestId, question, prompt, ctx, () => {
+							pi.events.emit(QUESTION_WAITING_EVENT, {
+								requestId,
+								question: question.question,
+								options: Array.isArray(question.options) ? [...question.options] : [],
+								allowOther: question.allow_other !== false,
+								index: index + 1,
+								total: questions.length,
+								secret: question.secret === true,
+							});
+						});
+						if (collected.cancelled) {
+							interrupted = true;
+							answers.push({ id: question.id, question: question.question, cancelled: true, secret: question.secret });
+							break;
 						}
-						if (answer === undefined) { interrupted = true; answers.push({ id: question.id, question: question.question, cancelled: true, secret: question.secret }); break; }
 						answers.push(question.secret
 							? { id: question.id, question: question.question, provided: true, secret: true }
-							: { id: question.id, question: question.question, answer });
+							: { id: question.id, question: question.question, answer: collected.answer });
 					} finally {
 						pi.events.emit(QUESTION_RESOLVED_EVENT, { requestId });
 					}

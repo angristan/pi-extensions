@@ -1,9 +1,13 @@
 # telegram-notifications
 
 Sends a Telegram message when the `questions` extension has been waiting for an
-answer for a configurable delay (five minutes by default). The timer resets for
-each question and is cancelled when the question is answered, cancelled, the
-session changes, or Pi shuts down.
+answer for a configurable delay (five minutes by default). Choice questions use
+inline buttons; free-text questions let you reply directly to the bot. A valid
+Telegram answer resolves the questionnaire and dismisses the pending Pi dialog.
+
+The timer resets for each question and is cancelled when the question is
+answered, cancelled, the session changes, or Pi shuts down. Secret questions
+remain TUI-only and produce only a redacted passive notification.
 
 Example message:
 
@@ -11,6 +15,10 @@ Example message:
 ❓ my-project: input needed
 The agent has been waiting 5 minutes for your answer.
 Question 2/3: Which deployment target?
+Tap a choice below to answer.
+
+[ staging ]
+[ production ]
 ```
 
 ## Setup
@@ -35,6 +43,17 @@ The token is stored locally in this file rather than in an environment variable.
 Anyone who can read the token can control the bot, so do not commit or share the
 config file.
 
+## Behavior and limitations
+
+- Choice answers are correlated through the bot message and button index.
+- Free text is accepted only when it replies to the matching bot message in the
+  configured chat.
+- Secret prompts never expose their question text or accept Telegram answers.
+- Answer polling uses Telegram `getUpdates`; the bot must not have a webhook.
+- Telegram permits only one active `getUpdates` consumer per bot. Avoid waiting
+  for Telegram answers from multiple Pi processes at the same time; a conflict
+  leaves the local TUI prompt usable and reports an error.
+
 ## Commands
 
 - `/telegram setup` — securely configure the bot, chat, and delay
@@ -45,7 +64,8 @@ config file.
 ## Dependencies
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Service:** [Telegram Bot API](https://core.telegram.org/bots/api#sendmessage).
-- **Depends on extensions:** `questions`, through its `questions:waiting` and
-  `questions:resolved` runtime events.
+- **Service:** [Telegram Bot API](https://core.telegram.org/bots/api), including
+  `sendMessage`, inline keyboards, `ForceReply`, and `getUpdates`.
+- **Depends on extensions:** `questions`, through its `questions:waiting`,
+  `questions:answer`, and `questions:resolved` runtime events.
 - **Used by extensions:** None.

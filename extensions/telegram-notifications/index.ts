@@ -5,12 +5,21 @@ import { readFileSync } from "node:fs";
 import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import {
+	dismissTelegramQuestion,
+	sendTelegramMessage,
+	sendTelegramQuestion,
+	waitForTelegramAnswer,
+	type SentTelegramQuestion,
+} from "./bot-api";
+
+export { sendTelegramMessage } from "./bot-api";
 
 const QUESTION_WAITING_EVENT = "questions:waiting";
+const QUESTION_ANSWER_EVENT = "questions:answer";
 const QUESTION_RESOLVED_EVENT = "questions:resolved";
 const DEFAULT_DELAY_MINUTES = 5;
 const MAX_DELAY_MINUTES = 7 * 24 * 60;
-const REQUEST_TIMEOUT_MS = 15_000;
 
 export interface TelegramConfig {
 	botToken: string;
@@ -22,6 +31,8 @@ export interface TelegramConfig {
 export interface WaitingQuestion {
 	requestId: string;
 	question: string;
+	options: string[];
+	allowOther: boolean;
 	index: number;
 	total: number;
 	secret: boolean;
@@ -31,6 +42,9 @@ interface RuntimeDependencies {
 	loadConfig?: () => TelegramConfig | undefined;
 	saveConfig?: (config: TelegramConfig) => Promise<void>;
 	sendMessage?: (config: TelegramConfig, text: string, signal?: AbortSignal) => Promise<void>;
+	sendQuestion?: (config: TelegramConfig, text: string, question: WaitingQuestion, signal?: AbortSignal) => Promise<SentTelegramQuestion>;
+	waitForAnswer?: (config: TelegramConfig, sent: SentTelegramQuestion, question: WaitingQuestion, signal: AbortSignal) => Promise<string>;
+	dismissQuestion?: (config: TelegramConfig, sent: SentTelegramQuestion) => Promise<void>;
 	setTimer?: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
 	clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
 }
@@ -80,44 +94,6 @@ function safeError(error: unknown): string {
 	return message.replace(/\s+/g, " ").trim().slice(0, 240) || "Unknown error";
 }
 
-export async function sendTelegramMessage(
-	config: Pick<TelegramConfig, "botToken" | "chatId">,
-	text: string,
-	signal?: AbortSignal,
-	fetchImpl: typeof fetch = fetch,
-): Promise<void> {
-	if (!/^[^/?#\s]+$/.test(config.botToken)) throw new Error("Telegram bot token has an invalid format.");
-	const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-	const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
-	let response: Response;
-	try {
-		response = await fetchImpl(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ chat_id: config.chatId, text }),
-			signal: requestSignal,
-		});
-	} catch (error) {
-		if (signal?.aborted) throw error;
-		const name = error instanceof Error ? error.name : "";
-		throw new Error(name === "TimeoutError" || timeoutSignal.aborted
-			? "Telegram API request timed out."
-			: "Telegram API network request failed.");
-	}
-	let payload: { ok?: unknown; description?: unknown } | undefined;
-	try {
-		payload = await response.json() as { ok?: unknown; description?: unknown };
-	} catch {
-		// HTTP status still provides a useful bounded error below.
-	}
-	if (!response.ok || payload?.ok !== true) {
-		const description = typeof payload?.description === "string"
-			? `: ${payload.description.replaceAll(config.botToken, "[redacted]").replace(/\s+/g, " ").slice(0, 180)}`
-			: "";
-		throw new Error(`Telegram API request failed (HTTP ${response.status})${description}`);
-	}
-}
-
 function parseWaitingQuestion(event: unknown): WaitingQuestion | undefined {
 	if (!event || typeof event !== "object") return undefined;
 	const value = event as Record<string, unknown>;
@@ -126,7 +102,18 @@ function parseWaitingQuestion(event: unknown): WaitingQuestion | undefined {
 	const index = value.index as number;
 	const total = value.total as number;
 	if (index < 1 || total < index) return undefined;
-	return { requestId: value.requestId, question: value.question, index, total, secret: value.secret === true };
+	const options = Array.isArray(value.options) && value.options.every((option) => typeof option === "string")
+		? value.options as string[]
+		: [];
+	return {
+		requestId: value.requestId,
+		question: value.question,
+		options,
+		allowOther: value.allowOther !== false,
+		index,
+		total,
+		secret: value.secret === true,
+	};
 }
 
 function formatMinutes(minutes: number): string {
@@ -140,13 +127,19 @@ function preview(value: string, limit: number): string {
 }
 
 export function formatWaitingMessage(project: string, question: WaitingQuestion, delayMinutes: number): string {
-	return [
+	const lines = [
 		`❓ ${preview(project, 100)}: input needed`,
 		`The agent has been waiting ${formatMinutes(delayMinutes)} for your answer.`,
 		question.secret
 			? `Question ${question.index}/${question.total}: Secret response requested.`
 			: `Question ${question.index}/${question.total}: ${preview(question.question, 800)}`,
-	].join("\n");
+	];
+	if (!question.secret) {
+		if (question.options.length === 0) lines.push("Reply to this message with your answer.");
+		else if (question.allowOther) lines.push("Tap a choice, or reply to this message with another answer.");
+		else lines.push("Tap a choice below to answer.");
+	}
+	return lines.join("\n");
 }
 
 class MaskedInput extends Input {
@@ -208,23 +201,35 @@ export function createTelegramNotificationsExtension(dependencies: RuntimeDepend
 	const readConfig = dependencies.loadConfig ?? loadTelegramConfig;
 	const writeConfig = dependencies.saveConfig ?? saveTelegramConfig;
 	const sendMessage = dependencies.sendMessage ?? sendTelegramMessage;
+	const sendQuestion = dependencies.sendQuestion ?? sendTelegramQuestion;
+	const waitForAnswer = dependencies.waitForAnswer ?? waitForTelegramAnswer;
+	const dismissQuestion = dependencies.dismissQuestion ?? dismissTelegramQuestion;
 	const setTimer = dependencies.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
 	const clearTimer = dependencies.clearTimer ?? ((timer) => clearTimeout(timer));
 
 	return function telegramNotifications(pi: ExtensionAPI) {
+		interface PendingQuestion {
+			requestId: string;
+			question: WaitingQuestion;
+			config: TelegramConfig;
+			timer?: ReturnType<typeof setTimeout>;
+			controller?: AbortController;
+			sent?: SentTelegramQuestion;
+		}
+
 		let config = readConfig();
 		let activeCtx: any;
-		let pendingRequestId: string | undefined;
-		let timer: ReturnType<typeof setTimeout> | undefined;
-		let requestController: AbortController | undefined;
+		let pending: PendingQuestion | undefined;
 
 		const clearPending = (requestId?: string) => {
-			if (requestId && pendingRequestId !== requestId) return;
-			if (timer) clearTimer(timer);
-			timer = undefined;
-			requestController?.abort();
-			requestController = undefined;
-			pendingRequestId = undefined;
+			if (!pending || (requestId && pending.requestId !== requestId)) return;
+			const cleared = pending;
+			pending = undefined;
+			if (cleared.timer) clearTimer(cleared.timer);
+			cleared.controller?.abort();
+			if (cleared.sent && cleared.question.options.length > 0) {
+				void dismissQuestion(cleared.config, cleared.sent).catch(() => {});
+			}
 		};
 
 		const stopWaitingListener = pi.events.on(QUESTION_WAITING_EVENT, (event: unknown) => {
@@ -235,22 +240,33 @@ export function createTelegramNotificationsExtension(dependencies: RuntimeDepend
 			const snapshot = { ...config };
 			const ctx = activeCtx;
 			const project = ctx.cwd.split("/").filter(Boolean).pop() || "pi";
-			pendingRequestId = question.requestId;
-			timer = setTimer(() => {
-				timer = undefined;
-				if (pendingRequestId !== question.requestId) return;
+			const current: PendingQuestion = { requestId: question.requestId, question, config: snapshot };
+			pending = current;
+			current.timer = setTimer(() => {
+				current.timer = undefined;
+				if (pending !== current) return;
 				const controller = new AbortController();
-				requestController = controller;
-				void sendMessage(snapshot, formatWaitingMessage(project, question, snapshot.delayMinutes), controller.signal)
-					.catch((error) => {
+				current.controller = controller;
+				void (async () => {
+					try {
+						const text = formatWaitingMessage(project, question, snapshot.delayMinutes);
+						if (question.secret) {
+							await sendMessage(snapshot, text, controller.signal);
+							return;
+						}
+						const sent = await sendQuestion(snapshot, text, question, controller.signal);
+						if (pending !== current) return;
+						current.sent = sent;
+						const answer = await waitForAnswer(snapshot, sent, question, controller.signal);
+						if (pending === current) pi.events.emit(QUESTION_ANSWER_EVENT, { requestId: question.requestId, answer });
+					} catch (error) {
 						if (!controller.signal.aborted) ctx.ui.notify(`Telegram notification failed: ${safeError(error)}`, "error");
-					})
-					.finally(() => {
-						if (requestController === controller) requestController = undefined;
-						if (pendingRequestId === question.requestId) pendingRequestId = undefined;
-					});
+					} finally {
+						if (current.controller === controller) current.controller = undefined;
+					}
+				})();
 			}, snapshot.delayMinutes * 60_000);
-			timer.unref?.();
+			current.timer.unref?.();
 		});
 
 		const stopResolvedListener = pi.events.on(QUESTION_RESOLVED_EVENT, (event: unknown) => {

@@ -48,12 +48,17 @@ function createScheduler() {
 function makeHarness(options: {
 	config?: TelegramConfig;
 	sendMessage?: (config: TelegramConfig, text: string, signal?: AbortSignal) => Promise<void>;
+	sendQuestion?: (config: TelegramConfig, text: string, question: any, signal?: AbortSignal) => Promise<{ chatId: string; messageId: number }>;
+	waitForAnswer?: (config: TelegramConfig, sent: any, question: any, signal: AbortSignal) => Promise<string>;
+	dismissQuestion?: (config: TelegramConfig, sent: any) => Promise<void>;
 } = {}) {
 	const lifecycleHandlers: Record<string, Array<(event: any, ctx: any) => any>> = {};
 	const busHandlers: Record<string, Array<(event: any) => void>> = {};
 	const scheduler = createScheduler();
 	const sent: string[] = [];
 	const notices: string[] = [];
+	const emitted: Array<{ name: string; payload: unknown }> = [];
+	const dismissed: number[] = [];
 	const ctx = {
 		cwd: "/tmp/example-project",
 		mode: "tui",
@@ -63,6 +68,9 @@ function makeHarness(options: {
 		loadConfig: () => options.config ?? config,
 		saveConfig: async () => {},
 		sendMessage: options.sendMessage ?? (async (_config, text) => { sent.push(text); }),
+		sendQuestion: options.sendQuestion ?? (async (_config, text) => { sent.push(text); return { chatId: "987654321", messageId: 42 }; }),
+		waitForAnswer: options.waitForAnswer ?? (async () => new Promise<string>(() => {})),
+		dismissQuestion: options.dismissQuestion ?? (async (_config, question) => { dismissed.push(question.messageId); }),
 		setTimer: scheduler.setTimer,
 		clearTimer: scheduler.clearTimer,
 	});
@@ -73,6 +81,10 @@ function makeHarness(options: {
 				return () => {
 					busHandlers[name] = (busHandlers[name] ?? []).filter((candidate) => candidate !== handler);
 				};
+			},
+			emit(name: string, payload: unknown) {
+				emitted.push({ name, payload });
+				for (const handler of busHandlers[name] ?? []) handler(payload);
 			},
 		},
 		on(name: string, handler: (event: any, ctx: any) => any) {
@@ -85,6 +97,8 @@ function makeHarness(options: {
 		scheduler,
 		sent,
 		notices,
+		emitted,
+		dismissed,
 		emitBus(name: string, event: unknown) {
 			for (const handler of busHandlers[name] ?? []) handler(event);
 		},
@@ -95,7 +109,15 @@ function makeHarness(options: {
 }
 
 function waiting(requestId: string, question = "Deploy to production?") {
-	return { requestId, question, index: 1, total: 1, secret: false };
+	return {
+		requestId,
+		question,
+		options: ["staging", "production"],
+		allowOther: false,
+		index: 1,
+		total: 1,
+		secret: false,
+	};
 }
 
 describe("question wait lifecycle", () => {
@@ -136,27 +158,68 @@ describe("question wait lifecycle", () => {
 		expect(harness.sent[0]).toContain("Second?");
 	});
 
-	test("shutdown cancels an in-flight Telegram request", async () => {
+	test("emits a remote answer and dismisses buttons after resolution", async () => {
+		const harness = makeHarness({ waitForAnswer: async () => "production" });
+		await harness.emit("session_start");
+		harness.emitBus("questions:waiting", waiting("request-1"));
+		harness.scheduler.fire(1);
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(harness.emitted).toContainEqual({
+			name: "questions:answer",
+			payload: { requestId: "request-1", answer: "production" },
+		});
+		harness.emitBus("questions:resolved", { requestId: "request-1" });
+		await Promise.resolve();
+		expect(harness.dismissed).toEqual([42]);
+	});
+
+	test("shutdown cancels an in-flight Telegram poll", async () => {
 		let requestSignal: AbortSignal | undefined;
 		const harness = makeHarness({
-			sendMessage: async (_config, _text, signal) => {
+			waitForAnswer: async (_config, _sent, _question, signal) => {
 				requestSignal = signal;
-				await new Promise<void>(() => {});
+				await new Promise<string>(() => {});
 			},
 		});
 		await harness.emit("session_start");
 		harness.emitBus("questions:waiting", waiting("request-1"));
 		harness.scheduler.fire(1);
+		await Promise.resolve();
 		expect(requestSignal?.aborted).toBe(false);
 
 		await harness.emit("session_shutdown");
 		expect(requestSignal?.aborted).toBe(true);
 	});
 
+	test("keeps secret questions passive and never starts answer polling", async () => {
+		let interactiveCalls = 0;
+		const harness = makeHarness({
+			sendQuestion: async () => { interactiveCalls += 1; throw new Error("should not send interactively"); },
+			waitForAnswer: async () => { interactiveCalls += 1; return "forbidden"; },
+		});
+		await harness.emit("session_start");
+		harness.emitBus("questions:waiting", {
+			...waiting("secret", "Paste the production API token"),
+			options: [],
+			secret: true,
+		});
+		harness.scheduler.fire(1);
+		await Promise.resolve();
+
+		expect(interactiveCalls).toBe(0);
+		expect(harness.sent).toHaveLength(1);
+		expect(harness.sent[0]).toContain("Secret response requested");
+		expect(harness.sent[0]).not.toContain("production API token");
+	});
+
 	test("redacts secret question text", () => {
 		const message = formatWaitingMessage("project", {
 			requestId: "secret",
 			question: "Paste the production API token",
+			options: [],
+			allowOther: false,
 			index: 1,
 			total: 1,
 			secret: true,

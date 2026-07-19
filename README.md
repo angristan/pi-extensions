@@ -73,7 +73,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | [`background-jobs`](extensions/background-jobs/) | Run long-lived shell commands in the background with live status, without blocking the agent transcript |
 | [`notifications`](extensions/notifications/) | Desktop notifications for agent activity, so you can context-switch away and get pinged |
 | [`openai-codex-fast`](extensions/openai-codex-fast/) | Toggle OpenAI Codex Fast mode and show a purple `fast` footer indicator when active |
-| [`telegram-notifications`](extensions/telegram-notifications/) | Send a Telegram message when a structured question has waited five minutes for an answer |
+| [`telegram-notifications`](extensions/telegram-notifications/) | Answer delayed structured questions from Telegram with buttons or message replies |
 | [`wakatime`](extensions/wakatime/) | Tracks read and file-edit activity through an existing `wakatime-cli` installation |
 | [`web-search`](extensions/web-search/) | Quality-routed web search, news discovery, and page opening through Exa, Firecrawl, and optional Mistral |
 
