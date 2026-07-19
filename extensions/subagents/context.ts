@@ -22,6 +22,7 @@ export interface ContextFork {
 	directory: string;
 	sessionFile: string;
 	messageCount: number;
+	initialEntryCount: number;
 	cleanup(): Promise<void>;
 }
 
@@ -146,6 +147,7 @@ export async function createContextFork(ctx: any, mode: ContextMode, compactedSu
 			directory,
 			sessionFile,
 			messageCount: messages.length + (mode === "compacted" && compactedSummary?.trim() ? 1 : 0),
+			initialEntryCount: session.getEntries().length,
 			cleanup() {
 				if (!cleanupPromise) {
 					cleanupPromise = rm(directory, { recursive: true, force: true }).catch((error) => {

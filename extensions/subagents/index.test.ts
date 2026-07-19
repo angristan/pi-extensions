@@ -285,6 +285,57 @@ describe("subagents", () => {
 		harnesses.splice(harnesses.indexOf(harness), 1);
 	});
 
+	test("opens a live child-only transcript from /agents", async () => {
+		const harness = createHarness();
+		const started = await spawnAgent(harness, "Inspect transcript behavior", "forked");
+		const client = harness.clients[0];
+		const sessionPath = client.options.args[client.options.args.indexOf("--session") + 1];
+		const child = SessionManager.open(sessionPath);
+		child.appendMessage({ role: "user", content: client.prompts[0], timestamp: Date.now() });
+		child.appendMessage({
+			...assistant(""),
+			content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "extensions/subagents/index.ts" } }],
+			stopReason: "toolUse",
+		});
+
+		let component: any;
+		let overlayOptions: any;
+		let renderRequests = 0;
+		harness.ctx.ui.select = async (_title: string, labels: string[]) => labels[0];
+		harness.ctx.ui.custom = async (factory: any, options: any) => {
+			overlayOptions = options;
+			await new Promise<void>((resolve) => {
+				component = factory({ requestRender() { renderRequests += 1; } }, renderTheme, {}, resolve);
+			});
+		};
+
+		const viewing = harness.commands.get("agents").handler("", harness.ctx);
+		await Bun.sleep(0);
+		const initial = rendered(component, 100).join("\n");
+		expect(initial).toContain(`Agent transcript · ${started.details.agents[0].name}`);
+		expect(initial).toContain("Inspect transcript behavior");
+		expect(initial).toContain("tool: read");
+		expect(initial).not.toContain("Original request");
+		expect(initial).not.toContain("You are a delegated child agent");
+		expect(overlayOptions).toMatchObject({ overlay: true, overlayOptions: { width: "95%", maxHeight: "92%" } });
+
+		const toolResult = {
+			role: "toolResult",
+			toolCallId: "read-1",
+			toolName: "read",
+			content: [{ type: "text", text: "live child output" }],
+			isError: false,
+			timestamp: Date.now(),
+		};
+		child.appendMessage(toolResult);
+		client.emit({ type: "message_end", message: toolResult });
+		expect(renderRequests).toBeGreaterThan(0);
+		expect(rendered(component, 100).join("\n")).toContain("live child output");
+
+		component.handleInput("q");
+		await viewing;
+	});
+
 	test("bounds overlay rows and reports hidden open agents", async () => {
 		const harness = createHarness();
 		await spawnAgent(harness, "First overlay task");

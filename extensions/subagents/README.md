@@ -94,6 +94,10 @@ on terminals narrower than 90 columns or shorter than 10 rows. Use `/overlay`
 or `Ctrl+Shift+O` to toggle the shared overlay stack.
 
 Live child status is shown only in the overlay to avoid duplicating it in the footer.
+Run `/agents`, select a child, and Pi opens a scrollable live transcript that
+follows new messages and tool results. The viewer starts at the latest entry;
+scroll up to pause tail-following or press End to resume it. Inherited parent
+context is omitted so the transcript begins with the delegated task.
 
 Collapsed rows show the child name, context mode, status, prompt, and a one-line
 result preview when available. Prompt always precedes result, and
@@ -102,8 +106,9 @@ Each billed child response also writes a durable parent-session usage record.
 The footer folds those input, output, cache, and cost values directly into the
 session totals, including after reload, without showing a separate child subtotal.
 The parent's live context percentage remains parent-only because child contexts
-are independent. Use `/agents` to list children and inspect their latest result.
-Child completion messages use the same body as completed `wait` and `list` results. Expand `wait`
+are independent. Use `/agents` to inspect the full child transcript while it runs or
+after it completes. Child completion messages use the same body as completed
+`wait` and `list` results. Expand `wait`
 or `list` results and completion messages with `Ctrl+O` to see the child's rendered output.
 
 ## Context and lifecycle

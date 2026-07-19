@@ -1,10 +1,10 @@
 import { randomBytes } from "node:crypto";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { getMarkdownTheme, SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Text, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { fitToolLine, formatElapsed, withReasoning } from "../better-native-pi/core.js";
 import { BOLD, GREEN, MAGENTA, RED, RESET } from "../better-native-pi/render.js";
 import { registerOverlayCard } from "../overlay-stack/index.js";
+import { TranscriptPager, type TranscriptEntry } from "../transcript/pager.js";
 import {
 	compactContext,
 	createContextFork,
@@ -257,6 +257,26 @@ function snapshot(agent: ManagedAgent): AgentSnapshot {
 		activity: [...agent.activity],
 		usage: { ...agent.usage },
 	};
+}
+
+function childTaskEntry(agent: ManagedAgent): TranscriptEntry {
+	return {
+		type: "message",
+		message: { role: "user", content: agent.task, timestamp: agent.startedAt },
+	};
+}
+
+function childTranscriptEntries(agent: ManagedAgent): TranscriptEntry[] {
+	const session = SessionManager.open(agent.fork.sessionFile, agent.fork.directory, agent.cwd);
+	const entries = session.getBranch().slice(agent.fork.initialEntryCount);
+	const firstUser = entries.findIndex((entry) => entry.type === "message" && entry.message?.role === "user");
+	const taskEntry = childTaskEntry(agent);
+	if (firstUser < 0) return [taskEntry, ...entries];
+	entries[firstUser] = {
+		...entries[firstUser],
+		message: { ...entries[firstUser].message, content: agent.task },
+	};
+	return entries;
 }
 
 function formatAgent(agent: AgentSnapshot, includeOutput: boolean): string {
@@ -538,6 +558,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	let sessionActive = false;
 	let spawnReservations = 0;
 	let compactedSnapshot: { key: string; promise: Promise<string> } | undefined;
+	let activeTranscriptRefresh: (() => void) | undefined;
 	const usedAgentNames = new Set<string>();
 	const reservedAgentNames = new Set<string>();
 
@@ -556,6 +577,39 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		renderBody: (width, maxHeight, theme) => renderAgentsOverlayBody(activeAgents().map(snapshot), width, maxHeight, theme),
 	});
 	const updateOverlay = () => overlayCard.invalidate();
+	const showTranscript = async (agent: ManagedAgent, ctx: any) => {
+		if (agent.cleanupComplete) {
+			ctx.ui.notify(`Transcript unavailable after ${agent.name} was closed.`, "info");
+			return;
+		}
+		let entries: TranscriptEntry[] = [childTaskEntry(agent)];
+		const loadEntries = () => {
+			try { entries = childTranscriptEntries(agent); }
+			catch { /* Keep the last complete snapshot while the child appends. */ }
+			return entries;
+		};
+		try {
+			await ctx.ui.custom((tui: any, theme: any, _kb: any, done: () => void) => {
+				const pager = new TranscriptPager(
+					loadEntries,
+					theme,
+					() => tui.requestRender(),
+					done,
+					{ title: `Agent transcript · ${agent.name}`, startAtEnd: true },
+				);
+				activeTranscriptRefresh = () => {
+					pager.invalidate();
+					tui.requestRender();
+				};
+				return pager;
+			}, {
+				overlay: true,
+				overlayOptions: { width: "95%", maxHeight: "92%", anchor: "center", margin: 1 },
+			});
+		} finally {
+			activeTranscriptRefresh = undefined;
+		}
+	};
 	const resolveAgent = (nameOrLegacyId: string): ManagedAgent | undefined => {
 		const query = sanitizeTerminal(nameOrLegacyId).replace(/\s+/g, " ").trim();
 		if (!query) return undefined;
@@ -758,7 +812,10 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			};
 			agents.set(id, agent);
 			reservation.commit();
-			client.onEvent((event) => handleEvent(agent!, event));
+			client.onEvent((event) => {
+				handleEvent(agent!, event);
+				activeTranscriptRefresh?.();
+			});
 			client.onExit((error) => {
 				if (agent!.client === client) agent!.client = undefined;
 				updateOverlay();
@@ -993,7 +1050,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	});
 
 	pi.registerCommand("agents", {
-		description: "List and inspect child agents",
+		description: "Select a child agent and open its live transcript",
 		handler: async (_args, ctx) => {
 			const ordered = orderedAgents();
 			if (ordered.length === 0) {
@@ -1004,7 +1061,12 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			const selected = await ctx.ui.select(`Subagents (${ordered.filter(isActive).length} running)`, labels);
 			if (!selected) return;
 			const agent = ordered[labels.indexOf(selected)];
-			if (agent) ctx.ui.notify(boundedText(formatAgent(snapshot(agent), true), 4 * 1024), agent.status === "failed" ? "error" : "info");
+			if (!agent) return;
+			if (ctx.mode && ctx.mode !== "tui") {
+				ctx.ui.notify(boundedText(formatAgent(snapshot(agent), true), 4 * 1024), agent.status === "failed" ? "error" : "info");
+				return;
+			}
+			await showTranscript(agent, ctx);
 		},
 	});
 
