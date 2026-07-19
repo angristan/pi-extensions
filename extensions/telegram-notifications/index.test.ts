@@ -271,7 +271,7 @@ describe("question wait lifecycle", () => {
 
 		expect(pending).toContain("<b>api&lt;worker&gt;</b>");
 		expect(pending).toContain("<blockquote>Deploy &lt;prod&gt; &amp; notify?</blockquote>");
-		expect(pending).toContain("⏱ Waiting for 10 seconds");
+		expect(pending).toContain("⏱ The agent has been waiting 10 seconds for your response.");
 		expect(resolved).toContain("ship &lt;now&gt; &amp; confirm");
 		expect(`${pending}\n${resolved}`).not.toContain("<prod>");
 	});

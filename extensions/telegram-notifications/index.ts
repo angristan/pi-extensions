@@ -150,7 +150,7 @@ export function formatWaitingMessage(project: string, question: WaitingQuestion,
 			"A secret response is waiting in Pi.",
 			"For your security, answer in the terminal.",
 			"",
-			`⏱ Waiting for ${formatDelay(delayMinutes)}`,
+			`⏱ The agent has been waiting ${formatDelay(delayMinutes)} for your response.`,
 		].join("\n");
 	}
 	const instruction = question.options.length === 0
@@ -163,7 +163,7 @@ export function formatWaitingMessage(project: string, question: WaitingQuestion,
 		messageContext(project, question),
 		"",
 		`<blockquote>${escapeTelegramHtml(preview(question.question, 800))}</blockquote>`,
-		`⏱ Waiting for ${formatDelay(delayMinutes)}`,
+		`⏱ The agent has been waiting ${formatDelay(delayMinutes)} for your response.`,
 		"",
 		instruction,
 	].join("\n");

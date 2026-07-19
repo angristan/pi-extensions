@@ -16,7 +16,7 @@ Pending questions use a compact formatted card:
 my-project · Question 2 of 3
 
 │ Which deployment target?
-⏱ Waiting for 5 minutes
+⏱ The agent has been waiting 5 minutes for your response.
 
 Choose an answer below.
 
