@@ -221,7 +221,7 @@ describe("subagents", () => {
 		expect(client.prompts[0]).toContain(`Child agent name: ${started.details.agents[0].name}`);
 		expect(started.content[0].text).toContain(`Started ${started.details.agents[0].name}`);
 		expect(started.content[0].text).not.toContain(started.details.agents[0].id);
-		expect(harness.statuses.get("subagents")).toContain("1 subagent running");
+		expect(harness.statuses.size).toBe(0);
 
 		client.complete("Found the relevant files.\u001b]0;unsafe\u0007");
 		await Bun.sleep(0);
@@ -231,7 +231,7 @@ describe("subagents", () => {
 		expect(harness.sentMessages[0].message.content).not.toContain(started.details.agents[0].id);
 		expect(harness.sentMessages[0].message.content).not.toContain("\u001b");
 		expect(harness.sentMessages[0].options).toEqual({ deliverAs: "steer", triggerTurn: true });
-		expect(harness.statuses.get("subagents")).toBeUndefined();
+		expect(harness.statuses.size).toBe(0);
 		const usageEntry = harness.parent.getEntries().at(-1);
 		expect(usageEntry).toMatchObject({
 			type: "custom",
@@ -732,7 +732,7 @@ describe("subagents", () => {
 		harness.clients[0].stopError = new Error("stop failed");
 		await expect(harness.tool.execute("close", { action: "close", agent_name: name }, undefined, undefined, harness.ctx)).rejects.toThrow("stop failed");
 		expect(harness.overlay.definition.visible()).toBe(false);
-		expect(harness.statuses.get("subagents")).toBeUndefined();
+		expect(harness.statuses.size).toBe(0);
 		expect(harness.clients[0].stopped).toBe(false);
 		harness.clients[0].stopError = undefined;
 		await expect(harness.tool.execute("close", { action: "close", agent_name: name }, undefined, undefined, harness.ctx)).resolves.toBeDefined();
@@ -747,7 +747,7 @@ describe("subagents", () => {
 		await expect(harness.handlers.get("session_shutdown")?.({ reason: "quit" }, harness.ctx)).rejects.toThrow("Failed to clean up");
 		expect(harness.clients[1].stopped).toBe(true);
 		expect(harness.overlay.unregistered).toBe(true);
-		expect(harness.statuses.get("subagents")).toBeUndefined();
+		expect(harness.statuses.size).toBe(0);
 	});
 
 	test("bounds aggregate model-visible output", () => {

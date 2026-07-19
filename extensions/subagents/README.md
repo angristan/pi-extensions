@@ -93,11 +93,7 @@ children and uses an `/agents` overflow hint when space permits. The card hides
 on terminals narrower than 90 columns or shorter than 10 rows. Use `/overlay`
 or `Ctrl+Shift+O` to toggle the shared overlay stack.
 
-The footer still reports active children:
-
-```text
-2 subagents running · /agents to view
-```
+Live child status is shown only in the overlay to avoid duplicating it in the footer.
 
 Collapsed rows show the child name, context mode, status, prompt, and a one-line
 result preview when available. Prompt always precedes result, and

@@ -27,7 +27,6 @@ import { SUBAGENT_USAGE_ENTRY_TYPE, SUBAGENT_USAGE_EVENT, persistedSubagentUsage
 
 const TOOL_NAME = "agents";
 const COMPLETION_MESSAGE_TYPE = "subagent-result";
-const STATUS_KEY = "subagents";
 const DEFAULT_MAX_AGENTS = 6;
 const MAX_RETAINED_CLOSED = 20;
 const DEFAULT_WAIT_MS = 30_000;
@@ -535,7 +534,6 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	const summarizeContext = options.compactContext ?? compactContext;
 	const registerCard = options.registerOverlayCard ?? registerOverlayCard;
 	const maxAgents = options.maxAgents ?? DEFAULT_MAX_AGENTS;
-	let activeCtx: any;
 	let generation = 0;
 	let sessionActive = false;
 	let spawnReservations = 0;
@@ -557,12 +555,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		title: (theme) => `${theme.bold(" Agents ")}${theme.fg("accent", `● ${activeAgents().length} running`)} `,
 		renderBody: (width, maxHeight, theme) => renderAgentsOverlayBody(activeAgents().map(snapshot), width, maxHeight, theme),
 	});
-	const updateStatus = () => {
-		overlayCard.invalidate();
-		if (!activeCtx) return;
-		const count = activeAgents().length;
-		activeCtx.ui.setStatus(STATUS_KEY, count > 0 ? `${count} subagent${count === 1 ? "" : "s"} running · /agents to view` : undefined);
-	};
+	const updateOverlay = () => overlayCard.invalidate();
 	const resolveAgent = (nameOrLegacyId: string): ManagedAgent | undefined => {
 		const query = sanitizeTerminal(nameOrLegacyId).replace(/\s+/g, " ").trim();
 		if (!query) return undefined;
@@ -642,14 +635,14 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		agent.endedAt = Date.now();
 		if (error) agent.error = boundedText(sanitizeTerminal(error), 4 * 1024);
 		agent.resolveCompletion();
-		updateStatus();
+		updateOverlay();
 		queueMicrotask(() => notifyCompletion(agent));
 	};
 	const handleEvent = (agent: ManagedAgent, event: RpcAgentEvent) => {
 		if (agent.status === "closed") return;
 		if (event.type === "agent_start") {
 			agent.status = "running";
-			updateStatus();
+			updateOverlay();
 			return;
 		}
 		if (event.type === "tool_execution_start") {
@@ -699,7 +692,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			agent.runSettled = true;
 			agent.resolveCompletion();
 		}
-		updateStatus();
+		updateOverlay();
 		const client = agent.client;
 		const operation = (async () => {
 			try {
@@ -708,7 +701,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				await agent.fork.cleanup();
 				agent.cleanupComplete = true;
 			} finally {
-				updateStatus();
+				updateOverlay();
 				if (agent.cleanupComplete) trimClosed();
 			}
 		})();
@@ -768,7 +761,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			client.onEvent((event) => handleEvent(agent!, event));
 			client.onExit((error) => {
 				if (agent!.client === client) agent!.client = undefined;
-				updateStatus();
+				updateOverlay();
 				void agent!.fork.cleanup().then(
 					() => {
 						agent!.cleanupComplete = true;
@@ -777,7 +770,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 							if (agent!.status !== "closed") {
 								agent!.status = "closed";
 								agent!.endedAt ??= Date.now();
-								updateStatus();
+								updateOverlay();
 							}
 							trimClosed();
 						}
@@ -789,19 +782,19 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 							agent!.status = "closed";
 							agent!.error = boundedText(sanitizeTerminal(message), 4 * 1024);
 							agent!.endedAt ??= Date.now();
-							updateStatus();
+							updateOverlay();
 						}
 					},
 				);
 			});
-			updateStatus();
+			updateOverlay();
 			await client.start();
 			assertCurrentSession(reservation.generation);
 			if (agent.status === "closed") throw new Error("Subagent closed during startup");
 			agent.status = "running";
 			await client.prompt(childTask(normalizedName, normalizedTask, contextMode));
 			assertCurrentSession(reservation.generation);
-			updateStatus();
+			updateOverlay();
 			return agent;
 		} catch (error) {
 			if (agent) {
@@ -929,14 +922,14 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 					agent.suppressNotifications = false;
 					newCompletion(agent);
 					const rejectedRunResolve = agent.resolveCompletion;
-					updateStatus();
+					updateOverlay();
 					try {
 						await client.prompt(message);
 					} catch (error) {
 						if (agent.client === client && isActive(agent) && !agent.runSettled) {
 							Object.assign(agent, previous);
 							rejectedRunResolve();
-							updateStatus();
+							updateOverlay();
 						}
 						throw error;
 					}
@@ -953,7 +946,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 						else throw error;
 					}
 				} else await beginFollowUp();
-				updateStatus();
+				updateOverlay();
 				const data = snapshot(agent);
 				return { content: [{ type: "text", text: `Sent follow-up to ${agent.name}.` }], details: { action: "send", agents: [data] } satisfies ToolDetails };
 			}
@@ -1015,12 +1008,11 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		},
 	});
 
-	pi.on("session_start", (_event, ctx) => {
+	pi.on("session_start", () => {
 		generation += 1;
 		compactedSnapshot = undefined;
 		sessionActive = true;
-		activeCtx = ctx;
-		updateStatus();
+		updateOverlay();
 	});
 	pi.on("session_shutdown", async () => {
 		sessionActive = false;
@@ -1032,12 +1024,8 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		const failures = settled
 			.filter((result): result is PromiseRejectedResult => result.status === "rejected")
 			.map((result) => result.reason);
-		const ctx = activeCtx;
-		activeCtx = undefined;
 		agents.clear();
 		overlayCard.unregister();
-		try { ctx?.ui.setStatus(STATUS_KEY, undefined); }
-		catch (error) { failures.push(error); }
 		if (failures.length > 0) throw new AggregateError(failures, "Failed to clean up one or more subagents");
 	});
 }
