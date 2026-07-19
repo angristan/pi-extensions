@@ -24,8 +24,10 @@ Choose an answer below.
 [ production ]
 ```
 
-Dynamic text is HTML-escaped, link previews are disabled, and option buttons stay
-one per row for reliable tap targets. When the question resolves, the same
+The card uses the Pi session title as its label, falling back to the current
+directory name (`pi` when running from your home directory). Dynamic text is
+HTML-escaped, link previews are disabled, and option buttons stay one per row for
+reliable tap targets. When the question resolves, the same
 message is edited to `Answered in Telegram`, `Answered in Pi`, or `Question
 cancelled in Pi`, and its controls are removed. Remote answers are shown in the
 resolved card; answers entered in Pi are not copied back to Telegram.

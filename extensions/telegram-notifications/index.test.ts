@@ -48,6 +48,7 @@ function createScheduler() {
 
 function makeHarness(options: {
 	config?: TelegramConfig;
+	sessionName?: string;
 	sendMessage?: (config: TelegramConfig, text: string, signal?: AbortSignal) => Promise<void>;
 	sendRenderedMessage?: (config: TelegramConfig, text: string, signal?: AbortSignal) => Promise<{ chatId: string; messageId: number }>;
 	sendQuestion?: (config: TelegramConfig, text: string, question: any, signal?: AbortSignal) => Promise<{ chatId: string; messageId: number }>;
@@ -93,6 +94,7 @@ function makeHarness(options: {
 		on(name: string, handler: (event: any, ctx: any) => any) {
 			(lifecycleHandlers[name] ??= []).push(handler);
 		},
+		getSessionName: () => options.sessionName,
 		registerCommand() {},
 	} as any);
 
@@ -136,6 +138,16 @@ describe("question wait lifecycle", () => {
 		expect(harness.sent[0]).toContain("❓ <b>Input needed</b>");
 		expect(harness.sent[0]).toContain("<b>example-project</b> · Question 1 of 1");
 		expect(harness.sent[0]).toContain("<blockquote>Deploy to production?</blockquote>");
+	});
+
+	test("prefers the escaped session title over the cwd", async () => {
+		const harness = makeHarness({ sessionName: "Release <v2>" });
+		await harness.emit("session_start");
+		harness.emitBus("questions:waiting", waiting("request-1"));
+		harness.scheduler.fire(1);
+
+		expect(harness.sent[0]).toContain("<b>Release &lt;v2&gt;</b> · Question 1 of 1");
+		expect(harness.sent[0]).not.toContain("example-project");
 	});
 
 	test("answering before the deadline suppresses the message", async () => {

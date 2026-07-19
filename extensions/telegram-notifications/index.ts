@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import {
 	resolveTelegramQuestion,
 	sendTelegramHtmlMessage,
@@ -135,6 +135,13 @@ function preview(value: string, limit: number): string {
 	const normalized = value.replace(/\s+/g, " ").trim();
 	const characters = [...normalized];
 	return characters.length > limit ? `${characters.slice(0, limit - 1).join("")}…` : normalized;
+}
+
+function contextLabel(pi: ExtensionAPI, cwd: string): string {
+	const sessionTitle = pi.getSessionName()?.trim();
+	if (sessionTitle) return sessionTitle;
+	const resolvedCwd = resolve(cwd);
+	return resolvedCwd === resolve(homedir()) ? "pi" : basename(resolvedCwd) || "pi";
 }
 
 function messageContext(project: string, question: WaitingQuestion): string {
@@ -309,7 +316,7 @@ export function createTelegramNotificationsExtension(dependencies: RuntimeDepend
 			if (!config?.enabled) return;
 			const snapshot = { ...config };
 			const ctx = activeCtx;
-			const project = ctx.cwd.split("/").filter(Boolean).pop() || "pi";
+			const project = contextLabel(pi, ctx.cwd);
 			const current: PendingQuestion = { requestId: question.requestId, question, config: snapshot, project };
 			pending = current;
 			current.timer = setTimer(() => {
@@ -385,7 +392,7 @@ export function createTelegramNotificationsExtension(dependencies: RuntimeDepend
 					}
 					const candidate: TelegramConfig = { botToken, chatId, delayMinutes, enabled: true };
 					try {
-						const project = ctx.cwd.split("/").filter(Boolean).pop() || "pi";
+						const project = contextLabel(pi, ctx.cwd);
 						await sendMessage(candidate, `${project}: Telegram notifications configured.`);
 						await writeConfig(candidate);
 						config = candidate;
@@ -401,7 +408,7 @@ export function createTelegramNotificationsExtension(dependencies: RuntimeDepend
 				}
 				if (action === "test") {
 					try {
-						const project = ctx.cwd.split("/").filter(Boolean).pop() || "pi";
+						const project = contextLabel(pi, ctx.cwd);
 						await sendMessage(config, `${project}: Telegram notification test.`);
 						ctx.ui.notify("Telegram test message sent.", "info");
 					} catch (error) {
