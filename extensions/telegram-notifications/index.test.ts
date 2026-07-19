@@ -116,6 +116,7 @@ function makeHarness(options: {
 function waiting(requestId: string, question = "Deploy to production?") {
 	return {
 		requestId,
+		questionnaireId: "questionnaire",
 		question,
 		options: ["staging", "production"],
 		allowOther: false,
@@ -161,6 +162,39 @@ describe("question wait lifecycle", () => {
 		expect(harness.sent).toEqual([]);
 	});
 
+	test("sends later questions immediately after the questionnaire alert activates", async () => {
+		const harness = makeHarness();
+		await harness.emit("session_start");
+		harness.emitBus("questions:waiting", { ...waiting("batch:0", "First?"), questionnaireId: "batch", index: 1, total: 2 });
+		expect(harness.scheduler.timers.get(1)?.delayMs).toBe(300_000);
+		harness.scheduler.fire(1);
+		await Promise.resolve();
+
+		harness.emitBus("questions:resolved", {
+			requestId: "batch:0",
+			questionnaireId: "batch",
+			index: 1,
+			total: 2,
+			outcome: "answered",
+			source: "remote",
+		});
+		harness.emitBus("questions:waiting", { ...waiting("batch:1", "Second?"), questionnaireId: "batch", index: 2, total: 2 });
+		expect(harness.scheduler.timers.get(2)?.delayMs).toBe(0);
+		harness.scheduler.fire(2);
+		expect(harness.sent.at(-1)).toContain("Second?");
+
+		harness.emitBus("questions:resolved", {
+			requestId: "batch:1",
+			questionnaireId: "batch",
+			index: 2,
+			total: 2,
+			outcome: "answered",
+			source: "remote",
+		});
+		harness.emitBus("questions:waiting", { ...waiting("next:0", "Next questionnaire?"), questionnaireId: "next" });
+		expect(harness.scheduler.timers.get(3)?.delayMs).toBe(300_000);
+	});
+
 	test("a new question replaces the previous deadline", async () => {
 		const harness = makeHarness();
 		await harness.emit("session_start");
@@ -186,7 +220,7 @@ describe("question wait lifecycle", () => {
 			name: "questions:answer",
 			payload: { requestId: "request-1", answer: "production" },
 		});
-		harness.emitBus("questions:resolved", { requestId: "request-1", outcome: "answered", source: "remote" });
+		harness.emitBus("questions:resolved", { requestId: "request-1", questionnaireId: "questionnaire", index: 1, total: 1, outcome: "answered", source: "remote" });
 		await Promise.resolve();
 		expect(harness.resolved).toHaveLength(1);
 		expect(harness.resolved[0]).toContain("✅ <b>Answered in Telegram</b>");
@@ -205,7 +239,7 @@ describe("question wait lifecycle", () => {
 		harness.scheduler.fire(1);
 		await Promise.resolve();
 
-		harness.emitBus("questions:resolved", { requestId: "request-1", outcome: "answered", source: "tui" });
+		harness.emitBus("questions:resolved", { requestId: "request-1", questionnaireId: "questionnaire", index: 1, total: 1, outcome: "answered", source: "tui" });
 		finishSend({ chatId: "987654321", messageId: 77 });
 		await Promise.resolve();
 		await Promise.resolve();
@@ -252,7 +286,7 @@ describe("question wait lifecycle", () => {
 		expect(harness.sent[0]).toContain("🔐 <b>Secret input needed</b>");
 		expect(harness.sent[0]).not.toContain("production API token");
 
-		harness.emitBus("questions:resolved", { requestId: "secret", outcome: "answered", source: "tui" });
+		harness.emitBus("questions:resolved", { requestId: "secret", questionnaireId: "questionnaire", index: 1, total: 1, outcome: "answered", source: "tui" });
 		await Promise.resolve();
 		expect(harness.resolved[0]).toContain("✅ <b>Answered securely in Pi</b>");
 		expect(harness.resolved[0]).not.toContain("production API token");

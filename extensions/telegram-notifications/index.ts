@@ -31,6 +31,7 @@ export interface TelegramConfig {
 
 export interface WaitingQuestion {
 	requestId: string;
+	questionnaireId: string;
 	question: string;
 	options: string[];
 	allowOther: boolean;
@@ -107,8 +108,12 @@ function parseWaitingQuestion(event: unknown): WaitingQuestion | undefined {
 	const options = Array.isArray(value.options) && value.options.every((option) => typeof option === "string")
 		? value.options as string[]
 		: [];
+	const questionnaireId = typeof value.questionnaireId === "string"
+		? value.questionnaireId
+		: value.requestId.replace(/:\d+$/, "");
 	return {
 		requestId: value.requestId,
+		questionnaireId,
 		question: value.question,
 		options,
 		allowOther: value.allowOther !== false,
@@ -288,6 +293,7 @@ export function createTelegramNotificationsExtension(dependencies: RuntimeDepend
 		let config = readConfig();
 		let activeCtx: any;
 		let pending: PendingQuestion | undefined;
+		let activatedQuestionnaireId: string | undefined;
 
 		const finalizePending = (question: PendingQuestion) => {
 			if (!question.sent || question.finalized) return;
@@ -319,6 +325,9 @@ export function createTelegramNotificationsExtension(dependencies: RuntimeDepend
 			const project = contextLabel(pi, ctx.cwd);
 			const current: PendingQuestion = { requestId: question.requestId, question, config: snapshot, project };
 			pending = current;
+			const delayMs = activatedQuestionnaireId === question.questionnaireId
+				? 0
+				: snapshot.delayMinutes * 60_000;
 			current.timer = setTimer(() => {
 				current.timer = undefined;
 				if (pending !== current) return;
@@ -330,6 +339,7 @@ export function createTelegramNotificationsExtension(dependencies: RuntimeDepend
 						if (question.secret) {
 							current.sent = await sendRenderedMessage(snapshot, text, controller.signal);
 							if (pending !== current) finalizePending(current);
+							else activatedQuestionnaireId = question.questionnaireId;
 							return;
 						}
 						const sent = await sendQuestion(snapshot, text, question, controller.signal);
@@ -338,6 +348,7 @@ export function createTelegramNotificationsExtension(dependencies: RuntimeDepend
 							finalizePending(current);
 							return;
 						}
+						activatedQuestionnaireId = question.questionnaireId;
 						const answer = await waitForAnswer(snapshot, sent, question, controller.signal);
 						if (pending === current) {
 							current.remoteAnswer = answer;
@@ -349,17 +360,22 @@ export function createTelegramNotificationsExtension(dependencies: RuntimeDepend
 						if (current.controller === controller) current.controller = undefined;
 					}
 				})();
-			}, snapshot.delayMinutes * 60_000);
+			}, delayMs);
 			current.timer.unref?.();
 		});
 
 		const stopResolvedListener = pi.events.on(QUESTION_RESOLVED_EVENT, (event: unknown) => {
 			if (!event || typeof event !== "object") return;
-			const value = event as { requestId?: unknown; outcome?: unknown; source?: unknown };
+			const value = event as { requestId?: unknown; questionnaireId?: unknown; index?: unknown; total?: unknown; outcome?: unknown; source?: unknown };
 			if (typeof value.requestId !== "string") return;
 			const outcome = value.outcome === "answered" || value.outcome === "cancelled" ? value.outcome : undefined;
 			const source = value.source === "tui" || value.source === "remote" ? value.source : undefined;
 			clearPending(value.requestId, outcome && source ? { outcome, source } : undefined);
+			const questionnaireId = typeof value.questionnaireId === "string" ? value.questionnaireId : undefined;
+			const isLastQuestion = Number.isInteger(value.index) && Number.isInteger(value.total) && value.index === value.total;
+			if (questionnaireId === activatedQuestionnaireId && (outcome === "cancelled" || isLastQuestion)) {
+				activatedQuestionnaireId = undefined;
+			}
 		});
 
 		pi.registerCommand("telegram", {
@@ -429,11 +445,13 @@ export function createTelegramNotificationsExtension(dependencies: RuntimeDepend
 
 		pi.on("session_start", (_event, ctx) => {
 			clearPending();
+			activatedQuestionnaireId = undefined;
 			config = readConfig();
 			activeCtx = ctx;
 		});
 		pi.on("session_shutdown", () => {
 			clearPending();
+			activatedQuestionnaireId = undefined;
 			activeCtx = undefined;
 			stopWaitingListener();
 			stopResolvedListener();

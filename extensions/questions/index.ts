@@ -224,6 +224,7 @@ export default function (pi: ExtensionAPI) {
 						const collected = await collectAnswer(pi, requestId, question, prompt, ctx, () => {
 							pi.events.emit(QUESTION_WAITING_EVENT, {
 								requestId,
+								questionnaireId: toolCallId,
 								question: question.question,
 								options: Array.isArray(question.options) ? [...question.options] : [],
 								allowOther: question.allow_other !== false,
@@ -242,7 +243,13 @@ export default function (pi: ExtensionAPI) {
 							? { id: question.id, question: question.question, provided: true, secret: true }
 							: { id: question.id, question: question.question, answer: collected.answer });
 					} finally {
-						pi.events.emit(QUESTION_RESOLVED_EVENT, { requestId, ...resolution });
+						pi.events.emit(QUESTION_RESOLVED_EVENT, {
+							requestId,
+							questionnaireId: toolCallId,
+							index: index + 1,
+							total: questions.length,
+							...resolution,
+						});
 					}
 				}
 			} finally {

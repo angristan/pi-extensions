@@ -23,8 +23,8 @@ The terminal title switches to `❓ Input needed` while a response is pending.
 Secret responses use a masked TUI field; only a `[secret provided]` marker is
 sent to the model or persisted in the transcript.
 
-Each prompt emits `questions:waiting` with an opaque request ID, response mode,
-options, progress, and whether the response is secret. Trusted integrations can
+Each prompt emits `questions:waiting` with opaque request and questionnaire IDs,
+response mode, options, progress, and whether the response is secret. Trusted integrations can
 submit a matching `questions:answer`; a valid remote answer dismisses the local
 dialog and is recorded exactly like a TUI answer. `questions:resolved` reports
 whether the prompt was answered or cancelled and whether TUI or remote input won.

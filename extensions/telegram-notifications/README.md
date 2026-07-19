@@ -5,9 +5,11 @@ answer for a configurable delay (five minutes by default). Choice questions use
 inline buttons; free-text questions let you reply directly to the bot. A valid
 Telegram answer resolves the questionnaire and dismisses the pending Pi dialog.
 
-The timer resets for each question and is cancelled when the question is
-answered, cancelled, the session changes, or Pi shuts down. Secret questions
-remain TUI-only and produce only a redacted passive notification.
+The delay applies until a questionnaire first reaches Telegram. Any remaining
+questions in that same questionnaire are then sent immediately, without another
+wait. Timers are cancelled when the question is answered, cancelled, the session
+changes, or Pi shuts down. Secret questions remain TUI-only and produce only a
+redacted passive notification.
 
 Pending questions use a compact formatted card:
 
