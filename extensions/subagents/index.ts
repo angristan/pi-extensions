@@ -262,6 +262,7 @@ function snapshot(agent: ManagedAgent): AgentSnapshot {
 function childTaskEntry(agent: ManagedAgent): TranscriptEntry {
 	return {
 		type: "message",
+		transcriptLabel: "Task",
 		message: { role: "user", content: agent.task, timestamp: agent.startedAt },
 	};
 }
@@ -274,6 +275,7 @@ function childTranscriptEntries(agent: ManagedAgent): TranscriptEntry[] {
 	if (firstUser < 0) return [taskEntry, ...entries];
 	entries[firstUser] = {
 		...entries[firstUser],
+		transcriptLabel: "Task",
 		message: { ...entries[firstUser].message, content: agent.task },
 	};
 	return entries;

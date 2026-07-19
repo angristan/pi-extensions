@@ -1,4 +1,4 @@
-import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 export type TranscriptEntry = any;
 
@@ -14,37 +14,111 @@ function displayText(value: string): string {
 		.trim();
 }
 
-function contentText(content: any): string {
+function textContent(content: any): string {
 	if (typeof content === "string") return displayText(content);
 	if (!Array.isArray(content)) return "";
-	return content.map((item) => {
-		if (item?.type === "text" || item?.type === "thinking") {
-			return displayText(item.text ?? item.thinking ?? "");
+	return content
+		.filter((item) => item?.type === "text")
+		.map((item) => displayText(item.text ?? ""))
+		.filter(Boolean)
+		.join("\n");
+}
+
+function compactValue(value: unknown): string {
+	if (typeof value === "string") {
+		const text = displayText(value);
+		return text.length > 600 ? `${text.slice(0, 600)}… (${text.length} chars)` : text;
+	}
+	if (value === undefined) return "";
+	try {
+		const text = JSON.stringify(value);
+		return text.length > 600 ? `${text.slice(0, 600)}… (${text.length} chars)` : text;
+	} catch {
+		return String(value);
+	}
+}
+
+function toolArguments(args: any): string {
+	if (!args || typeof args !== "object") return "(no arguments)";
+	const lines: string[] = [];
+	if (typeof args.reasoning === "string" && args.reasoning.trim()) lines.push(displayText(args.reasoning));
+	for (const [key, value] of Object.entries(args)) {
+		if (key === "reasoning") continue;
+		if (key === "edits" && Array.isArray(value)) {
+			lines.push(`${key}  ${value.length} replacement${value.length === 1 ? "" : "s"}`);
+			continue;
 		}
-		if (item?.type === "toolCall") return `tool: ${item.name ?? "unknown"} ${JSON.stringify(item.arguments ?? {})}`;
-		if (item?.type === "image") return "[image]";
-		return "";
-	}).filter(Boolean).join("\n");
+		const formatted = compactValue(value);
+		if (formatted) lines.push(`${key}  ${formatted}`);
+	}
+	return lines.join("\n") || "(no arguments)";
+}
+
+function section(
+	symbol: string,
+	label: string,
+	labelColor: string,
+	body: string,
+	bodyColor: string,
+	width: number,
+	theme: any,
+): string[] {
+	const header = `${theme.fg(labelColor, symbol)} ${theme.fg(labelColor, label)}`;
+	const indent = "  ";
+	const available = Math.max(1, width - visibleWidth(indent));
+	const rows = wrapTextWithAnsi(body || "(empty)", available);
+	return [truncateToWidth(header, width, "…"), ...rows.map((row) => `${indent}${theme.fg(bodyColor, row)}`)];
+}
+
+function appendBlock(lines: string[], block: string[]): void {
+	if (lines.length > 0) lines.push("");
+	lines.push(...block);
+}
+
+function messageLines(entry: TranscriptEntry, width: number, theme: any): string[] {
+	const message = entry.message ?? {};
+	if (message.role === "user") {
+		return section("›", entry.transcriptLabel ?? "User", "accent", textContent(message.content), "text", width, theme);
+	}
+	if (message.role === "toolResult") {
+		const failed = Boolean(message.isError);
+		return section(
+			failed ? "×" : "✓",
+			`${failed ? "Tool failed" : "Tool result"} · ${message.toolName ?? "unknown"}`,
+			failed ? "error" : "success",
+			textContent(message.content),
+			failed ? "error" : "muted",
+			width,
+			theme,
+		);
+	}
+	if (message.role === "assistant") {
+		const lines: string[] = [];
+		const content = Array.isArray(message.content) ? message.content : [{ type: "text", text: message.content }];
+		for (const item of content) {
+			if (item?.type === "thinking") {
+				appendBlock(lines, section("·", "Thinking", "dim", displayText(item.thinking ?? ""), "dim", width, theme));
+			} else if (item?.type === "text") {
+				const text = displayText(item.text ?? "");
+				if (text) appendBlock(lines, section("●", "Agent", "success", text, "text", width, theme));
+			} else if (item?.type === "toolCall") {
+				appendBlock(lines, section("◆", `Tool · ${item.name ?? "unknown"}`, "accent", toolArguments(item.arguments), "muted", width, theme));
+			} else if (item?.type === "image") {
+				appendBlock(lines, section("◇", "Image", "muted", "[image]", "muted", width, theme));
+			}
+		}
+		return lines;
+	}
+	return section("•", String(message.role ?? "Message"), "muted", textContent(message.content), "muted", width, theme);
 }
 
 function entryLines(entry: TranscriptEntry, width: number, theme: any): string[] {
-	const wrap = (prefix: string, text: string, color: string) => {
-		const available = Math.max(1, width - prefix.length);
-		const rows = wrapTextWithAnsi(text || "(empty)", available);
-		return rows.map((row, index) => `${index === 0 ? prefix : " ".repeat(prefix.length)}${theme.fg(color, row)}`);
-	};
-	if (entry.type === "message") {
-		const message = entry.message ?? {};
-		const role = message.role ?? "message";
-		const prefix = role === "user" ? "› " : role === "assistant" ? "• " : "  ";
-		const color = role === "user" ? "accent" : role === "assistant" ? "text" : "muted";
-		return wrap(prefix, contentText(message.content), color);
-	}
-	if (entry.type === "compaction") return wrap("• ", `Context compacted: ${entry.summary}`, "muted");
-	if (entry.type === "branch_summary") return wrap("• ", `Branch summary: ${entry.summary}`, "muted");
-	if (entry.type === "model_change") return wrap("• ", `Model changed to ${entry.provider}/${entry.modelId}`, "dim");
-	if (entry.type === "thinking_level_change") return wrap("• ", `Thinking level: ${entry.thinkingLevel}`, "dim");
-	if (entry.type === "custom_message" && entry.display) return wrap("• ", contentText(entry.content), "muted");
+	if (entry.type === "message") return messageLines(entry, width, theme);
+	if (entry.type === "compaction") return section("•", "Context compacted", "muted", entry.summary ?? "", "muted", width, theme);
+	if (entry.type === "branch_summary") return section("•", "Branch summary", "muted", entry.summary ?? "", "muted", width, theme);
+	if (entry.type === "model_change") return section("•", "Model", "dim", `${entry.provider}/${entry.modelId}`, "dim", width, theme);
+	if (entry.type === "thinking_level_change") return section("•", "Thinking level", "dim", entry.thinkingLevel ?? "", "dim", width, theme);
+	if (entry.type === "custom_message" && entry.display) return section("•", "Note", "muted", textContent(entry.content), "muted", width, theme);
 	return [];
 }
 

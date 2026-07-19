@@ -95,9 +95,11 @@ or `Ctrl+Shift+O` to toggle the shared overlay stack.
 
 Live child status is shown only in the overlay to avoid duplicating it in the footer.
 Run `/agents`, select a child, and Pi opens a scrollable live transcript that
-follows new messages and tool results. The viewer starts at the latest entry;
-scroll up to pause tail-following or press End to resume it. Inherited parent
-context is omitted so the transcript begins with the delegated task.
+follows new messages and tool results. Entries are grouped into labeled Task,
+Agent, Thinking, Tool, and Tool result blocks instead of raw JSON. The viewer
+starts at the latest entry; scroll up to pause tail-following or press End to
+resume it. Inherited parent context is omitted so the transcript begins with the
+delegated task.
 
 Collapsed rows show the child name, context mode, status, prompt, and a one-line
 result preview when available. Prompt always precedes result, and

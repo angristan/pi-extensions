@@ -313,8 +313,8 @@ describe("subagents", () => {
 		await Bun.sleep(0);
 		const initial = rendered(component, 100).join("\n");
 		expect(initial).toContain(`Agent transcript · ${started.details.agents[0].name}`);
-		expect(initial).toContain("Inspect transcript behavior");
-		expect(initial).toContain("tool: read");
+		expect(initial).toContain("› Task\n  Inspect transcript behavior");
+		expect(initial).toContain("◆ Tool · read");
 		expect(initial).not.toContain("Original request");
 		expect(initial).not.toContain("You are a delegated child agent");
 		expect(overlayOptions).toMatchObject({ overlay: true, overlayOptions: { width: "95%", maxHeight: "92%" } });
@@ -330,7 +330,7 @@ describe("subagents", () => {
 		child.appendMessage(toolResult);
 		client.emit({ type: "message_end", message: toolResult });
 		expect(renderRequests).toBeGreaterThan(0);
-		expect(rendered(component, 100).join("\n")).toContain("live child output");
+		expect(rendered(component, 100).join("\n")).toContain("✓ Tool result · read\n  live child output");
 
 		component.handleInput("q");
 		await viewing;

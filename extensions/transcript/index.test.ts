@@ -16,7 +16,18 @@ test("opens a cleaned scrollable transcript from both command and shortcut", asy
 	const ctx = {
 		sessionManager: { getBranch: () => [
 			{ type: "message", message: { role: "user", content: "hello<!-- pi:web-search-source:x --> world" } },
-			{ type: "message", message: { role: "assistant", content: [{ type: "thinking", thinking: "considering" }, { type: "text", text: "answer" }] } },
+			{
+				type: "message",
+				message: {
+					role: "assistant",
+					content: [
+						{ type: "thinking", thinking: "considering" },
+						{ type: "text", text: "answer" },
+						{ type: "toolCall", name: "read", arguments: { reasoning: "Inspect code", path: "src/index.ts" } },
+					],
+				},
+			},
+			{ type: "message", message: { role: "toolResult", toolName: "read", content: [{ type: "text", text: "file contents" }], isError: false } },
 			{ type: "custom_message", display: false, content: "hidden" },
 		] },
 		ui: {
@@ -30,8 +41,11 @@ test("opens a cleaned scrollable transcript from both command and shortcut", asy
 	expect(shortcuts.has("ctrl+shift+t")).toBe(true);
 	await commands.get("transcript").handler("", ctx);
 	const rendered = component.render(80).join("\n");
-	expect(rendered).toContain("hello world");
-	expect(rendered).toContain("considering\n  answer");
+	expect(rendered).toContain("› User\n  hello world");
+	expect(rendered).toContain("· Thinking\n  considering");
+	expect(rendered).toContain("● Agent\n  answer");
+	expect(rendered).toContain("◆ Tool · read\n  Inspect code\n  path  src/index.ts");
+	expect(rendered).toContain("✓ Tool result · read\n  file contents");
 	expect(rendered).not.toContain("pi:web-search");
 	expect(rendered).not.toContain("hidden");
 	expect(overlayOptions.overlay).toBe(true);
