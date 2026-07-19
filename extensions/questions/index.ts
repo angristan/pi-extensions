@@ -126,6 +126,7 @@ async function secretInput(question: string, ctx: any): Promise<string | undefin
 interface CollectedAnswer {
 	answer?: string;
 	cancelled: boolean;
+	source: "tui" | "remote";
 }
 
 async function collectAnswer(
@@ -168,21 +169,23 @@ async function collectAnswer(
 			const choices = [...options];
 			if (question.allow_other !== false) choices.push("Type something…");
 			const selected = await raceRemote(ctx.ui.select(prompt, choices, { signal: dialogController.signal }));
-			if (selected.source === "remote") return { answer: selected.value, cancelled: false };
-			if (selected.value === undefined) return { cancelled: true };
-			if (selected.value !== "Type something…") return { answer: selected.value, cancelled: false };
+			if (selected.source === "remote") return { answer: selected.value, cancelled: false, source: "remote" };
+			if (selected.value === undefined) return { cancelled: true, source: "tui" };
+			if (selected.value !== "Type something…") return { answer: selected.value, cancelled: false, source: "tui" };
 		}
 
 		if (question.secret) {
 			const answer = await secretInput(prompt, ctx);
-			return answer === undefined ? { cancelled: true } : { answer, cancelled: false };
+			return answer === undefined
+				? { cancelled: true, source: "tui" }
+				: { answer, cancelled: false, source: "tui" };
 		}
 		const entered = await raceRemote(ctx.ui.input(prompt, "Type your answer", { signal: dialogController.signal }));
 		return entered.source === "remote"
-			? { answer: entered.value, cancelled: false }
+			? { answer: entered.value, cancelled: false, source: "remote" }
 			: entered.value === undefined
-				? { cancelled: true }
-				: { answer: entered.value, cancelled: false };
+				? { cancelled: true, source: "tui" }
+				: { answer: entered.value, cancelled: false, source: "tui" };
 	} finally {
 		dialogController.abort();
 		stopRemoteListener();
@@ -216,6 +219,7 @@ export default function (pi: ExtensionAPI) {
 					const prompt = numberedPrompt(question.question, index, questions.length, ctx.mode === "tui" ? ctx.ui.theme : undefined);
 					const requestId = `${toolCallId}:${index}`;
 					setAttentionTitle(pi, ctx, index, questions.length);
+					let resolution: { outcome: "answered" | "cancelled"; source: "tui" | "remote" } = { outcome: "cancelled", source: "tui" };
 					try {
 						const collected = await collectAnswer(pi, requestId, question, prompt, ctx, () => {
 							pi.events.emit(QUESTION_WAITING_EVENT, {
@@ -228,6 +232,7 @@ export default function (pi: ExtensionAPI) {
 								secret: question.secret === true,
 							});
 						});
+						resolution = { outcome: collected.cancelled ? "cancelled" : "answered", source: collected.source };
 						if (collected.cancelled) {
 							interrupted = true;
 							answers.push({ id: question.id, question: question.question, cancelled: true, secret: question.secret });
@@ -237,7 +242,7 @@ export default function (pi: ExtensionAPI) {
 							? { id: question.id, question: question.question, provided: true, secret: true }
 							: { id: question.id, question: question.question, answer: collected.answer });
 					} finally {
-						pi.events.emit(QUESTION_RESOLVED_EVENT, { requestId });
+						pi.events.emit(QUESTION_RESOLVED_EVENT, { requestId, ...resolution });
 					}
 				}
 			} finally {

@@ -60,10 +60,10 @@ test("collects answers with numbered, semantically colored prompts", async () =>
 	expect(events).toEqual([
 		{ name: "terminal-title:override", payload: { source: "questions", title: "❓ Input needed · Question 1/2" } },
 		{ name: "questions:waiting", payload: { requestId: "id:0", question: "Pick a color", options: ["Red", "Blue"], allowOther: false, index: 1, total: 2, secret: false } },
-		{ name: "questions:resolved", payload: { requestId: "id:0" } },
+		{ name: "questions:resolved", payload: { requestId: "id:0", outcome: "answered", source: "tui" } },
 		{ name: "terminal-title:override", payload: { source: "questions", title: "❓ Input needed · Question 2/2" } },
 		{ name: "questions:waiting", payload: { requestId: "id:1", question: "Why?", options: [], allowOther: false, index: 2, total: 2, secret: false } },
-		{ name: "questions:resolved", payload: { requestId: "id:1" } },
+		{ name: "questions:resolved", payload: { requestId: "id:1", outcome: "answered", source: "tui" } },
 		{ name: "terminal-title:override", payload: { source: "questions", title: undefined } },
 	]);
 	expect(result.content[0].text).toBe("color: Blue\nwhy: Because it is calm");
@@ -91,7 +91,7 @@ test("stops after cancellation and never stores secret text", async () => {
 	expect(result.details.answers).toEqual([{ id: "token", question: "API token?", cancelled: true, secret: true }]);
 	expect(events).toEqual([
 		{ name: "questions:waiting", payload: { requestId: "id:0", question: "API token?", options: [], allowOther: false, index: 1, total: 2, secret: true } },
-		{ name: "questions:resolved", payload: { requestId: "id:0" } },
+		{ name: "questions:resolved", payload: { requestId: "id:0", outcome: "cancelled", source: "tui" } },
 	]);
 	expect(JSON.stringify(result)).not.toContain("actual-secret");
 });
@@ -120,6 +120,10 @@ test("accepts a remote option and dismisses the local selector", async () => {
 	expect(dialogAborted).toBe(true);
 	expect(result.content[0].text).toBe("target: production");
 	expect(result.details.interrupted).toBe(false);
+	expect(events).toContainEqual({
+		name: "questions:resolved",
+		payload: { requestId: "remote:0", outcome: "answered", source: "remote" },
+	});
 });
 
 test("ignores remote answers for secret prompts", async () => {

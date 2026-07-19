@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
+	resolveTelegramQuestion,
+	sendTelegramHtmlMessage,
 	sendTelegramQuestion,
 	waitForTelegramAnswer,
 	type SentTelegramQuestion,
@@ -34,11 +36,28 @@ describe("Telegram question messages", () => {
 		});
 
 		expect(sent).toEqual({ chatId: "987654321", messageId: 42 });
+		expect(body.parse_mode).toBe("HTML");
+		expect(body.link_preview_options).toEqual({ is_disabled: true });
 		expect(body.reply_markup).toEqual({
 			inline_keyboard: [
 				[{ text: "staging", callback_data: "option:0" }],
 				[{ text: "production", callback_data: "option:1" }],
 			],
+		});
+	});
+
+	test("renders passive HTML messages and returns their identity", async () => {
+		let body: any;
+		const sent = await sendTelegramHtmlMessage(credentials, "<b>Secret input needed</b>", undefined, async (_url, init) => {
+			body = JSON.parse(String(init?.body));
+			return telegramResponse({ message_id: 44, chat: { id: 987654321 } });
+		});
+
+		expect(sent).toEqual({ chatId: "987654321", messageId: 44 });
+		expect(body).toMatchObject({
+			text: "<b>Secret input needed</b>",
+			parse_mode: "HTML",
+			link_preview_options: { is_disabled: true },
 		});
 	});
 
@@ -56,6 +75,25 @@ describe("Telegram question messages", () => {
 			force_reply: true,
 			selective: true,
 			input_field_placeholder: "Type your answer",
+		});
+	});
+
+	test("edits resolved messages and removes their controls", async () => {
+		let method = "";
+		let body: any;
+		await resolveTelegramQuestion(credentials, { chatId: "987654321", messageId: 42 }, "✅ <b>Answered</b>", async (url, init) => {
+			method = methodFromUrl(url);
+			body = JSON.parse(String(init?.body));
+			return telegramResponse(true);
+		});
+
+		expect(method).toBe("editMessageText");
+		expect(body).toMatchObject({
+			chat_id: "987654321",
+			message_id: 42,
+			text: "✅ <b>Answered</b>",
+			parse_mode: "HTML",
+			reply_markup: { inline_keyboard: [] },
 		});
 	});
 });

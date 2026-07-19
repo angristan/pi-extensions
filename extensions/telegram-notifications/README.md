@@ -9,17 +9,26 @@ The timer resets for each question and is cancelled when the question is
 answered, cancelled, the session changes, or Pi shuts down. Secret questions
 remain TUI-only and produce only a redacted passive notification.
 
-Example message:
+Pending questions use a compact formatted card:
 
 ```text
-❓ my-project: input needed
-The agent has been waiting 5 minutes for your answer.
-Question 2/3: Which deployment target?
-Tap a choice below to answer.
+❓ Input needed
+my-project · Question 2 of 3
+
+│ Which deployment target?
+⏱ Waiting for 5 minutes
+
+Choose an answer below.
 
 [ staging ]
 [ production ]
 ```
+
+Dynamic text is HTML-escaped, link previews are disabled, and option buttons stay
+one per row for reliable tap targets. When the question resolves, the same
+message is edited to `Answered in Telegram`, `Answered in Pi`, or `Question
+cancelled in Pi`, and its controls are removed. Remote answers are shown in the
+resolved card; answers entered in Pi are not copied back to Telegram.
 
 ## Setup
 
@@ -48,7 +57,8 @@ config file.
 - Choice answers are correlated through the bot message and button index.
 - Free text is accepted only when it replies to the matching bot message in the
   configured chat.
-- Secret prompts never expose their question text or accept Telegram answers.
+- Secret prompts never expose their question text or accept Telegram answers;
+  their redacted notification updates to `Answered securely in Pi` when done.
 - Answer polling uses Telegram `getUpdates`; the bot must not have a webhook.
 - Telegram permits only one active `getUpdates` consumer per bot. Avoid waiting
   for Telegram answers from multiple Pi processes at the same time; a conflict

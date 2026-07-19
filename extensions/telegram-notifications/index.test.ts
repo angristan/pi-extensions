@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	createTelegramNotificationsExtension,
+	formatResolvedMessage,
 	formatWaitingMessage,
 	loadTelegramConfig,
 	saveTelegramConfig,
@@ -48,9 +49,10 @@ function createScheduler() {
 function makeHarness(options: {
 	config?: TelegramConfig;
 	sendMessage?: (config: TelegramConfig, text: string, signal?: AbortSignal) => Promise<void>;
+	sendRenderedMessage?: (config: TelegramConfig, text: string, signal?: AbortSignal) => Promise<{ chatId: string; messageId: number }>;
 	sendQuestion?: (config: TelegramConfig, text: string, question: any, signal?: AbortSignal) => Promise<{ chatId: string; messageId: number }>;
 	waitForAnswer?: (config: TelegramConfig, sent: any, question: any, signal: AbortSignal) => Promise<string>;
-	dismissQuestion?: (config: TelegramConfig, sent: any) => Promise<void>;
+	resolveQuestion?: (config: TelegramConfig, sent: any, text: string) => Promise<void>;
 } = {}) {
 	const lifecycleHandlers: Record<string, Array<(event: any, ctx: any) => any>> = {};
 	const busHandlers: Record<string, Array<(event: any) => void>> = {};
@@ -58,7 +60,7 @@ function makeHarness(options: {
 	const sent: string[] = [];
 	const notices: string[] = [];
 	const emitted: Array<{ name: string; payload: unknown }> = [];
-	const dismissed: number[] = [];
+	const resolved: string[] = [];
 	const ctx = {
 		cwd: "/tmp/example-project",
 		mode: "tui",
@@ -68,9 +70,10 @@ function makeHarness(options: {
 		loadConfig: () => options.config ?? config,
 		saveConfig: async () => {},
 		sendMessage: options.sendMessage ?? (async (_config, text) => { sent.push(text); }),
+		sendRenderedMessage: options.sendRenderedMessage ?? (async (_config, text) => { sent.push(text); return { chatId: "987654321", messageId: 42 }; }),
 		sendQuestion: options.sendQuestion ?? (async (_config, text) => { sent.push(text); return { chatId: "987654321", messageId: 42 }; }),
 		waitForAnswer: options.waitForAnswer ?? (async () => new Promise<string>(() => {})),
-		dismissQuestion: options.dismissQuestion ?? (async (_config, question) => { dismissed.push(question.messageId); }),
+		resolveQuestion: options.resolveQuestion ?? (async (_config, _question, text) => { resolved.push(text); }),
 		setTimer: scheduler.setTimer,
 		clearTimer: scheduler.clearTimer,
 	});
@@ -98,7 +101,7 @@ function makeHarness(options: {
 		sent,
 		notices,
 		emitted,
-		dismissed,
+		resolved,
 		emitBus(name: string, event: unknown) {
 			for (const handler of busHandlers[name] ?? []) handler(event);
 		},
@@ -130,8 +133,9 @@ describe("question wait lifecycle", () => {
 		expect([...harness.scheduler.timers.values()].map((timer) => timer.delayMs)).toEqual([300_000]);
 		harness.scheduler.fire(1);
 		expect(harness.sent).toHaveLength(1);
-		expect(harness.sent[0]).toContain("example-project: input needed");
-		expect(harness.sent[0]).toContain("Deploy to production?");
+		expect(harness.sent[0]).toContain("❓ <b>Input needed</b>");
+		expect(harness.sent[0]).toContain("<b>example-project</b> · Question 1 of 1");
+		expect(harness.sent[0]).toContain("<blockquote>Deploy to production?</blockquote>");
 	});
 
 	test("answering before the deadline suppresses the message", async () => {
@@ -158,7 +162,7 @@ describe("question wait lifecycle", () => {
 		expect(harness.sent[0]).toContain("Second?");
 	});
 
-	test("emits a remote answer and dismisses buttons after resolution", async () => {
+	test("emits a remote answer and renders the resolved message", async () => {
 		const harness = makeHarness({ waitForAnswer: async () => "production" });
 		await harness.emit("session_start");
 		harness.emitBus("questions:waiting", waiting("request-1"));
@@ -170,9 +174,32 @@ describe("question wait lifecycle", () => {
 			name: "questions:answer",
 			payload: { requestId: "request-1", answer: "production" },
 		});
-		harness.emitBus("questions:resolved", { requestId: "request-1" });
+		harness.emitBus("questions:resolved", { requestId: "request-1", outcome: "answered", source: "remote" });
 		await Promise.resolve();
-		expect(harness.dismissed).toEqual([42]);
+		expect(harness.resolved).toHaveLength(1);
+		expect(harness.resolved[0]).toContain("✅ <b>Answered in Telegram</b>");
+		expect(harness.resolved[0]).toContain("<b>Answer</b>  production");
+	});
+
+	test("finalizes a message that resolves while sending", async () => {
+		let finishSend!: (sent: { chatId: string; messageId: number }) => void;
+		const harness = makeHarness({
+			sendQuestion: async () => {
+				return new Promise((resolve) => { finishSend = resolve; });
+			},
+		});
+		await harness.emit("session_start");
+		harness.emitBus("questions:waiting", waiting("request-1"));
+		harness.scheduler.fire(1);
+		await Promise.resolve();
+
+		harness.emitBus("questions:resolved", { requestId: "request-1", outcome: "answered", source: "tui" });
+		finishSend({ chatId: "987654321", messageId: 77 });
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(harness.resolved).toHaveLength(1);
+		expect(harness.resolved[0]).toContain("✅ <b>Answered in Pi</b>");
 	});
 
 	test("shutdown cancels an in-flight Telegram poll", async () => {
@@ -210,8 +237,13 @@ describe("question wait lifecycle", () => {
 
 		expect(interactiveCalls).toBe(0);
 		expect(harness.sent).toHaveLength(1);
-		expect(harness.sent[0]).toContain("Secret response requested");
+		expect(harness.sent[0]).toContain("🔐 <b>Secret input needed</b>");
 		expect(harness.sent[0]).not.toContain("production API token");
+
+		harness.emitBus("questions:resolved", { requestId: "secret", outcome: "answered", source: "tui" });
+		await Promise.resolve();
+		expect(harness.resolved[0]).toContain("✅ <b>Answered securely in Pi</b>");
+		expect(harness.resolved[0]).not.toContain("production API token");
 	});
 
 	test("redacts secret question text", () => {
@@ -224,8 +256,24 @@ describe("question wait lifecycle", () => {
 			total: 1,
 			secret: true,
 		}, 5);
-		expect(message).toContain("Secret response requested");
+		expect(message).toContain("🔐 <b>Secret input needed</b>");
 		expect(message).not.toContain("production API token");
+	});
+
+	test("escapes dynamic HTML and renders short delays as seconds", () => {
+		const question = {
+			...waiting("escaped", "Deploy <prod> & notify?"),
+			options: [],
+			allowOther: true,
+		};
+		const pending = formatWaitingMessage("api<worker>", question, 10 / 60);
+		const resolved = formatResolvedMessage("api<worker>", question, { outcome: "answered", source: "remote" }, "ship <now> & confirm");
+
+		expect(pending).toContain("<b>api&lt;worker&gt;</b>");
+		expect(pending).toContain("<blockquote>Deploy &lt;prod&gt; &amp; notify?</blockquote>");
+		expect(pending).toContain("⏱ Waiting for 10 seconds");
+		expect(resolved).toContain("ship &lt;now&gt; &amp; confirm");
+		expect(`${pending}\n${resolved}`).not.toContain("<prod>");
 	});
 });
 

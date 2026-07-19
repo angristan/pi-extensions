@@ -26,8 +26,9 @@ sent to the model or persisted in the transcript.
 Each prompt emits `questions:waiting` with an opaque request ID, response mode,
 options, progress, and whether the response is secret. Trusted integrations can
 submit a matching `questions:answer`; a valid remote answer dismisses the local
-dialog and is recorded exactly like a TUI answer. `questions:resolved` is emitted
-when the prompt is answered or cancelled. Remote answers are rejected for secret
+dialog and is recorded exactly like a TUI answer. `questions:resolved` reports
+whether the prompt was answered or cancelled and whether TUI or remote input won.
+Remote answers are rejected for secret
 questions, and `telegram-notifications` redacts secret question text before it
 leaves Pi.
 

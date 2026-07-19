@@ -89,9 +89,28 @@ export async function sendTelegramMessage(
 	await telegramRequest(credentials, "sendMessage", { chat_id: credentials.chatId, text }, signal, fetchImpl);
 }
 
+export async function sendTelegramHtmlMessage(
+	credentials: TelegramCredentials,
+	text: string,
+	signal?: AbortSignal,
+	fetchImpl: typeof fetch = fetch,
+): Promise<SentTelegramQuestion> {
+	const result = await telegramRequest<TelegramMessage>(credentials, "sendMessage", {
+		chat_id: credentials.chatId,
+		text,
+		parse_mode: "HTML",
+		link_preview_options: { is_disabled: true },
+	}, signal, fetchImpl);
+	if (!Number.isInteger(result?.message_id) || !result?.chat || result.chat.id === undefined) {
+		throw new Error("Telegram API returned an invalid sent message.");
+	}
+	return { chatId: String(result.chat.id), messageId: result.message_id as number };
+}
+
 function buttonLabel(option: string): string {
 	const normalized = option.replace(/\s+/g, " ").trim();
-	return normalized.length > 80 ? `${normalized.slice(0, 79)}…` : normalized;
+	const characters = [...normalized];
+	return characters.length > 80 ? `${characters.slice(0, 79).join("")}…` : normalized;
 }
 
 export async function sendTelegramQuestion(
@@ -116,6 +135,8 @@ export async function sendTelegramQuestion(
 	const result = await telegramRequest<TelegramMessage>(credentials, "sendMessage", {
 		chat_id: credentials.chatId,
 		text,
+		parse_mode: "HTML",
+		link_preview_options: { is_disabled: true },
 		reply_markup: replyMarkup,
 	}, signal, fetchImpl);
 	if (!Number.isInteger(result?.message_id) || !result?.chat || result.chat.id === undefined) {
@@ -195,14 +216,18 @@ export async function waitForTelegramAnswer(
 	throw signal.reason ?? new Error("Telegram answer polling was cancelled.");
 }
 
-export async function dismissTelegramQuestion(
+export async function resolveTelegramQuestion(
 	credentials: TelegramCredentials,
 	sent: SentTelegramQuestion,
+	text: string,
 	fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
-	await telegramRequest(credentials, "editMessageReplyMarkup", {
+	await telegramRequest(credentials, "editMessageText", {
 		chat_id: sent.chatId,
 		message_id: sent.messageId,
+		text,
+		parse_mode: "HTML",
+		link_preview_options: { is_disabled: true },
 		reply_markup: { inline_keyboard: [] },
 	}, undefined, fetchImpl);
 }
