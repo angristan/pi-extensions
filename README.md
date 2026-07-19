@@ -49,6 +49,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | [`auto-compact-continue`](extensions/auto-compact-continue/) | Automatically continues the agent after pi triggers threshold-based context compaction |
 | [`auto-session-title`](extensions/auto-session-title/) | Generates and maintains short, descriptive titles for your pi sessions |
 | [`history-search`](extensions/history-search/) | Incremental search across your previous user prompts, inline in the editor |
+| [`rename`](extensions/rename/) | Add `/rename` as an alias for the built-in `/name` session command |
 | [`rewind`](extensions/rewind/) | Fork from an earlier user prompt and restore it to the editor (`/undo` is an alias) |
 | [`session-search`](extensions/session-search/) | Full-text search across all your saved sessions, with ranked results |
 | [`transcript`](extensions/transcript/) | Open a full, scrollable view of the entire session transcript |
