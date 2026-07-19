@@ -32,8 +32,14 @@ function hasAnswer(answer: Answer | undefined): boolean {
 	return Boolean(answer && (answer.answer !== undefined || answer.provided));
 }
 
-function numberedPrompt(question: string, index: number, total: number): string {
-	return `Question ${index + 1}/${total} · ${question}`;
+function numberedPrompt(question: string, index: number, total: number, theme?: any): string {
+	const progress = `Question ${index + 1}/${total}`;
+	if (!theme) return `${progress} · ${question}`;
+	return [
+		theme.fg("accent", theme.bold(progress)),
+		theme.fg("dim", " · "),
+		theme.fg("text", question),
+	].join("");
 }
 
 function setAttentionTitle(pi: ExtensionAPI, ctx: any, index: number, total: number): void {
@@ -95,7 +101,7 @@ class SecretPrompt implements Component, Focusable {
 	render(width: number): string[] {
 		const max = Math.max(1, width);
 		return [
-			...wrapTextWithAnsi(this.theme.fg("accent", this.theme.bold(this.question)), max),
+			...wrapTextWithAnsi(this.question, max),
 			...wrapTextWithAnsi(this.theme.fg("dim", "Secret response (not stored in the transcript)"), max),
 			...this.input.render(max),
 			...wrapTextWithAnsi(this.theme.fg("dim", "Enter submit · Esc cancel"), max),
@@ -138,7 +144,7 @@ export default function (pi: ExtensionAPI) {
 			let interrupted = false;
 			try {
 				for (const [index, question] of questions.entries()) {
-					const prompt = numberedPrompt(question.question, index, questions.length);
+					const prompt = numberedPrompt(question.question, index, questions.length, ctx.mode === "tui" ? ctx.ui.theme : undefined);
 					setAttentionTitle(pi, ctx, index, questions.length);
 					const options = Array.isArray(question.options) ? [...question.options] : [];
 					if (question.allow_other !== false) options.push("Type something…");

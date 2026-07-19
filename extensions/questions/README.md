@@ -17,8 +17,9 @@ you pick:     ▶ new branch
 ```
 
 Supports multiple questions in one call, "other" free-text answers, and
-secret inputs. Every prompt shows its position and total (`Question 2/3`), and
-the terminal title switches to `❓ Input needed` while a response is pending.
+secret inputs. Every prompt shows its position and total (`Question 2/3`) with
+accented progress, a subdued separator, and readable theme-text question copy.
+The terminal title switches to `❓ Input needed` while a response is pending.
 Secret responses use a masked TUI field; only a `[secret provided]` marker is
 sent to the model or persisted in the transcript.
 
