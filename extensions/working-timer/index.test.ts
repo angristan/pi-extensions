@@ -1,6 +1,27 @@
 import { expect, test } from "bun:test";
 import workingTimer from "./index";
 
+test("uses a lower-frequency working indicator and restores the default on shutdown", () => {
+	const handlers = new Map<string, (...args: any[]) => any>();
+	workingTimer({ on: (name: string, handler: any) => handlers.set(name, handler) } as any);
+	const indicators: any[] = [];
+	const ctx = {
+		mode: "tui",
+		ui: {
+			theme: { fg: (_color: string, text: string) => text },
+			setWorkingIndicator: (indicator?: any) => indicators.push(indicator),
+			setWorkingMessage() {},
+		},
+	};
+
+	handlers.get("session_start")?.({}, ctx);
+	expect(indicators[0]?.intervalMs).toBe(250);
+	expect(indicators[0]?.frames).toHaveLength(10);
+
+	handlers.get("session_shutdown")?.({}, ctx);
+	expect(indicators.at(-1)).toBeUndefined();
+});
+
 test("starts once per visible run and restores Pi's working message when settled", () => {
 	const handlers = new Map<string, (...args: any[]) => any>();
 	workingTimer({ on: (name: string, handler: any) => handlers.set(name, handler) } as any);

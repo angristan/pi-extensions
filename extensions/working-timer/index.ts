@@ -13,6 +13,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 const UPDATE_INTERVAL_MS = 1_000;
+const INDICATOR_INTERVAL_MS = 250;
+const INDICATOR_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 
 function formatElapsed(elapsedMs: number): string {
 	const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1_000));
@@ -31,6 +33,14 @@ export default function workingTimer(pi: ExtensionAPI) {
 	let startedAt: number | undefined;
 	let timer: ReturnType<typeof setInterval> | undefined;
 
+	const installIndicator = (ctx: ExtensionContext) => {
+		if (ctx.mode !== "tui") return;
+		ctx.ui.setWorkingIndicator({
+			frames: INDICATOR_FRAMES.map((frame) => ctx.ui.theme.fg("accent", frame)),
+			intervalMs: INDICATOR_INTERVAL_MS,
+		});
+	};
+
 	const stop = (ctx?: ExtensionContext) => {
 		if (timer) {
 			clearInterval(timer);
@@ -39,6 +49,8 @@ export default function workingTimer(pi: ExtensionAPI) {
 		startedAt = undefined;
 		if (ctx?.mode === "tui") ctx.ui.setWorkingMessage();
 	};
+
+	pi.on("session_start", (_event, ctx) => installIndicator(ctx));
 
 	pi.on("agent_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
@@ -62,5 +74,8 @@ export default function workingTimer(pi: ExtensionAPI) {
 	});
 
 	pi.on("agent_settled", (_event, ctx) => stop(ctx));
-	pi.on("session_shutdown", (_event, ctx) => stop(ctx));
+	pi.on("session_shutdown", (_event, ctx) => {
+		stop(ctx);
+		if (ctx.mode === "tui") ctx.ui.setWorkingIndicator();
+	});
 }

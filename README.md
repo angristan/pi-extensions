@@ -40,7 +40,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | [`petit-chat-input-bar`](extensions/petit-chat-input-bar/) | A tiny animated companion sprite above the editor, with smart and manual modes |
 | [`turn-separator`](extensions/turn-separator/) | Dim full-width rule between assistant messages that follow tool work, labeling long steps |
 | [`turn-stats`](extensions/turn-stats/) | Per-turn timing and token-usage entries appended to the transcript after each settled response |
-| [`working-timer`](extensions/working-timer/) | Adds a live elapsed timer to pi's built-in `Working...` row for long-running turns |
+| [`working-timer`](extensions/working-timer/) | Adds a live elapsed timer and a lower-frequency spinner to pi's built-in `Working...` row for long-running turns |
 
 ### Session & navigation
 
