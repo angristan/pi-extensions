@@ -6,6 +6,8 @@ interface Answer { id: string; question: string; answer?: string; provided?: boo
 interface Details { questions: Question[]; answers: Answer[]; interrupted: boolean }
 
 const TERMINAL_TITLE_EVENT = "terminal-title:override";
+export const QUESTION_WAITING_EVENT = "questions:waiting";
+export const QUESTION_RESOLVED_EVENT = "questions:resolved";
 
 const parameters = {
 	type: "object",
@@ -138,34 +140,46 @@ export default function (pi: ExtensionAPI) {
 		description: "Ask one or more structured questions and preserve the answers in the transcript.",
 		parameters,
 		executionMode: "sequential",
-		async execute(_id: string, params: any, _signal: AbortSignal, _update: any, ctx: any) {
+		async execute(toolCallId: string, params: any, _signal: AbortSignal, _update: any, ctx: any) {
 			const questions: Question[] = Array.isArray(params.questions) ? params.questions : [];
 			const answers: Answer[] = [];
 			let interrupted = false;
 			try {
 				for (const [index, question] of questions.entries()) {
 					const prompt = numberedPrompt(question.question, index, questions.length, ctx.mode === "tui" ? ctx.ui.theme : undefined);
+					const requestId = `${toolCallId}:${index}`;
 					setAttentionTitle(pi, ctx, index, questions.length);
-					const options = Array.isArray(question.options) ? [...question.options] : [];
-					if (question.allow_other !== false) options.push("Type something…");
-					let answer: string | undefined;
-					if (options.length) {
-						const selected = await ctx.ui.select(prompt, options);
-						if (selected === undefined) { interrupted = true; answers.push({ id: question.id, question: question.question, cancelled: true, secret: question.secret }); break; }
-						answer = selected === "Type something…"
-							? question.secret
+					pi.events.emit(QUESTION_WAITING_EVENT, {
+						requestId,
+						question: question.question,
+						index: index + 1,
+						total: questions.length,
+						secret: question.secret === true,
+					});
+					try {
+						const options = Array.isArray(question.options) ? [...question.options] : [];
+						if (question.allow_other !== false) options.push("Type something…");
+						let answer: string | undefined;
+						if (options.length) {
+							const selected = await ctx.ui.select(prompt, options);
+							if (selected === undefined) { interrupted = true; answers.push({ id: question.id, question: question.question, cancelled: true, secret: question.secret }); break; }
+							answer = selected === "Type something…"
+								? question.secret
+									? await secretInput(prompt, ctx)
+									: await ctx.ui.input(prompt, "Type your answer")
+								: selected;
+						} else {
+							answer = question.secret
 								? await secretInput(prompt, ctx)
-								: await ctx.ui.input(prompt, "Type your answer")
-							: selected;
-					} else {
-						answer = question.secret
-							? await secretInput(prompt, ctx)
-							: await ctx.ui.input(prompt, "Type your answer");
+								: await ctx.ui.input(prompt, "Type your answer");
+						}
+						if (answer === undefined) { interrupted = true; answers.push({ id: question.id, question: question.question, cancelled: true, secret: question.secret }); break; }
+						answers.push(question.secret
+							? { id: question.id, question: question.question, provided: true, secret: true }
+							: { id: question.id, question: question.question, answer });
+					} finally {
+						pi.events.emit(QUESTION_RESOLVED_EVENT, { requestId });
 					}
-					if (answer === undefined) { interrupted = true; answers.push({ id: question.id, question: question.question, cancelled: true, secret: question.secret }); break; }
-					answers.push(question.secret
-						? { id: question.id, question: question.question, provided: true, secret: true }
-						: { id: question.id, question: question.question, answer });
 				}
 			} finally {
 				if (questions.length > 0) clearAttentionTitle(pi, ctx);

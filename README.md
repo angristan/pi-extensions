@@ -73,6 +73,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | [`background-jobs`](extensions/background-jobs/) | Run long-lived shell commands in the background with live status, without blocking the agent transcript |
 | [`notifications`](extensions/notifications/) | Desktop notifications for agent activity, so you can context-switch away and get pinged |
 | [`openai-codex-fast`](extensions/openai-codex-fast/) | Toggle OpenAI Codex Fast mode and show a purple `fast` footer indicator when active |
+| [`telegram-notifications`](extensions/telegram-notifications/) | Send a Telegram message when a structured question has waited five minutes for an answer |
 | [`wakatime`](extensions/wakatime/) | Tracks read and file-edit activity through an existing `wakatime-cli` installation |
 | [`web-search`](extensions/web-search/) | Quality-routed web search, news discovery, and page opening through Exa, Firecrawl, and optional Mistral |
 
@@ -105,8 +106,9 @@ A few extensions read optional config from `~/.pi/agent/<name>.json`:
 - `accent-color.json` — `{"color": "#FF8205"}` (accepts `#RRGGBB` / `#RGB`)
 - `notifications.json` — `{"enabled": true}`
 - `openai-codex-fast.json` — `{"enabled": true}`
+- `telegram-notifications.json` — created with owner-only permissions by `/telegram setup`
 
-All default to sensible values if the file is absent.
+All default to sensible values if the file is absent. Telegram notifications stay disabled until configured.
 
 ## License
 
@@ -128,6 +130,7 @@ background-jobs <------> better-native-pi ------> code-blocks
                            |
                            +---------------------> image-store
 web-search --------------> better-native-pi
+telegram-notifications --> questions
 doctor ------------------> accent-color
 overlay-stack -----------> accent-color
 background-jobs ---------> overlay-stack

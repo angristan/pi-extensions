@@ -41,7 +41,11 @@ test("collects answers with numbered, semantically colored prompts", async () =>
 	expect(titles).toEqual(["❓ Input needed · Question 1/2", "❓ Input needed · Question 2/2", "pi"]);
 	expect(events).toEqual([
 		{ name: "terminal-title:override", payload: { source: "questions", title: "❓ Input needed · Question 1/2" } },
+		{ name: "questions:waiting", payload: { requestId: "id:0", question: "Pick a color", index: 1, total: 2, secret: false } },
+		{ name: "questions:resolved", payload: { requestId: "id:0" } },
 		{ name: "terminal-title:override", payload: { source: "questions", title: "❓ Input needed · Question 2/2" } },
+		{ name: "questions:waiting", payload: { requestId: "id:1", question: "Why?", index: 2, total: 2, secret: false } },
+		{ name: "questions:resolved", payload: { requestId: "id:1" } },
 		{ name: "terminal-title:override", payload: { source: "questions", title: undefined } },
 	]);
 	expect(result.content[0].text).toBe("color: Blue\nwhy: Because it is calm");
@@ -50,7 +54,8 @@ test("collects answers with numbered, semantically colored prompts", async () =>
 });
 
 test("stops after cancellation and never stores secret text", async () => {
-	const tool = registeredTool();
+	const events: Array<{ name: string; payload: any }> = [];
+	const tool = registeredTool(events);
 	const notices: string[] = [];
 	const result = await tool.execute("id", { questions: [
 		{ id: "token", question: "API token?", secret: true, allow_other: false },
@@ -66,5 +71,9 @@ test("stops after cancellation and never stores secret text", async () => {
 	expect(notices).toEqual(["Secret questions require interactive TUI mode."]);
 	expect(result.content[0].text).toBe("Questionnaire interrupted");
 	expect(result.details.answers).toEqual([{ id: "token", question: "API token?", cancelled: true, secret: true }]);
+	expect(events).toEqual([
+		{ name: "questions:waiting", payload: { requestId: "id:0", question: "API token?", index: 1, total: 2, secret: true } },
+		{ name: "questions:resolved", payload: { requestId: "id:0" } },
+	]);
 	expect(JSON.stringify(result)).not.toContain("actual-secret");
 });

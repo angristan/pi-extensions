@@ -23,8 +23,14 @@ The terminal title switches to `❓ Input needed` while a response is pending.
 Secret responses use a masked TUI field; only a `[secret provided]` marker is
 sent to the model or persisted in the transcript.
 
+Each prompt emits `questions:waiting` with an opaque request ID, progress, and
+whether the response is secret. A matching `questions:resolved` event is emitted
+when the prompt is answered or cancelled. Integrations such as
+`telegram-notifications` use these events without observing answers; secret
+question text is redacted before it leaves Pi.
+
 ## Dependencies
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
 - **Depends on extensions:** None; `footer` optionally keeps the attention title pinned while its activity spinner runs.
-- **Used by extensions:** None.
+- **Used by extensions:** `telegram-notifications`, through runtime events.
