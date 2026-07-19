@@ -1,20 +1,27 @@
 import { expect, test } from "bun:test";
 import questions from "./index";
 
-function registeredTool() {
+function registeredTool(events: Array<{ name: string; payload: any }> = []) {
 	let tool: any;
-	questions({ registerTool: (definition: any) => { tool = definition; } } as any);
+	questions({
+		registerTool: (definition: any) => { tool = definition; },
+		events: { emit: (name: string, payload: any) => events.push({ name, payload }) },
+	} as any);
 	return tool;
 }
 
 test("collects structured option and free-text answers in order", async () => {
-	const tool = registeredTool();
+	const events: Array<{ name: string; payload: any }> = [];
+	const tool = registeredTool(events);
 	const selected: string[] = [];
+	const prompts: string[] = [];
+	const titles: string[] = [];
 	const ctx = {
 		mode: "tui",
 		ui: {
-			select: async (_question: string, options: string[]) => { selected.push(...options); return "Blue"; },
-			input: async () => "Because it is calm",
+			select: async (question: string, options: string[]) => { prompts.push(question); selected.push(...options); return "Blue"; },
+			input: async (question: string) => { prompts.push(question); return "Because it is calm"; },
+			setTitle: (title: string) => titles.push(title),
 		},
 	};
 	const result = await tool.execute("id", { questions: [
@@ -23,6 +30,13 @@ test("collects structured option and free-text answers in order", async () => {
 	] }, undefined, undefined, ctx);
 
 	expect(selected).toEqual(["Red", "Blue"]);
+	expect(prompts).toEqual(["Question 1/2 · Pick a color", "Question 2/2 · Why?"]);
+	expect(titles).toEqual(["❓ Input needed · Question 1/2", "❓ Input needed · Question 2/2", "pi"]);
+	expect(events).toEqual([
+		{ name: "terminal-title:override", payload: { source: "questions", title: "❓ Input needed · Question 1/2" } },
+		{ name: "terminal-title:override", payload: { source: "questions", title: "❓ Input needed · Question 2/2" } },
+		{ name: "terminal-title:override", payload: { source: "questions", title: undefined } },
+	]);
 	expect(result.content[0].text).toBe("color: Blue\nwhy: Because it is calm");
 	expect(result.details.interrupted).toBe(false);
 	expect(result.details.answers).toHaveLength(2);

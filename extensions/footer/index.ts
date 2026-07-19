@@ -314,6 +314,7 @@ export default function (pi: ExtensionAPI) {
 	let agentActive = false;
 	let titleFrame = 0;
 	let titleTimer: ReturnType<typeof setInterval> | undefined;
+	const terminalTitleOverrides = new Map<string, string>();
 	let cachedUsageSessionId: string | undefined;
 	let cachedUsageTotals: UsageTotals | undefined;
 
@@ -422,6 +423,11 @@ export default function (pi: ExtensionAPI) {
 
 	const renderTitle = () => {
 		if (!activeCtx) return;
+		const override = [...terminalTitleOverrides.values()].at(-1);
+		if (override) {
+			activeCtx.ui.setTitle(override);
+			return;
+		}
 		const title = truncateTitlePart(terminalThreadTitle(activeCtx), 48);
 		const activity = TITLE_SPINNER_FRAMES[titleFrame] ?? TITLE_SPINNER_FRAMES[0];
 		activeCtx.ui.setTitle(agentActive ? `${activity} ${title}` : title);
@@ -598,6 +604,14 @@ export default function (pi: ExtensionAPI) {
 		invalidateUsageTotals();
 		requestRender?.();
 	});
+	pi.events.on("terminal-title:override", (event: unknown) => {
+		if (!event || typeof event !== "object") return;
+		const { source, title } = event as { source?: unknown; title?: unknown };
+		if (typeof source !== "string" || (title !== undefined && typeof title !== "string")) return;
+		terminalTitleOverrides.delete(source);
+		if (title) terminalTitleOverrides.set(source, title);
+		renderTitle();
+	});
 	pi.on("agent_settled", (_event, ctx) => {
 		activeCtx = ctx;
 		invalidateUsageTotals();
@@ -612,6 +626,7 @@ export default function (pi: ExtensionAPI) {
 		stopTitleAnimation();
 		agentActive = false;
 		titleFrame = 0;
+		terminalTitleOverrides.clear();
 		requestRender = undefined;
 		activeCtx = undefined;
 		invalidateUsageTotals();

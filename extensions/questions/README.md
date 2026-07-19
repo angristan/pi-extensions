@@ -17,11 +17,13 @@ you pick:     ▶ new branch
 ```
 
 Supports multiple questions in one call, "other" free-text answers, and
-secret inputs. Secret responses use a masked TUI field; only a
-`[secret provided]` marker is sent to the model or persisted in the transcript.
+secret inputs. Every prompt shows its position and total (`Question 2/3`), and
+the terminal title switches to `❓ Input needed` while a response is pending.
+Secret responses use a masked TUI field; only a `[secret provided]` marker is
+sent to the model or persisted in the transcript.
 
 ## Dependencies
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** None.
+- **Depends on extensions:** None; `footer` optionally keeps the attention title pinned while its activity spinner runs.
 - **Used by extensions:** None.

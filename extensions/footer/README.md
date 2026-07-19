@@ -9,7 +9,8 @@ is included directly in those totals without a separate subtotal. The context
 percentage remains specific to the parent conversation because every child has
 an independent context window. While the agent is active,
 the terminal window title gets a spinner prefix so you can spot activity from
-another tab.
+another tab. Attention titles from interactive extensions temporarily take
+priority over the spinner.
 
 ```
  pi-extensions · main · claude-opus-4-8 high   ctx 42%/200K · ↑ 318 · $0.21
@@ -28,5 +29,5 @@ another tab.
 ## Dependencies
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** None; automatically includes durable usage records from `subagents` when present.
-- **Used by extensions:** None.
+- **Depends on extensions:** None; automatically includes durable usage records from `subagents` and attention-title overrides from `questions` when present.
+- **Used by extensions:** `questions` optionally uses its terminal-title ownership support.

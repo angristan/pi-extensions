@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import {
+import footer, {
 	contextRemainingPercent,
 	FOOTER_GROUP_PRIORITY,
 	formatCostCents,
@@ -94,4 +94,39 @@ test("merges persisted subagent tokens and cost into session totals", () => {
 	expect(totals).toMatchObject({ input: 40, output: 12, cacheRead: 60, cacheWrite: 3, cost: 0.4 });
 	expect(totals.sessionCacheHit).toBeCloseTo(58.252, 2);
 	expect(resolved).toEqual(["test-provider/child-model"]);
+});
+
+test("keeps an attention title until its owner clears it", () => {
+	const handlers = new Map<string, (event: any, ctx: any) => void>();
+	const eventHandlers = new Map<string, (event: unknown) => void>();
+	const titles: string[] = [];
+	footer({
+		on: (name: string, handler: (event: any, ctx: any) => void) => { handlers.set(name, handler); },
+		events: { on: (name: string, handler: (event: unknown) => void) => { eventHandlers.set(name, handler); } },
+		getThinkingLevel: () => "high",
+		exec: async () => ({ code: 1, stdout: "", stderr: "" }),
+	} as any);
+	const ctx = {
+		mode: "tui",
+		cwd: "/tmp/project",
+		sessionManager: {
+			getSessionName: () => "Current session",
+			getSessionId: () => "session-id",
+		},
+		ui: {
+			setTitle: (title: string) => titles.push(title),
+			setFooter: () => {},
+		},
+	};
+
+	handlers.get("session_start")?.({}, ctx);
+	expect(titles.at(-1)).toBe("Current session");
+
+	eventHandlers.get("terminal-title:override")?.({ source: "questions", title: "❓ Input needed · Question 1/2" });
+	expect(titles.at(-1)).toBe("❓ Input needed · Question 1/2");
+
+	eventHandlers.get("terminal-title:override")?.({ source: "questions", title: undefined });
+	expect(titles.at(-1)).toBe("Current session");
+
+	handlers.get("session_shutdown")?.({}, ctx);
 });

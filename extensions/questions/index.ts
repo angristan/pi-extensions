@@ -5,6 +5,8 @@ interface Question { id: string; question: string; options?: string[]; allow_oth
 interface Answer { id: string; question: string; answer?: string; provided?: boolean; cancelled?: boolean; secret?: boolean }
 interface Details { questions: Question[]; answers: Answer[]; interrupted: boolean }
 
+const TERMINAL_TITLE_EVENT = "terminal-title:override";
+
 const parameters = {
 	type: "object",
 	properties: {
@@ -28,6 +30,25 @@ const parameters = {
 
 function hasAnswer(answer: Answer | undefined): boolean {
 	return Boolean(answer && (answer.answer !== undefined || answer.provided));
+}
+
+function numberedPrompt(question: string, index: number, total: number): string {
+	return `Question ${index + 1}/${total} · ${question}`;
+}
+
+function setAttentionTitle(pi: ExtensionAPI, ctx: any, index: number, total: number): void {
+	if (ctx.mode !== "tui") return;
+	const title = `❓ Input needed · Question ${index + 1}/${total}`;
+	ctx.ui.setTitle(title);
+	pi.events.emit(TERMINAL_TITLE_EVENT, { source: "questions", title });
+}
+
+function clearAttentionTitle(pi: ExtensionAPI, ctx: any): void {
+	if (ctx.mode !== "tui") return;
+	// The footer extension restores its contextual title when it receives the
+	// clear event. "pi" is the safe standalone fallback when no owner exists.
+	ctx.ui.setTitle("pi");
+	pi.events.emit(TERMINAL_TITLE_EVENT, { source: "questions", title: undefined });
 }
 
 class MaskedInput extends Input {
@@ -115,27 +136,33 @@ export default function (pi: ExtensionAPI) {
 			const questions: Question[] = Array.isArray(params.questions) ? params.questions : [];
 			const answers: Answer[] = [];
 			let interrupted = false;
-			for (const question of questions) {
-				const options = Array.isArray(question.options) ? [...question.options] : [];
-				if (question.allow_other !== false) options.push("Type something…");
-				let answer: string | undefined;
-				if (options.length) {
-					const selected = await ctx.ui.select(question.question, options);
-					if (selected === undefined) { interrupted = true; answers.push({ id: question.id, question: question.question, cancelled: true, secret: question.secret }); break; }
-					answer = selected === "Type something…"
-						? question.secret
-							? await secretInput(question.question, ctx)
-							: await ctx.ui.input(question.question, "Type your answer")
-						: selected;
-				} else {
-					answer = question.secret
-						? await secretInput(question.question, ctx)
-						: await ctx.ui.input(question.question, "Type your answer");
+			try {
+				for (const [index, question] of questions.entries()) {
+					const prompt = numberedPrompt(question.question, index, questions.length);
+					setAttentionTitle(pi, ctx, index, questions.length);
+					const options = Array.isArray(question.options) ? [...question.options] : [];
+					if (question.allow_other !== false) options.push("Type something…");
+					let answer: string | undefined;
+					if (options.length) {
+						const selected = await ctx.ui.select(prompt, options);
+						if (selected === undefined) { interrupted = true; answers.push({ id: question.id, question: question.question, cancelled: true, secret: question.secret }); break; }
+						answer = selected === "Type something…"
+							? question.secret
+								? await secretInput(prompt, ctx)
+								: await ctx.ui.input(prompt, "Type your answer")
+							: selected;
+					} else {
+						answer = question.secret
+							? await secretInput(prompt, ctx)
+							: await ctx.ui.input(prompt, "Type your answer");
+					}
+					if (answer === undefined) { interrupted = true; answers.push({ id: question.id, question: question.question, cancelled: true, secret: question.secret }); break; }
+					answers.push(question.secret
+						? { id: question.id, question: question.question, provided: true, secret: true }
+						: { id: question.id, question: question.question, answer });
 				}
-				if (answer === undefined) { interrupted = true; answers.push({ id: question.id, question: question.question, cancelled: true, secret: question.secret }); break; }
-				answers.push(question.secret
-					? { id: question.id, question: question.question, provided: true, secret: true }
-					: { id: question.id, question: question.question, answer });
+			} finally {
+				if (questions.length > 0) clearAttentionTitle(pi, ctx);
 			}
 			const details: Details = { questions, answers, interrupted };
 			const response = answers.filter(hasAnswer).map((answer) => `${answer.id}: ${answer.secret ? "[secret provided]" : answer.answer}`).join("\n");
