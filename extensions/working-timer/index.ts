@@ -11,13 +11,27 @@ import {
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 const UPDATE_INTERVAL_MS = 1_000;
-const INDICATOR_INTERVAL_MS = 300;
-const RAIL_POSITIONS = [0, 1, 2, 1] as const;
+const RAIL_3_INTERVAL_MS = 300;
+const RAIL_3_POSITIONS = [0, 1, 2, 1] as const;
+const RAIL_3_EASED_INTERVAL_MS = 260;
+const RAIL_3_EASED_POSITIONS = [0, 0, 1, 2, 2, 1] as const;
 const NORMAL_FG = "\x1b[39m";
 
+export type SpinnerStyle = "native" | "rail-3" | "rail-3-eased";
 export type WorkingPhase = "waiting" | "thinking" | "tools" | "retrying" | "compacting";
+
+export interface WorkingTimerConfig {
+	spinner: SpinnerStyle;
+}
+
+interface RuntimeDependencies {
+	loadConfig?: () => WorkingTimerConfig;
+}
 
 type ThemeColor = "accent" | "dim";
 type WorkingMessageTheme = {
@@ -31,6 +45,26 @@ const PHASE_LABELS: Record<WorkingPhase, string> = {
 	retrying: "Retrying",
 	compacting: "Compacting",
 };
+
+function configPath(): string {
+	const agentDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+	return join(agentDir, "working-timer.json");
+}
+
+export function normalizeWorkingTimerConfig(value: unknown): WorkingTimerConfig {
+	if (!value || typeof value !== "object") return { spinner: "native" };
+	const spinner = (value as Record<string, unknown>).spinner;
+	if (spinner === "rail-3" || spinner === "rail-3-eased" || spinner === "native") return { spinner };
+	return { spinner: "native" };
+}
+
+export function loadWorkingTimerConfig(path = configPath()): WorkingTimerConfig {
+	try {
+		return normalizeWorkingTimerConfig(JSON.parse(readFileSync(path, "utf8")));
+	} catch {
+		return { spinner: "native" };
+	}
+}
 
 function isRetryStatus(status: number): boolean {
 	return status === 429 || status >= 500;
@@ -56,8 +90,19 @@ function formatRailFrame(activeIndex: number, theme: WorkingMessageTheme): strin
 	return `${theme.fg("dim", "[")}${cells}${theme.fg("dim", "]")}`;
 }
 
-function formatRailFrames(theme: WorkingMessageTheme): string[] {
-	return RAIL_POSITIONS.map((position) => formatRailFrame(position, theme));
+function formatRailFrames(positions: readonly number[], theme: WorkingMessageTheme): string[] {
+	return positions.map((position) => formatRailFrame(position, theme));
+}
+
+function indicatorForStyle(style: SpinnerStyle, theme: WorkingMessageTheme): { frames: string[]; intervalMs: number } | undefined {
+	switch (style) {
+		case "rail-3":
+			return { frames: formatRailFrames(RAIL_3_POSITIONS, theme), intervalMs: RAIL_3_INTERVAL_MS };
+		case "rail-3-eased":
+			return { frames: formatRailFrames(RAIL_3_EASED_POSITIONS, theme), intervalMs: RAIL_3_EASED_INTERVAL_MS };
+		case "native":
+			return undefined;
+	}
 }
 
 export function formatWorkingMessage(
@@ -75,7 +120,7 @@ export function formatWorkingMessage(
 	return `${header} ${theme ? theme.fg("dim", suffix) : suffix}`;
 }
 
-export default function workingTimer(pi: ExtensionAPI) {
+export default function workingTimer(pi: ExtensionAPI, deps: RuntimeDependencies = {}) {
 	let startedAt: number | undefined;
 	let timer: ReturnType<typeof setInterval> | undefined;
 	let phase: WorkingPhase = "waiting";
@@ -83,9 +128,11 @@ export default function workingTimer(pi: ExtensionAPI) {
 	let renderCtx: ExtensionContext | undefined;
 	let interruptKey: string | undefined;
 
+	const loadConfig = () => deps.loadConfig?.() ?? loadWorkingTimerConfig();
+
 	const installIndicator = (ctx: ExtensionContext) => {
 		if (ctx.mode !== "tui") return;
-		ctx.ui.setWorkingIndicator({ frames: formatRailFrames(ctx.ui.theme), intervalMs: INDICATOR_INTERVAL_MS });
+		ctx.ui.setWorkingIndicator(indicatorForStyle(loadConfig().spinner, ctx.ui.theme));
 	};
 
 	const render = (ctx = renderCtx) => {

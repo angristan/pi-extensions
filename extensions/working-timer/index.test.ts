@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import workingTimer, { formatWorkingMessage } from "./index";
+import workingTimer, { formatWorkingMessage, normalizeWorkingTimerConfig } from "./index";
 
 const testTheme = {
 	fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
@@ -14,9 +14,40 @@ afterEach(() => {
 	globalThis.clearInterval = realClearInterval;
 });
 
-test("uses the rail-3 spinner and restores the default on shutdown", () => {
+test("normalizes spinner config with native as the safe default", () => {
+	expect(normalizeWorkingTimerConfig(undefined)).toEqual({ spinner: "native" });
+	expect(normalizeWorkingTimerConfig({ spinner: "rail-3" })).toEqual({ spinner: "rail-3" });
+	expect(normalizeWorkingTimerConfig({ spinner: "rail-3-eased" })).toEqual({ spinner: "rail-3-eased" });
+	expect(normalizeWorkingTimerConfig({ spinner: "wat" })).toEqual({ spinner: "native" });
+});
+
+test("uses Pi's native accent spinner by default and restores it on shutdown", () => {
 	const handlers = new Map<string, (...args: any[]) => any>();
-	workingTimer({ on: (name: string, handler: any) => handlers.set(name, handler) } as any);
+	workingTimer({ on: (name: string, handler: any) => handlers.set(name, handler) } as any, {
+		loadConfig: () => ({ spinner: "native" }),
+	});
+	const indicators: any[] = [];
+	const ctx = {
+		mode: "tui",
+		ui: {
+			theme: testTheme,
+			setWorkingIndicator: (indicator?: any) => indicators.push(indicator),
+			setWorkingMessage() {},
+		},
+	};
+
+	handlers.get("session_start")?.({}, ctx);
+	expect(indicators[0]).toBeUndefined();
+
+	handlers.get("session_shutdown")?.({}, ctx);
+	expect(indicators).toEqual([undefined, undefined]);
+});
+
+test("can use the optional eased rail spinner", () => {
+	const handlers = new Map<string, (...args: any[]) => any>();
+	workingTimer({ on: (name: string, handler: any) => handlers.set(name, handler) } as any, {
+		loadConfig: () => ({ spinner: "rail-3-eased" }),
+	});
 	const indicators: any[] = [];
 	const ctx = {
 		mode: "tui",
@@ -31,15 +62,14 @@ test("uses the rail-3 spinner and restores the default on shutdown", () => {
 	expect(indicators[0]).toEqual({
 		frames: [
 			"<dim>[</dim><accent>•</accent><dim>·</dim><dim>·</dim><dim>]</dim>",
+			"<dim>[</dim><accent>•</accent><dim>·</dim><dim>·</dim><dim>]</dim>",
 			"<dim>[</dim><dim>·</dim><accent>•</accent><dim>·</dim><dim>]</dim>",
+			"<dim>[</dim><dim>·</dim><dim>·</dim><accent>•</accent><dim>]</dim>",
 			"<dim>[</dim><dim>·</dim><dim>·</dim><accent>•</accent><dim>]</dim>",
 			"<dim>[</dim><dim>·</dim><accent>•</accent><dim>·</dim><dim>]</dim>",
 		],
-		intervalMs: 300,
+		intervalMs: 260,
 	});
-
-	handlers.get("session_shutdown")?.({}, ctx);
-	expect(indicators.at(-1)).toBeUndefined();
 });
 
 test("updates phase text and restores Pi's working message when settled", () => {
