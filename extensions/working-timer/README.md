@@ -1,16 +1,16 @@
 # working-timer
 
-Adds phase text with a slow accent pulse and a live elapsed timer to pi's built-in working row:
+Adds a small `rail-3` spinner, phase text, and a live elapsed timer to pi's built-in working row:
 
 ```
-Thinking (2m 17s • escape to interrupt)
-Running tools (2m 18s • escape to interrupt)
+[•··] Thinking (2m 17s • escape to interrupt)
+[·•·] Running tools (2m 18s • escape to interrupt)
 ```
 
-The whole phase label slowly pulses from normal foreground into the theme accent
-and back. It switches only when the agent lifecycle changes, using labels such
-as `Waiting for model`, `Thinking`, `Running tools`, `Retrying`, and
-`Compacting`. The elapsed/interrupt suffix is dimmed to keep the row quiet.
+The spinner moves a single accent dot inside a dim three-cell rail. The phase
+text stays stable and switches only when the agent lifecycle changes, using
+labels such as `Waiting for model`, `Thinking`, `Running tools`, `Retrying`,
+and `Compacting`. The elapsed/interrupt suffix is dimmed to keep the row quiet.
 The interrupt hint follows pi's configured keybinding. The timer covers the
 complete user-visible run. It keeps counting across provider retries, automatic
 compaction and retry, and queued continuations, then resets when pi fully
