@@ -61,6 +61,8 @@ interface FooterGroup {
 	segments: StatusSegment[];
 	/** Optional longest-to-shortest alternatives used before dropping the group. */
 	variants?: StatusSegment[][];
+	/** Align a group to the right edge while keeping it in responsive pruning. */
+	align?: "left" | "right";
 	/** Higher values are removed first when the terminal is narrow. */
 	priority: number;
 	/** Higher values are shortened first, independently of removal priority. */
@@ -251,21 +253,28 @@ function renderSplitRow(left: string, right: string, width: number): string {
 
 export function renderAdaptiveRow(groups: FooterGroup[], right: string, width: number, theme?: any): string {
 	const available = Math.max(0, width - visibleWidth(FOOTER_INDENT));
-	const rightWidth = visibleWidth(right);
-	const minimumGap = right ? 3 : 0;
-	const leftAvailable = rightWidth + minimumGap < available
-		? available - rightWidth - minimumGap
-		: 0;
 	const active = groups
 		.map((group, index) => ({ ...group, index, variantIndex: 0 }))
 		.filter((group) => group.segments.length > 0 || (group.variants?.[0]?.length ?? 0) > 0);
 	const currentSegments = (group: (typeof active)[number]) =>
 		group.variants?.[group.variantIndex] ?? group.segments;
-	const renderActive = () => active
+	const renderGroups = (align: "left" | "right") => active
+		.filter((group) => (group.align ?? "left") === align)
 		.map((group) => styledSegments(currentSegments(group), " ", theme))
 		.join(dim(SEPARATOR));
+	const renderRight = () => {
+		const rightGroups = renderGroups("right");
+		return [right, rightGroups].filter(Boolean).join(dim(SEPARATOR));
+	};
+	const renderedWidth = () => {
+		const left = renderGroups("left");
+		const rightSide = renderRight();
+		if (!rightSide) return visibleWidth(left);
+		if (!left) return visibleWidth(rightSide);
+		return visibleWidth(left) + 3 + visibleWidth(rightSide);
+	};
 
-	while (active.length > 1 && visibleWidth(renderActive()) > leftAvailable) {
+	while (active.length > 1 && renderedWidth() > available) {
 		const removable = active
 			.filter((group) => !group.required)
 			.sort((a, b) => b.priority - a.priority || b.index - a.index)[0];
@@ -284,7 +293,7 @@ export function renderAdaptiveRow(groups: FooterGroup[], right: string, width: n
 		active.splice(active.indexOf(removable), 1);
 	}
 
-	return renderSplitRow(renderActive(), right, width);
+	return renderSplitRow(renderGroups("left"), renderRight(), width);
 }
 
 function sanitizeStatusText(text: string): string {
@@ -531,8 +540,8 @@ export default function (pi: ExtensionAPI) {
 
 					const groups: FooterGroup[] = [
 						{ segments: [{ accent: "thread", text: threadTitle(current) }], priority: FOOTER_GROUP_PRIORITY.thread, required: true },
-						{ segments: [{ accent: "path", text: formatDirectory(current.cwd) }], priority: FOOTER_GROUP_PRIORITY.path },
-						{ segments: branchSegments, priority: FOOTER_GROUP_PRIORITY.git },
+						{ segments: [{ accent: "path", text: formatDirectory(current.cwd) }], align: "right", priority: FOOTER_GROUP_PRIORITY.path },
+						{ segments: branchSegments, align: "right", priority: FOOTER_GROUP_PRIORITY.git },
 						{ segments: modelSegments, priority: FOOTER_GROUP_PRIORITY.model },
 						{
 							segments: contextWindow > 0

@@ -13,10 +13,11 @@ another tab. Attention titles from interactive extensions temporarily take
 priority over the spinner.
 
 ```
- pi-extensions · main · claude-opus-4-8 high   ctx 42%/200K · ↑ 318 · $0.21
+ pi-extensions · claude-opus-4-8 high · ctx 42%/200K · ↑ 318 · $0.21      ~/src/pi-extensions │ main
 ```
 
-- Thread/path, git branch, model + thinking level
+- Thread, model + thinking level, context, usage, and cost on the left
+- Directory and git branch right-aligned so they stay anchored as session titles change
 - Context % with a 12k-token baseline so small sessions don't show 0%
 - Cumulative input, output, cache, and cost totals, including child agents
 - Cost from token usage × provider pricing (input/output/cache)

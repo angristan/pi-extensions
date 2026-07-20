@@ -59,6 +59,21 @@ test("uses the intended responsive removal order as space narrows", () => {
 	expect(plain(26)).not.toContain("directory");
 });
 
+test("keeps directory and git anchored to the right edge", () => {
+	const segment = (accent: "thread" | "path" | "branch" | "model", text: string) => ({ accent, text });
+	const groups = (thread: string): Parameters<typeof renderAdaptiveRow>[0] => [
+		{ segments: [segment("thread", thread)], priority: FOOTER_GROUP_PRIORITY.thread, required: true },
+		{ segments: [segment("model", "model")], priority: FOOTER_GROUP_PRIORITY.model },
+		{ segments: [segment("path", "~/src/project")], align: "right", priority: FOOTER_GROUP_PRIORITY.path },
+		{ segments: [segment("branch", "main")], align: "right", priority: FOOTER_GROUP_PRIORITY.git },
+	];
+	const plain = (thread: string) => renderAdaptiveRow(groups(thread), "", 72)
+		.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
+
+	expect(plain("short").endsWith("~/src/project │ main")).toBe(true);
+	expect(plain("a much longer session title").endsWith("~/src/project │ main")).toBe(true);
+});
+
 test("aggregates assistant usage and resolves missing historical costs", () => {
 	const entries = [
 		{ type: "message", message: { role: "user", usage: { input: 999 } } },
