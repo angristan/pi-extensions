@@ -27,13 +27,24 @@ test("records timing and aggregate usage when the full run settles", () => {
 			usage: { input: 10, output: 20, cacheRead: 30, cacheWrite: 0, cost: { total: 0.5 } },
 		},
 	}, ctx);
+	handlers.get("message_end")?.({
+		message: {
+			role: "toolResult",
+			usage: { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, cost: { total: 0.1 } },
+		},
+	}, ctx);
+	handlers.get("session_compact")?.({
+		compactionEntry: {
+			usage: { input: 7, output: 11, cacheRead: 13, cacheWrite: 17, cost: { total: 0.2 } },
+		},
+	});
 	handlers.get("agent_settled")?.();
 
 	expect(entries).toHaveLength(1);
 	expect(entries[0].data).toMatchObject({
-		cacheHitPercent: 75,
-		usage: { input: 10, output: 20, cacheRead: 30, cacheWrite: 0, cost: 0.5 },
+		usage: { input: 19, output: 34, cacheRead: 47, cacheWrite: 22, cost: 0.8 },
 	});
+	expect(entries[0].data.cacheHitPercent).toBeCloseTo(53.409, 3);
 	expect(entries[0].data.elapsedMs).toBeGreaterThanOrEqual(0);
 	expect(entries[0].data.timing.ttftMs).toBeGreaterThanOrEqual(0);
 	const identityTheme = { fg: (_color: string, text: string) => text };

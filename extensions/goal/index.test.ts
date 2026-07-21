@@ -203,6 +203,20 @@ test("renders a semantic goal status indicator", async () => {
 	expect(title).toContain("Goal ● active");
 });
 
+test("includes tool, compaction, and branch-summary usage in goal stats", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("ship the feature", h.ctx);
+	h.entries.push(
+		{ type: "message", message: { role: "toolResult", usage: { input: 2, output: 3, cacheRead: 4, cacheWrite: 5 } } },
+		{ type: "compaction", usage: { input: 7, output: 11, cacheRead: 13, cacheWrite: 17 } },
+		{ type: "branch_summary", usage: { input: 19, output: 23, cacheRead: 29, cacheWrite: 31 } },
+	);
+
+	const card = registeredOverlayCards.at(-1)!;
+	const text = card.renderBody(58, 7, h.ctx.ui.theme).join("\n");
+	expect(text).toContain("Usage  ↓28  ↑37 · cached 46 · written 53");
+});
+
 test("labels the initial goal-loop kickoff as cycle one", async () => {
 	const h = makeHarness();
 	await h.commands.goal.handler("ship the feature", h.ctx);

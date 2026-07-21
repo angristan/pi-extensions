@@ -1,4 +1,4 @@
-import { calculateCost, type AssistantMessage } from "@earendil-works/pi-ai";
+import { calculateCost } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
@@ -160,11 +160,16 @@ export function usageTotals(entries: readonly any[], resolveMissingCost?: Missin
 	for (const entry of entries) {
 		let source: UsageCostSource | undefined;
 		let recordedCost = 0;
-		if (entry.type === "message" && entry.message?.role === "assistant") {
-			const message = entry.message as AssistantMessage;
-			if (!message.usage) continue;
-			source = message;
-			recordedCost = Math.max(0, message.usage.cost?.total ?? 0);
+		if (
+			entry.type === "message"
+			&& (entry.message?.role === "assistant" || entry.message?.role === "toolResult")
+			&& entry.message.usage
+		) {
+			source = entry.message;
+			recordedCost = Math.max(0, entry.message.usage.cost?.total ?? 0);
+		} else if ((entry.type === "compaction" || entry.type === "branch_summary") && entry.usage) {
+			source = { usage: entry.usage };
+			recordedCost = Math.max(0, entry.usage.cost?.total ?? 0);
 		} else {
 			const delegated = subagentUsageFromEntry(entry);
 			if (!delegated) continue;

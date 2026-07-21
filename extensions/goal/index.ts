@@ -259,8 +259,12 @@ function goalOverlayStats(ctx: any, state: GoalState): GoalOverlayStats | undefi
 
 	const totals: GoalOverlayStats = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
 	for (const entry of entries.slice(startIndex + 1)) {
-		if (entry?.type !== "message" || entry.message?.role !== "assistant") continue;
-		const usage = entry.message.usage;
+		const usage = entry?.type === "message"
+			&& (entry.message?.role === "assistant" || entry.message?.role === "toolResult")
+			? entry.message.usage
+			: (entry?.type === "compaction" || entry?.type === "branch_summary")
+				? entry.usage
+				: undefined;
 		if (!usage) continue;
 		totals.inputTokens += Math.max(0, usage.input ?? 0);
 		totals.outputTokens += Math.max(0, usage.output ?? 0);

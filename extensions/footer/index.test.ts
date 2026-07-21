@@ -86,6 +86,23 @@ test("aggregates assistant usage and resolves missing historical costs", () => {
 	expect(totals.sessionCacheHit).toBeCloseTo(42.857, 2);
 });
 
+test("includes tool, compaction, and branch-summary usage", () => {
+	const entries = [
+		{ type: "message", message: { role: "toolResult", usage: { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, cost: { total: 0.1 } } } },
+		{ type: "compaction", usage: { input: 7, output: 11, cacheRead: 13, cacheWrite: 17, cost: { total: 0.2 } } },
+		{ type: "branch_summary", usage: { input: 19, output: 23, cacheRead: 29, cacheWrite: 31, cost: { total: 0.3 } } },
+	];
+
+	const totals = usageTotals(entries);
+	expect(totals).toMatchObject({
+		input: 28,
+		output: 37,
+		cacheRead: 46,
+		cacheWrite: 53,
+	});
+	expect(totals.cost).toBeCloseTo(0.6);
+});
+
 test("merges persisted subagent tokens and cost into session totals", () => {
 	const entries = [
 		{ type: "message", message: { role: "assistant", usage: { input: 10, output: 5, cacheRead: 20, cacheWrite: 0, cost: { total: 0.25 } } } },

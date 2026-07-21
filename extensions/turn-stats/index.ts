@@ -176,9 +176,9 @@ function finalizeResponseTiming(
 	};
 }
 
-/** Accumulate one finalized assistant message into the running per-turn totals. */
-function accumulateUsage(run: RunUsage, message: AssistantMessage, resolvedCost: number): void {
-	const usage = message.usage;
+/** Accumulate one persisted usage record into the running per-turn totals. */
+function accumulateUsage(run: RunUsage, source: { usage?: any }, resolvedCost = 0): void {
+	const usage = source.usage;
 	if (!usage) return;
 	run.input += Math.max(0, usage.input ?? 0);
 	run.output += Math.max(0, usage.output ?? 0);
@@ -298,24 +298,28 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("message_end", (event, ctx) => {
-		if (event.message.role !== "assistant") return;
-		const message = event.message as AssistantMessage;
+		const message = event.message;
+		if (message.role !== "assistant" && message.role !== "toolResult") return;
 
-		// Finalize timing for this provider response.
-		const endedAt = Date.now();
-		latestResponseTiming = finalizeResponseTiming(
-			activeResponseTiming ?? { requestStartedAt: endedAt },
-			message,
-			endedAt,
-		);
-		activeResponseTiming = undefined;
+		if (message.role === "assistant") {
+			// Finalize timing for this provider response.
+			const endedAt = Date.now();
+			latestResponseTiming = finalizeResponseTiming(
+				activeResponseTiming ?? { requestStartedAt: endedAt },
+				message,
+				endedAt,
+			);
+			activeResponseTiming = undefined;
+		}
 
-		// Accumulate tokens/cost for the run. Older messages may carry zero cost
-		// because their custom model had no rates configured when recorded; resolve
-		// the model from the registry and recompute cost in that case.
+		// Tool-result usage is also persisted in Pi 0.81. Older messages may carry
+		// zero cost because their custom model had no rates configured when recorded.
 		if (!runUsage) runUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
-		const resolvedCost = resolveMissingCost(ctx, message);
-		accumulateUsage(runUsage, message, resolvedCost);
+		accumulateUsage(runUsage, message, resolveMissingCost(ctx, message));
+	});
+
+	pi.on("session_compact", (event) => {
+		if (runUsage) accumulateUsage(runUsage, event.compactionEntry);
 	});
 
 	pi.on("agent_settled", () => {
@@ -357,7 +361,7 @@ export default function (pi: ExtensionAPI) {
  * custom model had no rates configured at capture time. Mirrors the footer's
  * `currentUsageTotals` resolver so the run cost and footer session cost agree.
  */
-function resolveMissingCost(ctx: any, message: AssistantMessage): number {
+function resolveMissingCost(ctx: any, message: { usage?: any }): number {
 	const provider = (message as any).provider;
 	const modelId = (message as any).model;
 	if (!provider || !modelId || !ctx?.modelRegistry?.find) return 0;
