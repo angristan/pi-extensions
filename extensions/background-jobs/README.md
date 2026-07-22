@@ -18,6 +18,11 @@ their schemas out of ordinary requests. The first yielded `bash` call activates
 them additively for the rest of the session, and its result names the newly
 available tools and terminal ID.
 
+The extension provides its own managed `bash` when loaded independently. When
+`better-native-pi` is also loaded, that extension owns the single combined
+`bash` definition and refreshes it as soon as the managed terminal service is
+available. Both load orders expose the same schema and behavior.
+
 For an interactive prompt, call `bash` with `tty: true`; if it yields, send the
 answer with `terminal_write`. `terminal_write` also accepts literal control
 characters, including `\u0003` for Ctrl+C. PTY mode uses the system `expect`

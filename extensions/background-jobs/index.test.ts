@@ -11,7 +11,7 @@ interface Harness {
 	tools: Map<string, any>;
 	activeTools: Set<string>;
 	commands: Map<string, any>;
-	handlers: Map<string, (...args: any[]) => any>;
+	handlers: Map<string, Array<(...args: any[]) => any>>;
 	statuses: Map<string, string | undefined>;
 	selectCalls: Array<{ title: string; options: string[] }>;
 	notifications: Array<{ message: string; level: string | undefined }>;
@@ -23,19 +23,27 @@ interface Harness {
 }
 
 const cleanupGroups = new Set<number>();
+const activeHarnesses: Harness[] = [];
 
-afterEach(() => {
+afterEach(async () => {
+	for (const harness of activeHarnesses.reverse()) await shutdownHarness(harness);
+	activeHarnesses.length = 0;
 	for (const pid of cleanupGroups) {
 		try { process.kill(-pid, "SIGKILL"); } catch { /* Already stopped. */ }
 	}
 	cleanupGroups.clear();
 });
 
-function createHarness(options: { killGraceMs?: number } = {}): Harness {
+interface HarnessOptions {
+	killGraceMs?: number;
+	extensions?: Array<"background-jobs" | "better-native-pi">;
+}
+
+function createHarness(options: HarnessOptions = {}): Harness {
 	const tools = new Map<string, any>();
 	const activeTools = new Set<string>();
 	const commands = new Map<string, any>();
-	const handlers = new Map<string, (...args: any[]) => any>();
+	const handlers = new Map<string, Array<(...args: any[]) => any>>();
 	const statuses = new Map<string, string | undefined>();
 	const selectCalls: Array<{ title: string; options: string[] }> = [];
 	const notifications: Array<{ message: string; level: string | undefined }> = [];
@@ -64,22 +72,31 @@ function createHarness(options: { killGraceMs?: number } = {}): Harness {
 		getActiveTools() { return [...activeTools]; },
 		setActiveTools(names: string[]) { activeTools.clear(); for (const name of names) activeTools.add(name); },
 		registerEntryRenderer(type: string) { entryRendererTypes.push(type); },
-		on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
+		on(name: string, handler: (...args: any[]) => any) {
+			const registered = handlers.get(name) ?? [];
+			registered.push(handler);
+			handlers.set(name, registered);
+		},
 		appendEntry(type: string, data: any) { appendedEntries.push({ type, data }); },
 		events: { emit(name: string, payload: any) { events.push({ name, payload }); } },
 	};
-	registerBackgroundJobs(pi as any, {
-		...options,
-		registerOverlayCard(definition: any) {
-			overlay.definition = definition;
-			return {
-				invalidate() { overlay.invalidations += 1; },
-				unregister() {},
-			};
-		},
-	});
-	registerBetterNativeBash(pi as any);
-	return {
+	for (const extension of options.extensions ?? ["background-jobs", "better-native-pi"]) {
+		if (extension === "better-native-pi") {
+			registerBetterNativeBash(pi as any);
+			continue;
+		}
+		registerBackgroundJobs(pi as any, {
+			killGraceMs: options.killGraceMs,
+			registerOverlayCard(definition: any) {
+				overlay.definition = definition;
+				return {
+					invalidate() { overlay.invalidations += 1; },
+					unregister() {},
+				};
+			},
+		});
+	}
+	const harness = {
 		tools,
 		activeTools,
 		commands,
@@ -93,14 +110,20 @@ function createHarness(options: { killGraceMs?: number } = {}): Harness {
 		overlay,
 		ctx,
 	};
+	activeHarnesses.push(harness);
+	return harness;
 }
 
 async function startHarness(harness: Harness): Promise<void> {
-	await harness.handlers.get("session_start")?.({}, harness.ctx);
+	for (const handler of harness.handlers.get("session_start") ?? []) {
+		await handler({}, harness.ctx);
+	}
 }
 
 async function shutdownHarness(harness: Harness): Promise<void> {
-	await harness.handlers.get("session_shutdown")?.({ reason: "quit" }, harness.ctx);
+	for (const handler of harness.handlers.get("session_shutdown") ?? []) {
+		await handler({ reason: "quit" }, harness.ctx);
+	}
 }
 
 async function waitForPid(path: string): Promise<number> {
@@ -257,6 +280,61 @@ describe("live output refresh", () => {
 });
 
 describe("terminal tools", () => {
+	test("keeps better-native-pi functional without background-jobs", async () => {
+		const harness = createHarness({ extensions: ["better-native-pi"] });
+		await startHarness(harness);
+
+		expect([...harness.tools.keys()]).toEqual(["bash"]);
+		const bash = harness.tools.get("bash");
+		expect(bash.parameters.properties.tty).toBeUndefined();
+		expect(bash.description).not.toContain("managed terminal ID");
+		const result = await bash.execute("exec", {
+			command: "printf standalone-native",
+			reasoning: "verify standalone native Bash",
+		}, undefined, undefined, harness.ctx);
+		expect(result.content[0].text).toContain("standalone-native");
+	});
+
+	test("keeps background-jobs functional without better-native-pi", async () => {
+		const harness = createHarness({ extensions: ["background-jobs"] });
+		await startHarness(harness);
+
+		expect([...harness.activeTools]).toEqual(["bash"]);
+		const bash = harness.tools.get("bash");
+		expect(bash.parameters.properties.tty).toMatchObject({ type: "boolean" });
+		expect(bash.description).toContain("managed terminal ID");
+		const result = await bash.execute("exec", {
+			command: "printf standalone-managed",
+			reasoning: "verify standalone managed Bash",
+		}, undefined, undefined, harness.ctx);
+		expect(result.content[0].text).toContain("standalone-managed");
+	});
+
+	test("integrates the managed schema in either extension load order", async () => {
+		for (const extensions of [
+			["background-jobs", "better-native-pi"],
+			["better-native-pi", "background-jobs"],
+		] as const) {
+			const harness = createHarness({ extensions: [...extensions] });
+			await startHarness(harness);
+			const bash = harness.tools.get("bash");
+			expect(bash.parameters.properties.tty).toMatchObject({ type: "boolean" });
+			expect(bash.parameters.properties["yield-time_ms"]).toMatchObject({ minimum: 250, maximum: 30_000 });
+			expect(bash.description).toContain("managed terminal ID");
+			await shutdownHarness(harness);
+		}
+	});
+
+	test("cleans capability ownership across extension reloads", async () => {
+		const styled = createHarness({ extensions: ["better-native-pi"] });
+		await startHarness(styled);
+		await shutdownHarness(styled);
+
+		const managed = createHarness({ extensions: ["background-jobs"] });
+		await startHarness(managed);
+		expect(managed.tools.get("bash").parameters.properties.tty).toMatchObject({ type: "boolean" });
+	});
+
 	test("registers only unified terminal APIs", async () => {
 		const harness = createHarness();
 		await startHarness(harness);

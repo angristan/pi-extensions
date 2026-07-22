@@ -30,8 +30,9 @@ Re-registers pi's built-in tools under their native names (`read`, `write`,
   The schema requests a present-tense phrase of at most eight words with no
   period and stays compact because it is repeated across all seven schemas
 - `execute` delegates to the real built-in tool (reasoning stripped first); when
-  `background-jobs` is loaded, `bash` instead uses its managed terminal service
-  so quick commands, yielded processes, and `tty: true` prompts share one tool
+  `background-jobs` is loaded in either order, `bash` refreshes to use its managed
+  terminal service so quick commands, yielded processes, and `tty: true` prompts
+  share one tool; either extension still provides a complete `bash` independently
 - `grep` and `find` reject recursive searches rooted at the home directory, its
   ancestors, or broad macOS cloud-storage directories. Specific project and
   subdirectory searches remain allowed, including through symlink-safe checks

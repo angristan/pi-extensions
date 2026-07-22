@@ -20,7 +20,12 @@ import {
 	CoalescedRefresh,
 	LIVE_REFRESH_FALLBACK_MS,
 } from "./refresh.js";
-import { clearBackgroundTerminalService, setBackgroundTerminalService, type BackgroundTerminalService } from "./service.js";
+import {
+	clearBackgroundTerminalService,
+	hasBetterNativeBashIntegration,
+	setBackgroundTerminalService,
+	type BackgroundTerminalService,
+} from "./service.js";
 import { isPtySupported, spawnTerminal } from "./terminal-process.js";
 
 export { BoundedOutput, CursorOutput } from "./output.js";
@@ -970,6 +975,33 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	};
 	setBackgroundTerminalService(terminalService);
 
+	const registerStandaloneBash = () => {
+		pi.registerTool({
+			name: "bash",
+			label: "bash",
+			description: "Run a shell command. Quick commands return normally; long-running commands yield a managed terminal ID. Set tty=true for prompts and REPLs.",
+			promptSnippet: "Run shell commands with automatic background yielding and optional PTY interaction",
+			parameters: {
+				type: "object",
+				properties: {
+					command: { type: "string", description: "Shell command to run" },
+					timeout: { type: "integer", minimum: 1, maximum: MAX_TIMEOUT_SECONDS, description: `Optional hard timeout from 1 to ${MAX_TIMEOUT_SECONDS} seconds` },
+					cwd: { type: "string", description: "Working directory, relative to the current project unless absolute" },
+					tty: { type: "boolean", description: "Allocate a PTY for prompts, REPLs, and control characters", default: false },
+					"yield-time_ms": { type: "integer", minimum: 250, maximum: 30_000, description: `Wait before yielding a terminal ID (default ${DEFAULT_YIELD_MS} ms)` },
+					max_output_tokens: { type: "integer", minimum: 1, description: "Output byte budget in tokens (~4 bytes/token). Defaults to 10000; larger requests cap at 1 MiB." },
+					reasoning: { type: "string", description: "Goal or intent behind running this command" },
+				},
+				required: ["command", "reasoning"],
+			} as any,
+			executionMode: "sequential",
+			execute: executeUnified,
+			renderCall: (args: any, theme: any) => new Text(`${theme.fg("accent", "●")} ${theme.bold("Running bash")} ${compactCommand(args.reasoning || args.command || "")}`, 0, 0),
+			renderResult: (result: any) => new Text(result?.content?.[0]?.text ?? "", 0, 0),
+			renderShell: "self",
+		});
+	};
+
 	// Completion entries persist final state without an entry renderer. The
 	// original tool card reads the live/restored job and updates in place. An
 	// empty component still receives Pi's custom-entry spacer, so registering one
@@ -1124,6 +1156,9 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	});
 
 	pi.on("session_start", (_event, ctx) => {
+		// Each extension owns a complete standalone Bash tool. When better-native-pi
+		// is present, it owns the combined definition and uses this service backend.
+		if (!hasBetterNativeBashIntegration()) registerStandaloneBash();
 		// Tool registration makes every definition active by default. Most sessions
 		// never yield a command, so keep terminal controls out of the initial model
 		// context and add them only when executeUnified returns a live terminal ID.
