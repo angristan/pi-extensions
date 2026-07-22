@@ -75,7 +75,6 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | [`openai-codex-fast`](extensions/openai-codex-fast/) | Toggle OpenAI Codex Fast mode and show a purple `fast` footer indicator when active |
 | [`prevent-sleep`](extensions/prevent-sleep/) | Keep macOS awake while Pi is actively processing an agent run |
 | [`telegram-notifications`](extensions/telegram-notifications/) | Answer delayed structured questions from Telegram with buttons or message replies |
-| [`wakatime`](extensions/wakatime/) | Tracks read and file-edit activity through an existing `wakatime-cli` installation |
 | [`web-search`](extensions/web-search/) | Quality-routed web search, news discovery, and page opening through Exa, Firecrawl, and optional Mistral |
 
 ### Diagnostics & performance
