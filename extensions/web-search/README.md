@@ -70,7 +70,9 @@ Provider attempts and reported credit usage are retained in bounded result
 details. Search headlines accent the query inside dim quotation marks. Result
 rows show clickable full URLs in normal text plus muted source and date metadata;
 titles and snippets remain agent-facing without adding visual noise to the
-transcript. Fallbacks render explicitly:
+transcript. Sanitized failure messages wrap to the transcript width instead of
+being ellipsized, so the bounded provider reason remains visible in full.
+Fallbacks render explicitly:
 
 ```text
 • Searched “auth middleware docs”

@@ -1,5 +1,5 @@
 import { type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Container, hyperlink, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { Container, hyperlink, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 // Reuse better-native-pi's palette and helpers so the search rows are
 // visually identical to the built-in tools' tidy rendering (same bullets,
@@ -110,9 +110,14 @@ function searchDetail(args: (WebSearchArgs | NewsSearchArgs) | undefined, theme:
 	return [quotedQuery, dates || undefined, lang ? `lang ${lang}` : undefined, provider].filter(Boolean).join(" · ");
 }
 
-function compactError(text: string, fallback: string): string {
-	const normalized = sanitizeSearchText(text, 2_000);
-	return truncateToWidth(normalized || fallback, 160, "…");
+function sanitizedError(text: string, fallback: string): string {
+	return sanitizeSearchText(text, 2_000) || fallback;
+}
+
+function errorRows(text: string, fallback: string, width: number, theme: Theme): string[] {
+	const available = Math.max(1, width - visibleWidth(BRANCH));
+	return wrapTextWithAnsi(theme.fg("error", sanitizedError(text, fallback)), available)
+		.map((row, index) => `${index === 0 ? BRANCH : INDENT}${row}`);
 }
 
 function resultUrl(result: SearchDisplayItem): string | undefined {
@@ -268,9 +273,9 @@ function renderSearchResult(
 
 	if (context.isError) {
 		const detail = searchDetail(args, theme);
-		component.update(() => [
+		component.update((width) => [
 			headlineRow(false, true, "Search failed", detail),
-			`${BRANCH}${theme.fg("error", compactError(storedText, "Unknown search error"))}`,
+			...errorRows(storedText, "Unknown search error", width, theme),
 		]);
 		return component;
 	}
@@ -341,10 +346,10 @@ function renderOpenResult(
 	if (context.isError) {
 		const failure = detectOpenUrlFailure(storedText);
 		const blocked = failure?.kind === "blocked";
-		const reason = failure?.message ?? compactError(storedText, "Unknown open error");
-		component.update(() => [
+		const reason = failure?.message ?? storedText;
+		component.update((width) => [
 			headlineRow(false, true, blocked ? "Open blocked" : "Open failed", target ? renderOpenTarget(target, theme) : ""),
-			`${BRANCH}${theme.fg("error", compactError(reason, "Unknown open error"))}`,
+			...errorRows(reason, "Unknown open error", width, theme),
 		]);
 		return component;
 	}

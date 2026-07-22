@@ -20,6 +20,20 @@ mock.module("@earendil-works/pi-tui", () => ({
 	hyperlink: (text: string, url: string) => `<link:${url}>${text}</link>`,
 	truncateToWidth: (text: string, width: number, suffix = "…") => text.length <= width ? text : `${text.slice(0, Math.max(0, width - suffix.length))}${suffix}`,
 	visibleWidth: (text: string) => text.replace(/<[^>]+>/g, "").length,
+	wrapTextWithAnsi: (text: string, width: number) => {
+		const match = /^(<error>)(.*)(<\/error>)$/.exec(text);
+		const style = (value: string) => match ? `${match[1]}${value}${match[3]}` : value;
+		let remaining = match?.[2] ?? text;
+		const lines: string[] = [];
+		while (remaining.length > width) {
+			const space = remaining.lastIndexOf(" ", width);
+			const split = space > 0 ? space : width;
+			lines.push(style(remaining.slice(0, split)));
+			remaining = remaining.slice(split).trimStart();
+		}
+		lines.push(style(remaining));
+		return lines;
+	},
 }));
 mock.module("../better-native-pi/core.js", () => ({
 	fitToolLine: (line: string) => line,
@@ -206,6 +220,24 @@ describe("web search renderer", () => {
 	test("open failures use the requested target and actual reason", () => {
 		const toolResult = { content: [{ type: "text", text: "Timed out while opening this page. Try another source." }] };
 		expect(render(openUrl, toolResult, { url: "https://example.com/docs" }, { isError: true })).toMatchSnapshot();
+	});
+
+	test("wraps long open errors without ellipsizing their message", () => {
+		const message = "Open URL failed: exa: Exa HTTP 429: You've hit Exa's free MCP rate limit. To continue using Exa without interruption, add an API key or upgrade your plan.";
+		const lines = render(
+			openUrl,
+			{ content: [{ type: "text", text: message }] },
+			{ url: "https://developers.cloudflare.com/queues/configuration/javascript-apis/" },
+			{ isError: true, width: 56 },
+		);
+		const errorLines = lines.slice(1);
+		const output = errorLines.join("\n");
+		const messageText = errorLines.map((line) => line.replace(/<[^>]+>/g, "").replace(/^ {2}(?:└ |  )/, "")).join(" ");
+		expect(errorLines.length).toBeGreaterThan(1);
+		expect(messageText).toContain("To continue using Exa without interruption");
+		expect(messageText).toContain("upgrade your plan.");
+		expect(output).not.toContain("…");
+		expect(errorLines.every((line) => line.replace(/<[^>]+>/g, "").length <= 56)).toBe(true);
 	});
 
 	test("bot challenges render as blocked rather than opened", () => {
