@@ -1,3 +1,4 @@
+import { complete } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -13,6 +14,7 @@ import {
 	type TitleContext,
 	type TitleState,
 } from "./context";
+import { requestTitleCompletion } from "./request";
 
 const CONFIG_PATH = join(homedir(), ".pi", "agent", "auto-session-title.json");
 
@@ -27,9 +29,9 @@ interface TitleModelConfig {
  *
  *   { "provider": "mistral", "model": "mistral-medium-3.5" }
  *
- * Any OpenAI-compatible provider configured in `models.json` works — the
- * extension calls the provider's chat-completions endpoint with your existing
- * auth. Defaults to Mistral Medium 3.5 (cheap, supports reasoning_effort=none).
+ * Any model available through Pi works; the extension uses Pi's provider-aware
+ * completion API with your existing authentication. Defaults to Mistral Medium
+ * 3.5.
  */
 const DEFAULT_TITLE_MODEL: TitleModelConfig = {
 	provider: "mistral",
@@ -58,7 +60,6 @@ function loadTitleModelConfig(): TitleModelConfig {
 	return cachedConfig;
 }
 
-const REQUEST_TIMEOUT_MS = 20_000;
 const MAX_TITLE_WORDS = 3;
 const MAX_TITLE_CHARS = 72;
 
@@ -99,29 +100,6 @@ Examples:
 - Broad footer work sustained around telemetry becomes "Compact Pi Footer".
 - Previous "Open Tool Strategy" plus repeated Mistral search output work becomes "Mistral Web Search".
 - Previous "API Auth Refactor" plus one unrelated shell question remains "API Auth Refactor".`;
-
-function responseText(response: any): string {
-	const content = response?.choices?.[0]?.message?.content;
-	if (typeof content === "string") return content.trim();
-	if (!Array.isArray(content)) return "";
-	return content
-		.filter((part: any) => part?.type === "text" && typeof part.text === "string")
-		.map((part: any) => part.text)
-		.join("")
-		.trim();
-}
-
-function chatCompletionsEndpoint(baseUrl: string): string {
-	// The Mistral provider baseUrl is "https://api.mistral.ai" (no /v1), while
-	// OpenAI-compatible chat completions live under /v1/chat/completions. Some
-	// models (e.g. GLM) set a per-model baseUrl already ending in /v1, so only
-	// insert the version segment when it is missing.
-	let normalized = baseUrl.replace(/\/+$/, "");
-	if (!normalized.endsWith("/v1") && !normalized.endsWith("/chat/completions")) {
-		normalized = `${normalized}/v1`;
-	}
-	return normalized.endsWith("/chat/completions") ? normalized : `${normalized}/chat/completions`;
-}
 
 function normalizeTitle(raw: string): string | undefined {
 	let title = raw
@@ -197,9 +175,9 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(configuredModel);
-		if (!auth.ok || !auth.apiKey || !configuredModel.baseUrl || signal.aborted) {
-			lastSkipReason = signal.aborted ? "request cancelled" : `auth or endpoint unavailable: ${auth.ok ? "missing api key/base url" : auth.error}`;
-			debug("auth, endpoint, or request unavailable", auth.ok ? "cancelled" : auth.error);
+		if (!auth.ok || signal.aborted) {
+			lastSkipReason = signal.aborted ? "request cancelled" : `authentication unavailable: ${auth.error}`;
+			debug("authentication or request unavailable", signal.aborted ? "cancelled" : auth.error);
 			return;
 		}
 		debug("requesting title", { sessionId, previousTitle, currentUser: context.currentUserRequest?.slice(0, 80) });
@@ -207,35 +185,17 @@ export default function (pi: ExtensionAPI) {
 		// One bounded, tool-free request updates the completed-turn summary, rolling
 		// focus, and title without placing any of them in the agent context.
 		const prompt = buildTitlePrompt(basename(ctx.cwd), previousTitle, context);
-		const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-		const requestSignal = AbortSignal.any([signal, timeout]);
-		const headers = new Headers({
-			Accept: "application/json",
-			Authorization: `Bearer ${auth.apiKey}`,
-			"Content-Type": "application/json",
-		});
-		for (const [name, value] of Object.entries(auth.headers ?? {})) {
-			if (typeof value === "string") headers.set(name, value);
-		}
-		const response = await fetch(chatCompletionsEndpoint(configuredModel.baseUrl), {
-			method: "POST",
-			headers,
-			body: JSON.stringify({
-				model: MODEL_ID,
-				messages: [
-					{ role: "system", content: TITLE_SYSTEM_PROMPT },
-					{ role: "user", content: prompt },
-				],
-				reasoning_effort: "none",
-				max_tokens: 384,
-				stream: false,
-			}),
-			signal: requestSignal,
-		});
-		if (!response.ok) throw new Error(`Mistral returned HTTP ${response.status}`);
-		const result = await response.json();
+		const result = await requestTitleCompletion(
+			complete,
+			configuredModel,
+			auth,
+			TITLE_SYSTEM_PROMPT,
+			prompt,
+			sessionId,
+			signal,
+		);
 		if (signal.aborted) return;
-		const generated = parseTitleModelResponse(responseText(result));
+		const generated = parseTitleModelResponse(result);
 		const title = normalizeTitle(generated.title ?? "");
 		if (!title) {
 			lastSkipReason = "empty title response";
