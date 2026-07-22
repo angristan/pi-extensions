@@ -32,6 +32,9 @@ Re-registers pi's built-in tools under their native names (`read`, `write`,
 - `execute` delegates to the real built-in tool (reasoning stripped first); when
   `background-jobs` is loaded, `bash` instead uses its managed terminal service
   so quick commands, yielded processes, and `tty: true` prompts share one tool
+- `grep` and `find` reject recursive searches rooted at the home directory, its
+  ancestors, or broad macOS cloud-storage directories. Specific project and
+  subdirectory searches remain allowed, including through symlink-safe checks
 
 Successful `edit`/`write` calls append a syntax-highlighted, line-numbered
 diff inline. Bash commands reuse the bordered box from the `code-blocks`

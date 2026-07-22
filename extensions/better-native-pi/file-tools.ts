@@ -34,8 +34,9 @@ import {
 	generateDiffString,
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import {
 	ContentAddressedImageStore,
 	renderStoredImagePreviews,
@@ -127,7 +128,9 @@ export default function fileTools(pi: ExtensionAPI) {
 		pi.registerTool({
 			name,
 			label: name,
-			description: tool.description,
+			description: name === "grep" || name === "find"
+				? `${tool.description} Broad roots are rejected; choose a specific project or subdirectory.`
+				: tool.description,
 			promptSnippet: tool.promptSnippet,
 			parameters: withReasoning(tool.parameters),
 			prepareArguments: tool.prepareArguments,
@@ -140,6 +143,9 @@ export default function fileTools(pi: ExtensionAPI) {
 			execute: async (id: string, p: any, sig: any, up: any, ctx: any) => {
 				const { rest } = stripReasoning(p);
 				if (name !== "write") {
+					if (name === "grep" || name === "find") {
+						await assertSafeRecursiveSearchRoot(name, rest?.path, ctx.cwd);
+					}
 					const runtimeTool = toolFactories[name]!(ctx.cwd);
 					return runtimeTool.execute(id, rest, sig, up);
 				}
@@ -235,6 +241,94 @@ export default function fileTools(pi: ExtensionAPI) {
 			},
 		});
 	}
+}
+
+const MACOS_CLOUD_SEARCH_ROOTS = [
+	["Library"],
+	["Library", "Mobile Documents"],
+	["Library", "Mobile Documents", "com~apple~CloudDocs"],
+	["Library", "CloudStorage"],
+] as const;
+
+interface SearchRootGuardOptions {
+	homeDir?: string;
+	protectMacOSCloudRoots?: boolean;
+}
+
+/**
+ * Reject recursive roots that contain the home directory or macOS cloud roots.
+ * A specific descendant remains valid, so targeted project searches still work.
+ */
+export async function assertSafeRecursiveSearchRoot(
+	toolName: "grep" | "find",
+	requestedPath: unknown,
+	cwd: string,
+	options: SearchRootGuardOptions = {},
+): Promise<void> {
+	const home = resolve(options.homeDir ?? homedir());
+	const searchRoot = resolveSearchRoot(requestedPath, cwd, home);
+	const protectMacOSCloudRoots = options.protectMacOSCloudRoots ?? process.platform === "darwin";
+
+	if (containsProtectedSearchRoot(searchRoot, home, protectMacOSCloudRoots)) {
+		throw broadSearchRootError(toolName, searchRoot);
+	}
+
+	// Resolve existing symlinks after the lexical check, which blocks known broad
+	// roots without touching them. This prevents an alias elsewhere from bypassing
+	// the guard while avoiding any recursive filesystem access.
+	const canonicalSearchRoot = await realpathIfAvailable(searchRoot);
+	if (!canonicalSearchRoot) return;
+	const canonicalHome = await realpathIfAvailable(home) ?? home;
+	if (containsProtectedSearchRoot(canonicalSearchRoot, canonicalHome, protectMacOSCloudRoots)) {
+		throw broadSearchRootError(toolName, searchRoot);
+	}
+}
+
+async function realpathIfAvailable(path: string): Promise<string | undefined> {
+	try {
+		return await realpath(path);
+	} catch {
+		// Let the built-in tool report missing or inaccessible paths normally.
+		return undefined;
+	}
+}
+
+function resolveSearchRoot(requestedPath: unknown, cwd: string, home: string): string {
+	let value = typeof requestedPath === "string" && requestedPath.length > 0 ? requestedPath : ".";
+	if (value.startsWith("@")) value = value.slice(1);
+	if (value === "~") return home;
+	if (value.startsWith("~/") || value.startsWith("~\\")) {
+		return resolve(home, value.slice(2));
+	}
+	return resolve(cwd, value);
+}
+
+function containsProtectedSearchRoot(
+	searchRoot: string,
+	home: string,
+	protectMacOSCloudRoots: boolean,
+): boolean {
+	const protectedRoots = [home];
+	if (protectMacOSCloudRoots) {
+		for (const segments of MACOS_CLOUD_SEARCH_ROOTS) protectedRoots.push(resolve(home, ...segments));
+	}
+	return protectedRoots.some((protectedRoot) => isEqualOrAncestor(searchRoot, protectedRoot));
+}
+
+function isEqualOrAncestor(candidate: string, target: string): boolean {
+	const pathFromCandidate = relative(candidate, target);
+	return pathFromCandidate === "" || (
+		pathFromCandidate !== ".." &&
+		!pathFromCandidate.startsWith(`..${sep}`) &&
+		!isAbsolute(pathFromCandidate)
+	);
+}
+
+function broadSearchRootError(toolName: "grep" | "find", searchRoot: string): Error {
+	return new Error(
+		`Refusing ${toolName} search at broad root "${searchRoot}". ` +
+		"Choose a specific project or subdirectory; home, ancestor, and macOS cloud-storage roots are blocked to prevent mass downloads.",
+	);
 }
 
 /** Strip our injected `reasoning` before delegating to the real tool. */
