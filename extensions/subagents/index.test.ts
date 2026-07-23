@@ -38,6 +38,8 @@ class FakeClient implements AgentClient {
 	stopError?: Error;
 	promptError?: Error;
 	steerError?: Error;
+	abortError?: Error;
+	abortCalls = 0;
 	constructor(readonly options: AgentClientOptions) {}
 	async start() { this.started = true; }
 	async stop() {
@@ -52,7 +54,10 @@ class FakeClient implements AgentClient {
 		if (this.steerError) throw this.steerError;
 		this.steering.push(message);
 	}
-	async abort() {}
+	async abort() {
+		if (this.abortError) throw this.abortError;
+		this.abortCalls += 1;
+	}
 	onEvent(listener: (event: RpcAgentEvent) => void) { this.events.add(listener); return () => this.events.delete(listener); }
 	onExit(listener: (error: Error) => void) { this.exits.add(listener); return () => this.exits.delete(listener); }
 	getStderr() { return ""; }
@@ -201,7 +206,9 @@ describe("subagents", () => {
 		expect(harness.tool.parameters.properties.context).toMatchObject({ enum: ["fresh", "compacted", "forked"], description: expect.stringContaining("default fresh") });
 		expect(harness.tool.parameters.properties.name).toMatchObject({ maxLength: 80, description: expect.stringContaining("Required unique") });
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("context=compacted") && guideline.includes("context=forked"))).toBe(true);
-		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("action=close") && guideline.includes("consume a process slot"))).toBe(true);
+		expect(harness.tool.parameters.properties.action.enum).toEqual(["spawn", "send", "wait", "list", "read", "interrupt", "close"]);
+		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("action=close") && guideline.includes("conversation slot"))).toBe(true);
+		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("action=read") && guideline.includes("action=interrupt"))).toBe(true);
 		expect(harness.tool.prepareArguments({ action: "send", agent_id: "legacy-id" })).toEqual({ action: "send", agent_name: "legacy-id" });
 		expect(harness.tool.prepareArguments({ action: "wait", agent_ids: ["legacy-a"] })).toEqual({ action: "wait", agent_names: ["legacy-a"] });
 	});
@@ -223,8 +230,11 @@ describe("subagents", () => {
 		expect(started.content[0].text).not.toContain(started.details.agents[0].id);
 		expect(harness.statuses.size).toBe(0);
 
+		const sessionFile = client.options.args[client.options.args.indexOf("--session") + 1];
 		client.complete("Found the relevant files.\u001b]0;unsafe\u0007");
 		await Bun.sleep(0);
+		expect(client.stopped).toBe(true);
+		expect(existsSync(sessionFile)).toBe(true);
 		expect(harness.sentMessages).toHaveLength(1);
 		expect(harness.sentMessages[0].message.content).toContain("Found the relevant files.");
 		expect(harness.sentMessages[0].message.content).toContain(`Agent: ${started.details.agents[0].name}`);
@@ -276,7 +286,7 @@ describe("subagents", () => {
 		expect(card.renderBody(54, 6, renderTheme)).toEqual([]);
 		const listed = await harness.tool.execute("list", { action: "list" }, undefined, undefined, harness.ctx);
 		expect(listed.details.agents.find((agent: any) => agent.name === name)?.status).toBe("completed");
-		expect(harness.clients[0].stopped).toBe(false);
+		expect(harness.clients[0].stopped).toBe(true);
 
 		await harness.tool.execute("close", { action: "close", agent_name: name }, undefined, undefined, harness.ctx);
 		expect(harness.clients[0].stopped).toBe(true);
@@ -699,10 +709,54 @@ describe("subagents", () => {
 		await harness.tool.execute("send-running", { action: "send", agent_name: name, message: "Focus on tests" }, undefined, undefined, harness.ctx);
 		expect(harness.clients[0].steering).toEqual(["Focus on tests"]);
 		expect(harness.overlay.definition.renderBody(54, 6, renderTheme)[2]).toContain("steered: Focus on tests");
+		const originalSession = harness.clients[0].options.args[harness.clients[0].options.args.indexOf("--session") + 1];
 		harness.clients[0].complete("Initial result");
 		await harness.tool.execute("send-idle", { action: "send", agent_name: name, message: "Now inspect docs" }, undefined, undefined, harness.ctx);
-		expect(harness.clients[0].prompts.at(-1)).toBe("Now inspect docs");
+		expect(harness.clients[0].stopped).toBe(true);
+		expect(harness.clients).toHaveLength(2);
+		expect(harness.clients[1].started).toBe(true);
+		expect(harness.clients[1].prompts.at(-1)).toBe("Now inspect docs");
+		expect(harness.clients[1].options.args[harness.clients[1].options.args.indexOf("--session") + 1]).toBe(originalSession);
 		expect(harness.overlay.definition.renderBody(54, 6, renderTheme)[2]).toContain("follow-up: Now inspect");
+	});
+
+	test("reads a hibernated agent response without restarting it", async () => {
+		const harness = createHarness();
+		const started = await spawnAgent(harness, "Produce a reusable result");
+		const name = started.details.agents[0].name;
+		harness.clients[0].complete("Reusable final response");
+		await Bun.sleep(0);
+		const args = { reasoning: "Recall delegated result", action: "read", agent_name: name };
+		const result = await harness.tool.execute("read", args, undefined, undefined, harness.ctx);
+		expect(result.content[0].text).toContain("Reusable final response");
+		expect(result.details.agents[0]).toMatchObject({ status: "completed", output: "Reusable final response" });
+		const lines = rendered(harness.tool.renderResult(result, { isPartial: false, expanded: false }, renderTheme, { args }));
+		expect(lines[0]).toBe("• Read agent Recall delegated result");
+		expect(lines.join("\n")).toContain("result  Reusable final response");
+		expect(harness.clients).toHaveLength(1);
+		expect(harness.clients[0].stopped).toBe(true);
+	});
+
+	test("interrupts a running child and resumes its retained session", async () => {
+		const harness = createHarness();
+		const started = await spawnAgent(harness, "Long-running investigation");
+		const name = started.details.agents[0].name;
+		const originalSession = harness.clients[0].options.args[harness.clients[0].options.args.indexOf("--session") + 1];
+		const args = { reasoning: "Stop broad investigation", action: "interrupt", agent_name: name };
+		const interrupted = await harness.tool.execute("interrupt", args, undefined, undefined, harness.ctx);
+		expect(interrupted.details.agents[0].status).toBe("interrupted");
+		const lines = rendered(harness.tool.renderResult(interrupted, { isPartial: false, expanded: false }, renderTheme, { args }));
+		expect(lines[0]).toBe("• Interrupted agent Stop broad investigation");
+		expect(lines[1]).toContain(`↯ ${name} · fresh context · interrupted`);
+		expect(harness.clients[0].abortCalls).toBe(1);
+		expect(harness.clients[0].stopped).toBe(true);
+		expect(existsSync(originalSession)).toBe(true);
+		expect(harness.sentMessages).toHaveLength(0);
+
+		await harness.tool.execute("resume", { action: "send", agent_name: name, message: "Continue with a narrower scope" }, undefined, undefined, harness.ctx);
+		expect(harness.clients).toHaveLength(2);
+		expect(harness.clients[1].prompts).toEqual(["Continue with a narrower scope"]);
+		expect(harness.clients[1].options.args[harness.clients[1].options.args.indexOf("--session") + 1]).toBe(originalSession);
 	});
 
 	test("preserves child state when steer or follow-up dispatch is rejected", async () => {
@@ -720,23 +774,30 @@ describe("subagents", () => {
 		harness.clients[0].complete("Initial result");
 		await Bun.sleep(0);
 		const notificationCount = harness.sentMessages.length;
-		harness.clients[0].promptError = new Error("prompt rejected");
-		await expect(harness.tool.execute("send-idle", {
+		const rejectedFollowUp = harness.tool.execute("send-idle", {
 			action: "send", agent_name: name, message: "Rejected follow-up",
-		}, undefined, undefined, harness.ctx)).rejects.toThrow("prompt rejected");
+		}, undefined, undefined, harness.ctx);
+		expect(harness.clients).toHaveLength(2);
+		harness.clients[1].promptError = new Error("prompt rejected");
+		await expect(rejectedFollowUp).rejects.toThrow("prompt rejected");
 		await Bun.sleep(0);
 		listed = await harness.tool.execute("list", { action: "list" }, undefined, undefined, harness.ctx);
 		expect(listed.details.agents[0]).toMatchObject({ status: "completed", error: undefined, output: "Initial result" });
 		expect(harness.sentMessages).toHaveLength(notificationCount);
 	});
 
-	test("enforces the open-agent limit until a child is closed", async () => {
+	test("enforces the conversation limit until a hibernated child is closed", async () => {
 		const harness = createHarness({ maxAgents: 2 });
 		const first = await spawnAgent(harness, "First");
+		const sessionFile = harness.clients[0].options.args[harness.clients[0].options.args.indexOf("--session") + 1];
 		await spawnAgent(harness, "Second");
+		harness.clients[0].complete("First complete");
+		await Bun.sleep(0);
+		expect(harness.clients[0].stopped).toBe(true);
+		expect(existsSync(sessionFile)).toBe(true);
 		await expect(spawnAgent(harness, "Third")).rejects.toThrow("At most 2 subagents");
 		await harness.tool.execute("close", { action: "close", agent_name: first.details.agents[0].name }, undefined, undefined, harness.ctx);
-		expect(harness.clients[0].stopped).toBe(true);
+		expect(existsSync(sessionFile)).toBe(false);
 		await expect(spawnAgent(harness, "Third")).resolves.toBeDefined();
 	});
 
@@ -776,11 +837,13 @@ describe("subagents", () => {
 		expect(harness.overlay.unregistered).toBe(true);
 	});
 
-	test("retries close after stop failure and still clears live UI", async () => {
+	test("retries close after hibernation fails and still clears live UI", async () => {
 		const harness = createHarness();
 		const started = await spawnAgent(harness);
 		const name = started.details.agents[0].name;
 		harness.clients[0].stopError = new Error("stop failed");
+		harness.clients[0].complete("Completed before stop failure");
+		await Bun.sleep(0);
 		await expect(harness.tool.execute("close", { action: "close", agent_name: name }, undefined, undefined, harness.ctx)).rejects.toThrow("stop failed");
 		expect(harness.overlay.definition.visible()).toBe(false);
 		expect(harness.statuses.size).toBe(0);

@@ -48,7 +48,7 @@ Complete only the explicit task below.
 Work autonomously with the available tools. Return a concise final result with relevant file paths, commands, findings, or remaining blockers.
 Do not ask the user questions; report any missing information to the parent agent.`;
 
-export type AgentStatus = "starting" | "running" | "completed" | "failed" | "closed";
+export type AgentStatus = "starting" | "running" | "completed" | "failed" | "interrupted" | "closed";
 
 interface AgentUsage {
 	input: number;
@@ -77,6 +77,7 @@ export interface AgentSnapshot {
 
 interface ManagedAgent extends AgentSnapshot {
 	client?: AgentClient;
+	clientOptions: AgentClientOptions;
 	fork: ContextFork;
 	completion: Promise<void>;
 	resolveCompletion: () => void;
@@ -86,6 +87,8 @@ interface ManagedAgent extends AgentSnapshot {
 	suppressNotifications: boolean;
 	generation: number;
 	cleanupComplete: boolean;
+	hibernatePromise?: Promise<void>;
+	resumePromise?: Promise<AgentClient>;
 	closePromise?: Promise<void>;
 }
 
@@ -169,6 +172,7 @@ function statusSymbol(status: AgentStatus): string {
 	if (status === "starting" || status === "running") return "●";
 	if (status === "completed") return "✓";
 	if (status === "failed") return "×";
+	if (status === "interrupted") return "↯";
 	return "■";
 }
 
@@ -379,6 +383,8 @@ function actionVerb(action: unknown, partial: boolean, details?: ToolDetails): s
 		return partial ? "Waiting for agents" : "Waited for agents";
 	}
 	if (action === "list") return partial ? "Listing agents" : "Listed agents";
+	if (action === "read") return partial ? "Reading agent" : "Read agent";
+	if (action === "interrupt") return partial ? "Interrupting agent" : "Interrupted agent";
 	if (action === "close") return partial ? "Closing agent" : "Closed agent";
 	return partial ? "Using agents" : "Used agents";
 }
@@ -448,7 +454,7 @@ function expandedResultLines(agent: AgentSnapshot, width: number, theme: any): s
 }
 
 function isSettled(agent: AgentSnapshot): boolean {
-	return agent.status === "completed" || agent.status === "failed";
+	return agent.status === "completed" || agent.status === "failed" || agent.status === "interrupted";
 }
 
 function agentBodyLines(
@@ -518,7 +524,7 @@ function renderAgentResult(result: any, options: ToolRenderOptions, theme: any, 
 				: action === "send"
 					? compact(String(args?.message ?? ""), 240)
 					: agent.task;
-			const showsCompletion = (action === "wait" || action === "list") && completed;
+			const showsCompletion = (action === "wait" || action === "list" || action === "read") && completed;
 			lines.push(...agentBodyLines(agent, width, theme, {
 				prompt,
 				showResult: showsCompletion,
@@ -564,7 +570,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	const usedAgentNames = new Set<string>();
 	const reservedAgentNames = new Set<string>();
 
-	const openAgents = () => [...agents.values()].filter((agent) => agent.client);
+	const openAgents = () => [...agents.values()].filter((agent) => agent.status !== "closed" && !agent.cleanupComplete);
 	const orderedAgents = () => [...agents.values()].sort((a, b) => Number(isActive(b)) - Number(isActive(a)) || b.startedAt - a.startedAt);
 	const activeAgents = () => orderedAgents().filter((agent) => agent.client && isActive(agent));
 	const overlayCard = registerCard({
@@ -684,6 +690,22 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			agent.completionDelivery = "none";
 		}
 	};
+	const hibernateAgent = async (agent: ManagedAgent): Promise<void> => {
+		if (agent.hibernatePromise) return agent.hibernatePromise;
+		const client = agent.client;
+		if (!client) return;
+		const operation = (async () => {
+			await client.stop();
+			if (agent.client === client) agent.client = undefined;
+			updateOverlay();
+		})();
+		agent.hibernatePromise = operation;
+		try {
+			await operation;
+		} finally {
+			if (agent.hibernatePromise === operation) agent.hibernatePromise = undefined;
+		}
+	};
 	const finishRun = (agent: ManagedAgent, status: "completed" | "failed", error?: string) => {
 		if (agent.runSettled || agent.status === "closed") return;
 		agent.runSettled = true;
@@ -693,6 +715,11 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		agent.resolveCompletion();
 		updateOverlay();
 		queueMicrotask(() => notifyCompletion(agent));
+		void hibernateAgent(agent).catch((hibernateError) => {
+			agent.activity.push(`hibernate failed: ${compact(hibernateError instanceof Error ? hibernateError.message : String(hibernateError), 100)}`);
+			if (agent.activity.length > 12) agent.activity.shift();
+			updateOverlay();
+		});
 	};
 	const handleEvent = (agent: ManagedAgent, event: RpcAgentEvent) => {
 		if (agent.status === "closed") return;
@@ -738,6 +765,72 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		}
 		if (event.type === "agent_settled") finishRun(agent, agent.error ? "failed" : "completed", agent.error);
 	};
+	const attachClient = (agent: ManagedAgent, client: AgentClient): void => {
+		agent.client = client;
+		client.onEvent((event) => {
+			if (agent.client !== client) return;
+			handleEvent(agent, event);
+			activeTranscriptRefresh?.();
+		});
+		client.onExit((error) => {
+			if (agent.client !== client) return;
+			agent.client = undefined;
+			updateOverlay();
+			void agent.fork.cleanup().then(
+				() => {
+					agent.cleanupComplete = true;
+					if (isActive(agent)) finishRun(agent, "failed", error.message);
+					else {
+						if (agent.status !== "closed") {
+							agent.status = "closed";
+							agent.endedAt ??= Date.now();
+							updateOverlay();
+						}
+						trimClosed();
+					}
+				},
+				(cleanupError) => {
+					const message = `${error.message}; context cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`;
+					if (isActive(agent)) finishRun(agent, "failed", message);
+					else {
+						agent.status = "closed";
+						agent.error = boundedText(sanitizeTerminal(message), 4 * 1024);
+						agent.endedAt ??= Date.now();
+						updateOverlay();
+					}
+				},
+			);
+		});
+	};
+	const ensureClient = async (agent: ManagedAgent): Promise<AgentClient> => {
+		if (agent.status === "closed" || agent.cleanupComplete) throw new Error(`Agent ${agent.name} is closed`);
+		if (agent.hibernatePromise) {
+			try { await agent.hibernatePromise; }
+			catch (error) { if (!agent.client) throw error; }
+		}
+		if (agent.resumePromise) return agent.resumePromise;
+		if (agent.client) return agent.client;
+		const operation = (async () => {
+			const client = createClient(agent.clientOptions);
+			attachClient(agent, client);
+			try {
+				await client.start();
+				assertCurrentSession(agent.generation);
+				if (agent.status === "closed") throw new Error(`Agent ${agent.name} is closed`);
+				return client;
+			} catch (error) {
+				if (agent.client === client) agent.client = undefined;
+				try { await client.stop(); } catch { /* Preserve the restart error. */ }
+				throw error;
+			}
+		})();
+		agent.resumePromise = operation;
+		try {
+			return await operation;
+		} finally {
+			if (agent.resumePromise === operation) agent.resumePromise = undefined;
+		}
+	};
 	const closeAgent = async (agent: ManagedAgent, suppressNotification = true) => {
 		agent.suppressNotifications ||= suppressNotification;
 		if (agent.closePromise) return agent.closePromise;
@@ -749,9 +842,11 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			agent.resolveCompletion();
 		}
 		updateOverlay();
-		const client = agent.client;
 		const operation = (async () => {
 			try {
+				try { await agent.hibernatePromise; } catch { /* Retry the stop below. */ }
+				try { await agent.resumePromise; } catch { /* Cleanup continues below. */ }
+				const client = agent.client;
 				await client?.stop();
 				if (agent.client === client) agent.client = undefined;
 				await agent.fork.cleanup();
@@ -768,6 +863,28 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			if (agent.closePromise === operation) agent.closePromise = undefined;
 		}
 	};
+	const interruptAgent = async (agent: ManagedAgent): Promise<void> => {
+		if (!isActive(agent)) return;
+		agent.suppressNotifications = true;
+		agent.runSettled = true;
+		agent.status = "interrupted";
+		agent.endedAt = Date.now();
+		agent.error = undefined;
+		agent.activity.push("interrupted");
+		if (agent.activity.length > 12) agent.activity.shift();
+		agent.resolveCompletion();
+		updateOverlay();
+		const client = agent.client;
+		if (client) {
+			try { await client.abort(); }
+			catch (error) {
+				agent.activity.push(`abort failed: ${compact(error instanceof Error ? error.message : String(error), 100)}`);
+				if (agent.activity.length > 12) agent.activity.shift();
+			}
+		}
+		agent.error = undefined;
+		await hibernateAgent(agent);
+	};
 	const startAgent = async (task: string, ctx: any, contextMode: ContextMode = "fresh", name?: string, signal?: AbortSignal): Promise<ManagedAgent> => {
 		const normalizedTask = boundedInput(task, "spawn task", MAX_TASK_CHARS);
 		const normalizedName = normalizeAgentName(name);
@@ -782,12 +899,13 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			fork = await forkContext(ctx, contextMode, compactedSummary);
 			assertCurrentSession(reservation.generation);
 			const invocation = getPiInvocation(buildArgs(pi, ctx, fork));
-			const client = createClient({
+			const clientOptions: AgentClientOptions = {
 				command: invocation.command,
 				args: invocation.args,
 				cwd: ctx.cwd,
 				env: childEnvironment(id),
-			});
+			};
+			const client = createClient(clientOptions);
 			let resolveCompletion!: () => void;
 			agent = {
 				id,
@@ -802,6 +920,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				activity: [],
 				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
 				client,
+				clientOptions,
 				fork,
 				completion: new Promise<void>((resolve) => { resolveCompletion = resolve; }),
 				resolveCompletion,
@@ -814,38 +933,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			};
 			agents.set(id, agent);
 			reservation.commit();
-			client.onEvent((event) => {
-				handleEvent(agent!, event);
-				activeTranscriptRefresh?.();
-			});
-			client.onExit((error) => {
-				if (agent!.client === client) agent!.client = undefined;
-				updateOverlay();
-				void agent!.fork.cleanup().then(
-					() => {
-						agent!.cleanupComplete = true;
-						if (isActive(agent!)) finishRun(agent!, "failed", error.message);
-						else {
-							if (agent!.status !== "closed") {
-								agent!.status = "closed";
-								agent!.endedAt ??= Date.now();
-								updateOverlay();
-							}
-							trimClosed();
-						}
-					},
-					(cleanupError) => {
-						const message = `${error.message}; context cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`;
-						if (isActive(agent!)) finishRun(agent!, "failed", message);
-						else {
-							agent!.status = "closed";
-							agent!.error = boundedText(sanitizeTerminal(message), 4 * 1024);
-							agent!.endedAt ??= Date.now();
-							updateOverlay();
-						}
-					},
-				);
-			});
+			attachClient(agent, client);
 			updateOverlay();
 			await client.start();
 			assertCurrentSession(reservation.generation);
@@ -908,24 +996,25 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	pi.registerTool({
 		name: TOOL_NAME,
 		label: "Agents",
-		description: "Spawn and coordinate uniquely named child agents with isolated persistent context. Actions: spawn starts one immediately; send continues it by name; wait collects one or more named results; list shows status; close stops and releases it. Children inherit the current model, tools, working directory, and project instructions. Conversation context can be fresh, compacted, or forked; fresh is the default. Completion results also arrive automatically.",
+		description: "Spawn and coordinate uniquely named child agents with isolated persistent context. Actions: spawn starts one; send steers or resumes it; wait collects results; list shows status; read returns the latest response; interrupt stops the current turn but preserves context; close deletes it. Settled child processes hibernate until send resumes them. Children inherit the current model, tools, working directory, and project instructions. Conversation context can be fresh, compacted, or forked; fresh is the default. Completion results also arrive automatically.",
 		promptSnippet: "Spawn and coordinate isolated child agents for explicitly delegated work",
 		promptGuidelines: [
 			"Use agents only when the user or applicable project instructions request delegation, subagents, or parallel agent work.",
 			"Call agents with action=spawn for concrete independent tasks; give each child a concise task-specific name that is unique in the current session; multiple spawn calls can run concurrently, and the parent should continue useful non-overlapping work.",
 			"Agents use fresh conversation context by default. Set context=compacted when prior decisions matter, or context=forked only when the exact parent conversation is required.",
 			"Use agents action=wait only when blocked on child results; completed children report back automatically.",
-			"After collecting a child's final result, call agents with action=close when no further follow-up is needed; completed children remain open and consume a process slot until closed.",
+			"Use agents action=read to retrieve a child's latest response again without restarting it, and action=interrupt to stop active work while preserving the conversation for follow-up.",
+			"After collecting a child's final result, call agents with action=close when no further follow-up is needed; settled children hibernate but retain a conversation slot until closed.",
 			"Give concurrently writing child agents disjoint file scopes to avoid conflicting edits.",
 		],
 		parameters: withReasoning({
 			type: "object",
 			properties: {
-				action: { type: "string", enum: ["spawn", "send", "wait", "list", "close"], description: "Lifecycle action" },
+				action: { type: "string", enum: ["spawn", "send", "wait", "list", "read", "interrupt", "close"], description: "Lifecycle action" },
 				task: { type: "string", maxLength: MAX_TASK_CHARS, description: "Concrete task for spawn" },
 				context: { type: "string", enum: ["fresh", "compacted", "forked"], description: "Conversation context for spawn (default fresh)" },
 				name: { type: "string", maxLength: MAX_AGENT_NAME_CHARS, description: "Required unique human-readable name for spawn" },
-				agent_name: { type: "string", description: "Agent name for send or close" },
+				agent_name: { type: "string", description: "Agent name for send, read, interrupt, or close" },
 				message: { type: "string", maxLength: MAX_MESSAGE_CHARS, description: "Follow-up instruction for send" },
 				agent_names: { type: "array", items: { type: "string" }, description: "Agent names for wait; defaults to all running agents" },
 				timeout_ms: { type: "integer", minimum: 0, maximum: MAX_WAIT_MS, description: `Wait timeout in milliseconds (default ${DEFAULT_WAIT_MS})` },
@@ -953,11 +1042,9 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			if (params.action === "send") {
 				const agent = resolveAgent(String(params.agent_name ?? ""));
 				if (!agent) throw new Error(`Agent not found: ${params.agent_name ?? ""}`);
-				if (!agent.client || agent.status === "closed") throw new Error(`Agent ${agent.name} is closed`);
+				if (agent.status === "closed" || agent.cleanupComplete) throw new Error(`Agent ${agent.name} is closed`);
 				const message = boundedInput(params.message, "send message", MAX_MESSAGE_CHARS);
 				const beginFollowUp = async () => {
-					const client = agent.client;
-					if (!client || agent.status === "closed") throw new Error(`Agent ${agent.name} is closed`);
 					const previous = {
 						status: agent.status,
 						startedAt: agent.startedAt,
@@ -971,6 +1058,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 						resolveCompletion: agent.resolveCompletion,
 						runSettled: agent.runSettled,
 					};
+					const client = await ensureClient(agent);
 					agent.status = "running";
 					agent.startedAt = Date.now();
 					agent.endedAt = undefined;
@@ -989,19 +1077,21 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 							Object.assign(agent, previous);
 							rejectedRunResolve();
 							updateOverlay();
+							void hibernateAgent(agent).catch(() => { /* Retried by close or send. */ });
 						}
 						throw error;
 					}
 				};
 				if (isActive(agent)) {
+					const client = await ensureClient(agent);
 					try {
-						await agent.client.steer(message);
+						await client.steer(message);
 						agent.activity.push(`steered: ${compact(message, 100)}`);
 						if (agent.activity.length > 12) agent.activity.shift();
 					} catch (error) {
 						// The child may settle between our status check and the RPC
 						// command. In that case continue it as a fresh prompt.
-						if (!isActive(agent) && agent.client) await beginFollowUp();
+						if (!isActive(agent)) await beginFollowUp();
 						else throw error;
 					}
 				} else await beginFollowUp();
@@ -1036,6 +1126,23 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			if (params.action === "list") {
 				const data = orderedAgents().map(snapshot);
 				return { content: [{ type: "text", text: formatAgents(data, false) }], details: { action: "list", agents: data } satisfies ToolDetails };
+			}
+			if (params.action === "read") {
+				const agent = resolveAgent(String(params.agent_name ?? ""));
+				if (!agent) throw new Error(`Agent not found: ${params.agent_name ?? ""}`);
+				const data = snapshot(agent);
+				return { content: [{ type: "text", text: formatAgent(data, true) }], details: { action: "read", agents: [data] } satisfies ToolDetails };
+			}
+			if (params.action === "interrupt") {
+				const agent = resolveAgent(String(params.agent_name ?? ""));
+				if (!agent) throw new Error(`Agent not found: ${params.agent_name ?? ""}`);
+				const wasActive = isActive(agent);
+				await interruptAgent(agent);
+				const data = snapshot(agent);
+				const text = wasActive
+					? `Interrupted ${agent.name}; its conversation remains available for follow-up.`
+					: `${agent.name} is already ${agent.status}; no interrupt was needed.`;
+				return { content: [{ type: "text", text }], details: { action: "interrupt", agents: [data] } satisfies ToolDetails };
 			}
 			if (params.action === "close") {
 				const agent = resolveAgent(String(params.agent_name ?? ""));

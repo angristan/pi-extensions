@@ -14,7 +14,7 @@ specialization.
 
 ## Agent tool
 
-The extension registers one `agents` tool with five actions. Every call also
+The extension registers one `agents` tool with seven actions. Every call also
 uses the same concise `reasoning` intent field as the repository's native-style
 tools.
 
@@ -24,7 +24,9 @@ tools.
 | `send` | `agent_name`, `message` | Steer a running child or continue an idle child |
 | `wait` | `agent_names?`, `timeout_ms?` | Wait for selected children, or every running child |
 | `list` | — | List child status without waiting |
-| `close` | `agent_name` | Stop the child process and release its context |
+| `read` | `agent_name` | Return the child's latest final response without restarting it |
+| `interrupt` | `agent_name` | Stop the current turn while retaining the conversation for follow-up |
+| `close` | `agent_name` | Stop the child process and permanently release its context |
 
 Multiple `spawn` calls can execute concurrently. Name reservations are atomic,
 so case-insensitive duplicates fail immediately even during concurrent startup.
@@ -68,7 +70,8 @@ Waited and automatic completions share the exact same body.
 ```
 
 Spawn cards show identity and prompt. Send cards show identity and the follow-up
-prompt. Close cards show identity only, avoiding repeated historical details.
+prompt. Read cards show the latest result and usage. Interrupt and close cards show
+identity only, avoiding repeated historical details.
 
 In TUI mode, actively running children also appear in the shared top-right
 overlay stack:
@@ -124,17 +127,20 @@ session:
 - For `compacted` and `forked`, the unresolved assistant tool-call turn is excluded.
 - The child runs in the same working directory and sees the same project files.
 - Child dialogs are cancelled because no interactive UI is attached to the RPC process.
-- Follow-ups reuse the same child conversation.
+- Settled and interrupted children hibernate: their RPC process exits while the temporary session remains available.
+- Follow-ups lazily start a new child process against the retained session and continue the same conversation.
+- `read` retrieves the latest response without waking a hibernated child.
+- `interrupt` aborts active work, hibernates the child, and preserves its session; `close` permanently removes it.
 - Session shutdown and `/reload` cancel pending spawns, terminate every child process tree, and remove temporary sessions.
 - A child cannot spawn grandchildren.
 
-Up to six child processes may remain open at once. Capacity is reserved before
+Up to six child conversations may remain open at once. Capacity is reserved before
 asynchronous startup, so concurrent `spawn` calls cannot exceed the limit.
-Completed children do not expire automatically: they remain available for
-follow-ups and count toward that limit until `close` is called. The parent is
-instructed to close a child after collecting its final result when no further
-follow-up is needed. Closed child summaries remain visible for the current
-parent session.
+Settled children do not keep a process alive, but their retained sessions remain
+available for reads and follow-ups and count toward the limit until `close` is
+called. The parent is instructed to close a child after collecting its final result
+when no further follow-up is needed. Closed child summaries remain visible for the
+current parent session.
 
 ## Input and output limits
 
