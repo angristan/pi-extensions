@@ -1,12 +1,31 @@
 import { expect, test } from "bun:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { renderCodeBox } from "./index";
+import { renderCodeBlock, renderCodeBox } from "./index";
 
 const theme = {
 	codeBlock: (text: string) => text,
 	codeBlockBorder: (text: string) => text,
 	highlightCode: (code: string) => code.split("\n"),
 };
+
+test("renders Markdown code between horizontal rules without decorating code rows", () => {
+	const lines = renderCodeBlock("const value = 1;\nreturn value;", "ts extra", 40, theme);
+
+	const codeRows = lines.slice(1, -1);
+	expect(lines[0]).toStartWith("── ts ");
+	expect(codeRows).toEqual(["const value = 1;", "return value;"]);
+	expect(visibleWidth(lines.at(-1)!)).toBe(Math.max(...codeRows.map(visibleWidth)));
+	expect(visibleWidth(lines.at(-1)!)).toBeLessThan(40);
+	expect(codeRows.every((line) => !/[╭╮│╰╯]/.test(line))).toBe(true);
+});
+
+test("uses a generic label when a Markdown fence has no language", () => {
+	const lines = renderCodeBlock("one\ntwo", "", 20, theme);
+
+	expect(lines[0]).toStartWith("── code ");
+	expect(lines.slice(1, -1)).toEqual(["one", "two"]);
+	expect(visibleWidth(lines.at(-1)!)).toBe(12);
+});
 
 test("renders a width-safe bordered block with a normalized language label", () => {
 	const lines = renderCodeBox("const value = 123456789;\nreturn value;", "ts extra", 18, theme);
