@@ -15,9 +15,10 @@ should not create a goal.
 
 The goal is a short statement plus optional **validation criteria**. A compact
 summary is surfaced in its own overlay card, while the full goal is available via
-`/goal-status` and injected into the system prompt on every turn. Objective and
-validation text are wrapped as untrusted user-provided data before reaching the
-model.
+`/goal-status`. Canonical goal-state changes are appended as hidden model-context
+messages, including fresh anchors after restore and compaction, so the system
+prompt remains stable. Objective and validation text are wrapped as untrusted
+user-provided data before reaching the model.
 
 ## How the loop works
 
@@ -111,22 +112,23 @@ All sections except `# Goal` are optional.
   overwrite an active/paused/blocked goal and asks the caller to re-call with
   `replace: true`, so an in-progress goal cannot be silently redefined around
   an easier task.
-- **`goal_complete`** — active only while a `/goal` is active; marks the goal
-  complete and accepts an optional `summary`. The completion block also shows
+- **`goal_complete`** — introduced when a `/goal` first becomes active; marks the
+  goal complete and accepts an optional `summary`. The completion block also shows
   the goal's lifetime stats (active time, cycles, criteria, and token
   usage), since the overlay card hides once the goal is complete. This block is
   the sole completion feedback for tool-driven completion; manual `/goal
   complete` surfaces the same stats once via a notification.
-- **`goal_block`** — active only while a `/goal` is active; records a blocker.
-  Optional fields can describe the blocker, attempted work, supporting detail,
-  and next input; marks the goal `blocked` only after the same blocker repeats
-  three times.
+- **`goal_block`** — introduced when a `/goal` first becomes active; records a
+  blocker. Optional fields can describe the blocker, attempted work, supporting
+  detail, and next input; marks the goal `blocked` only after the same blocker
+  repeats three times.
 
-`goal_set` is always registered. `goal_complete` and `goal_block` are removed
-from the active tool set when no goal is active. If a stale in-flight model
-request still calls one of them, the call is ignored silently so it does not
-add noisy "no active goal" output to the transcript — the rendered block is
-hidden too.
+`goal_set` is always registered. `goal_complete` and `goal_block` start inactive,
+are added when the first goal becomes active, and remain in the active loadout for
+the rest of that session. This monotonic activation preserves deferred-tool and
+prompt-cache reuse across pause, block, completion, and clear transitions. Calls
+made while no goal is active are ignored silently so they do not add noisy output
+to the transcript; the rendered block is hidden too.
 
 All three tools render as the same compact 2-line transcript blocks as the native
 and web tools (`renderShell: "self"`): a `• verb` headline whose bullet color

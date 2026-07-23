@@ -4,10 +4,12 @@ Track a multi-step plan as a collapsible overlay above the editor, and expose a
 tool the agent can call to maintain it.
 
 The agent maintains the plan via the `update_plan` tool; this extension owns the
-tool logic, validation, persistence, prompt guard, and plan-section rendering.
-The package's generic `overlay-stack` only supplies consistent card framing and
-places that section on screen. If the `goal` extension is active, its separate
-card can appear above the plan.
+tool logic, validation, persistence, agent guidance, and plan-section rendering.
+Each update remains in its append-only tool result instead of rebuilding the
+system prompt with mutable plan state, preserving prompt-prefix cache reuse. The
+package's generic `overlay-stack` only supplies consistent card framing and places
+that section on screen. If the `goal` extension is active, its separate card can
+appear above the plan.
 
 ```
 ╭ Plan 1/3 ─────────────────────────────────╮

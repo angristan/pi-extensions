@@ -147,6 +147,10 @@ function isContinuation(message: any) {
 	return message?.customType === "goal-continuation";
 }
 
+function sentMessages(harness: ReturnType<typeof makeHarness>, customType: string) {
+	return harness.sent.filter(({ message }) => message?.customType === customType);
+}
+
 test("reserves goal_set for long-running autonomous work", () => {
 	const h = makeHarness();
 	const description = h.tools.goal_set.description;
@@ -244,19 +248,60 @@ test("wraps goal data as escaped untrusted context", () => {
 	expect(text).not.toContain("<do>&override</do>");
 });
 
+test("appends active goal context without rebuilding the system prompt", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("ship <unsafe>&", h.ctx);
+
+	expect(h.handlers.before_agent_start).toBeUndefined();
+	const contexts = sentMessages(h, "goal-context");
+	expect(contexts).toHaveLength(1);
+	expect(contexts[0]!.options).toEqual({ deliverAs: "steer" });
+	expect(contexts[0]!.message.content).toContain("## Active session goal");
+	expect(contexts[0]!.message.content).toContain("ship &lt;unsafe&gt;&amp;");
+	expect(contexts[0]!.message.content).not.toContain("ship <unsafe>&");
+});
+
+test("re-anchors persisted goal context after restore and compaction", async () => {
+	const h = makeHarness();
+	h.entries.push({
+		type: "custom",
+		customType: "goal-state",
+		data: {
+			state: {
+				objective: "finish the migration",
+				validation: ["all checks pass"],
+				status: "active",
+				createdAt: 1,
+				updatedAt: 1,
+				activeSince: 1,
+				accumulatedActiveMs: 0,
+				continuations: 2,
+			},
+		},
+	});
+
+	await emit(h, "session_start");
+	expect(sentMessages(h, "goal-context")).toHaveLength(1);
+	expect(sentMessages(h, "goal-context")[0]!.message.content).toContain("finish the migration");
+
+	await emit(h, "session_compact");
+	expect(sentMessages(h, "goal-context")).toHaveLength(2);
+	expect(sentMessages(h, "goal-context").at(-1)!.message.content).toContain("finish the migration");
+});
+
 test("continuation prompt is injected transiently and stale markers are pruned", async () => {
 	const h = makeHarness();
 	await h.commands.goal.handler("ship <unsafe>&", h.ctx);
 
-	expect(h.sent).toHaveLength(1);
-	expect(h.sent[0]!.message.content).toBe("Goal continuation requested.");
-	expect(h.sent[0]!.message.content).not.toContain("unsafe");
+	const continuation = sentMessages(h, "goal-continuation")[0]!;
+	expect(continuation.message.content).toBe("Goal continuation requested.");
+	expect(continuation.message.content).not.toContain("unsafe");
 
 	await emit(h, "turn_start", { turnIndex: 0, timestamp: 0 });
 	const result = await context(h, [
 		{ customType: "goal-continuation", content: "stale", display: false },
 		{ role: "assistant", content: [] },
-		h.sent[0]!.message,
+		continuation.message,
 	]);
 
 	expect(result.messages).toHaveLength(2);
@@ -266,7 +311,7 @@ test("continuation prompt is injected transiently and stale markers are pruned",
 	expect(injected.content).toContain("Completion audit:");
 	expect(injected.details.transient).toBe(true);
 
-	const second = await context(h, [h.sent[0]!.message, { role: "assistant", content: [] }]);
+	const second = await context(h, [continuation.message, { role: "assistant", content: [] }]);
 	expect(second.messages.some(isContinuation)).toBe(false);
 });
 
@@ -287,7 +332,7 @@ test("replacing an unfinished goal requires confirmation", async () => {
 	expect(latestGoalState(h).objective).toBe("replacement goal");
 });
 
-test("goal tools are active only while a goal is active", async () => {
+test("goal tools stay active after their first session activation", async () => {
 	const h = makeHarness();
 	await emit(h, "session_start");
 	for (const name of ["goal_complete", "goal_block"]) {
@@ -305,8 +350,14 @@ test("goal tools are active only while a goal is active", async () => {
 
 	await h.tools.goal_complete.execute("complete", {}, undefined, undefined, h.ctx);
 	for (const name of ["goal_complete", "goal_block"]) {
-		expect(h.activeTools.has(name)).toBe(false);
+		expect(h.activeTools.has(name)).toBe(true);
 	}
+
+	await h.commands.goal.handler("clear", h.ctx);
+	for (const name of ["goal_complete", "goal_block"]) {
+		expect(h.activeTools.has(name)).toBe(true);
+	}
+	expect(sentMessages(h, "goal-context").at(-1)!.message.content).toContain("has been cleared");
 });
 
 test("editing a completed goal reactivates it and starts the loop", async () => {
@@ -314,7 +365,8 @@ test("editing a completed goal reactivates it and starts the loop", async () => 
 	await h.commands.goal.handler("initial goal", h.ctx);
 	await h.commands.goal.handler("complete", h.ctx);
 	expect(latestGoalState(h).status).toBe("complete");
-	const sentBeforeEdit = h.sent.length;
+	const contextsBeforeEdit = sentMessages(h, "goal-context").length;
+	const continuationsBeforeEdit = sentMessages(h, "goal-continuation").length;
 
 	h.setEditorValue("# Goal\nreactivated goal\n\n## Validation\n- evidence checked\n");
 	await h.commands.goal.handler("edit", h.ctx);
@@ -324,14 +376,16 @@ test("editing a completed goal reactivates it and starts the loop", async () => 
 	expect(state.completedAt).toBeUndefined();
 	expect(state.objective).toBe("reactivated goal");
 	expect(state.validation).toEqual(["evidence checked"]);
-	expect(h.sent).toHaveLength(sentBeforeEdit + 1);
-	expect(h.sent.at(-1)!.message.content).toBe("Goal continuation requested.");
+	expect(sentMessages(h, "goal-context")).toHaveLength(contextsBeforeEdit + 1);
+	expect(sentMessages(h, "goal-continuation")).toHaveLength(continuationsBeforeEdit + 1);
+	expect(sentMessages(h, "goal-continuation").at(-1)!.message.content).toBe("Goal continuation requested.");
 });
 
 test("terminal provider errors block the active goal instead of continuing", async () => {
 	const h = makeHarness();
 	await h.commands.goal.handler("initial goal", h.ctx);
-	const sentBeforeError = h.sent.length;
+	const contextsBeforeError = sentMessages(h, "goal-context").length;
+	const continuationsBeforeError = sentMessages(h, "goal-continuation").length;
 
 	await emit(h, "message_end", {
 		message: { role: "assistant", stopReason: "error", errorMessage: "429 too many requests" },
@@ -342,7 +396,9 @@ test("terminal provider errors block the active goal instead of continuing", asy
 	expect(state.status).toBe("blocked");
 	expect(state.blockedAudit.fingerprint).toBe("provider-usage-limit");
 	expect(state.blockedAudit.evidence).toBe("429 too many requests");
-	expect(h.sent).toHaveLength(sentBeforeError);
+	expect(sentMessages(h, "goal-context")).toHaveLength(contextsBeforeError + 1);
+	expect(sentMessages(h, "goal-context").at(-1)!.message.content).toContain("goal below is blocked");
+	expect(sentMessages(h, "goal-continuation")).toHaveLength(continuationsBeforeError);
 });
 
 // Render the lines a tool block component produces. The harness mocks the
@@ -445,8 +501,10 @@ test("goal_set is always available and sets a fresh active goal", async () => {
 	expect(state.validation).toEqual(["bun test is green"]);
 	expect(h.activeTools.has("goal_complete")).toBe(true);
 	expect(h.activeTools.has("goal_block")).toBe(true);
-	expect(h.sent).toHaveLength(1);
-	expect(h.sent[0]!.message.content).toBe("Goal continuation requested.");
+	expect(sentMessages(h, "goal-context")).toHaveLength(1);
+	expect(sentMessages(h, "goal-context")[0]!.message.content).toContain("make all tests pass");
+	expect(sentMessages(h, "goal-continuation")).toHaveLength(1);
+	expect(sentMessages(h, "goal-continuation")[0]!.message.content).toBe("Goal continuation requested.");
 });
 
 test("goal_set refuses to silently overwrite an in-progress goal", async () => {
@@ -459,15 +517,17 @@ test("goal_set refuses to silently overwrite an in-progress goal", async () => {
 	expect(latestGoalState(h).objective).toBe("initial goal");
 
 	// With replace:true, the goal is overwritten and the loop restarts.
-	const sentBeforeReplace = h.sent.length;
+	const contextsBeforeReplace = sentMessages(h, "goal-context").length;
+	const continuationsBeforeReplace = sentMessages(h, "goal-continuation").length;
 	const replaced = await h.tools.goal_set.execute("call", { objective: "replacement goal", replace: true }, undefined, undefined, h.ctx);
 	expect(replaced.details.replaced).toBe(true);
 	const state = latestGoalState(h);
 	expect(state.objective).toBe("replacement goal");
 	// maybeContinue kicks a fresh continuation (incrementing continuations to 1);
 	// the fresh-audit guarantee is that noToolContinuationStreak was reset.
-	expect(h.sent).toHaveLength(sentBeforeReplace + 1);
-	expect(h.sent.at(-1)!.message.content).toBe("Goal continuation requested.");
+	expect(sentMessages(h, "goal-context")).toHaveLength(contextsBeforeReplace + 1);
+	expect(sentMessages(h, "goal-continuation")).toHaveLength(continuationsBeforeReplace + 1);
+	expect(sentMessages(h, "goal-continuation").at(-1)!.message.content).toBe("Goal continuation requested.");
 });
 
 test("goal_set overwrites a completed goal freely without replace:true", async () => {

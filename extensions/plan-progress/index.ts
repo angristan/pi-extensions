@@ -159,11 +159,6 @@ function planIsFinalizable(plan: PlanState): boolean {
 	return stats.incomplete === 0 || explainsInactiveWork(plan.explanation);
 }
 
-function systemPlanContext(plan: PlanState): string | undefined {
-	if (!plan.items.length || planIsFinalizable(plan)) return undefined;
-	return `Current update_plan state from the previous active plan:\n${modelPlanLines(plan).join("\n")}\nIf this plan is no longer relevant, call update_plan with an empty or completed plan and explain why.`;
-}
-
 function assistantText(message: any): string {
 	const content = message?.content;
 	if (typeof content === "string") return content;
@@ -369,12 +364,6 @@ export default function (pi: ExtensionAPI) {
 		handler: async (_args, ctx) => { state = { items: [] }; planOverlayActive = false; persist(); updateUi(ctx); },
 	});
 
-	pi.on("before_agent_start", (event: any) => {
-		const context = systemPlanContext(state);
-		if (!context) return undefined;
-		return { systemPrompt: `${event.systemPrompt}\n\n${context}` };
-	});
-
 	pi.on("message_end", (event: any, _ctx: any) => {
 		// The plan overlay + /plan-status already surface unfinished work; a loud
 		// warning notification here was noisy, so the guard is silent now.
@@ -387,7 +376,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("agent_settled", (_event: any, ctx: any) => {
-		// Keep the canonical plan state for /plan-status and future model context,
+		// Keep the canonical plan state for /plan-status and persisted history,
 		// but close the active overlay once Pi is no longer working. This mirrors
 		// Lifecycle distinction between the plan item and the live widget.
 		planOverlayActive = false;

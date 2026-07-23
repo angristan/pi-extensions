@@ -14,6 +14,7 @@ import { BOLD, GREEN, MAGENTA, RED, RESET } from "../better-native-pi/render.js"
 
 const ENTRY_TYPE = "goal-state";
 const EVENT_NAME = "goal:changed";
+const GOAL_CONTEXT_CUSTOM_TYPE = "goal-context";
 const CONTINUATION_CUSTOM_TYPE = "goal-continuation";
 const CONTINUATION_TRIGGER_CONTENT = "Goal continuation requested.";
 const BLOCKED_AUDIT_THRESHOLD = 3;
@@ -163,11 +164,22 @@ function isUsageLimitError(message?: string): boolean {
 }
 
 // ============================================================================
-// System prompt injection: orient the agent around the objective
+// Append-only model context: orient the agent around the objective
 // ============================================================================
 
 export function buildGoalContext(state: GoalState): string {
 	return `## Active session goal\n${untrustedGoalBlock(state)}\n\nUse the execution plan for intermediate steps. Do not mark the goal complete until the objective has actually been achieved and no required work remains. If no valid path remains, use goal_block after the same blocking condition has recurred across the blocked audit threshold. Do not declare the goal blocked merely because the work is hard, slow, uncertain, or would benefit from clarification — but blocking IS the correct terminal state, not laziness, once all work achievable without user input or an external-state change is genuinely done and the remainder requires a human decision, design discussion, trace collection, or out-of-session action; in that case call goal_block and stop instead of re-auditing the same conclusion.`;
+}
+
+function buildGoalStateContext(state?: GoalState): string {
+	if (!state) return "## Session goal state\nThe previous session goal has been cleared. Do not continue it.";
+	if (state.status === "active") return buildGoalContext(state);
+	const guidance = state.status === "paused"
+		? "The session goal below is paused. Do not continue it automatically; wait until a later goal-context message marks it active again."
+		: state.status === "blocked"
+			? "The session goal below is blocked. Do not continue it until user input or an external-state change allows it to resume."
+			: "The session goal below is complete. Do not continue or reopen it unless a later goal-context message establishes a new active goal.";
+	return `## Session goal state: ${state.status}\n${guidance}\n\n${untrustedGoalBlock(state)}`;
 }
 
 /**
@@ -659,6 +671,7 @@ export default function (pi: ExtensionAPI) {
 	let noToolContinuationStreak = 0;
 	let pendingContinuationPrompt: string | undefined;
 	let lastTerminalError: { errorMessage?: string } | undefined;
+	let goalToolsIntroduced = false;
 
 	// Dedicated overlay card so the goal renders as its own box, separate from
 	// the plan-progress card. order 5 places it above the plan card (order 10).
@@ -688,6 +701,14 @@ export default function (pi: ExtensionAPI) {
 		: ctx.sessionManager.getEntries();
 
 	const persist = () => pi.appendEntry(ENTRY_TYPE, state ? { state } satisfies PersistedGoalEntry : { cleared: true } satisfies PersistedGoalEntry);
+	const appendGoalContext = (snapshot: GoalState | undefined = state) => {
+		pi.sendMessage({
+			customType: GOAL_CONTEXT_CUSTOM_TYPE,
+			content: buildGoalStateContext(snapshot),
+			display: false,
+			details: { status: snapshot?.status ?? "cleared" },
+		}, { deliverAs: "steer" });
+	};
 
 	const syncGoalToolAvailability = () => {
 		const getActiveTools = (pi as any).getActiveTools;
@@ -696,12 +717,18 @@ export default function (pi: ExtensionAPI) {
 		const active = getActiveTools.call(pi);
 		if (!Array.isArray(active)) return;
 
-		const next = active.filter((name: string) => !GOAL_TOOL_NAME_SET.has(name));
 		if (state?.status === "active") {
-			for (const name of GOAL_TOOL_NAMES) if (!next.includes(name)) next.push(name);
+			goalToolsIntroduced = true;
+			const added = GOAL_TOOL_NAMES.filter((name) => !active.includes(name));
+			if (added.length > 0) setActiveTools.call(pi, [...active, ...added]);
+			return;
 		}
-		if (active.length === next.length && active.every((name: string, index: number) => name === next[index])) return;
-		setActiveTools.call(pi, next);
+		// Registration activates tools by default. Remove the gated tools only
+		// during initial session setup; after their first activation, keep the
+		// loadout monotonic so later state changes preserve the cached prefix.
+		if (goalToolsIntroduced) return;
+		const initial = active.filter((name: string) => !GOAL_TOOL_NAME_SET.has(name));
+		if (initial.length !== active.length) setActiveTools.call(pi, initial);
 	};
 
 	const inactiveGoalToolResult = (reason: string) => ({
@@ -753,6 +780,7 @@ export default function (pi: ExtensionAPI) {
 		state.blockedAt = next === "blocked" ? now : state.blockedAt;
 		state.completedAt = next === "complete" ? now : undefined;
 		saveAndEmit(ctx);
+		appendGoalContext();
 		return true;
 	};
 
@@ -792,6 +820,7 @@ export default function (pi: ExtensionAPI) {
 			};
 		}
 		saveAndEmit(ctx);
+		appendGoalContext();
 		return true;
 	};
 
@@ -945,6 +974,7 @@ export default function (pi: ExtensionAPI) {
 					if (!confirmed) return;
 					state = undefined;
 					saveAndEmit(ctx);
+					appendGoalContext(undefined);
 					return;
 				}
 				case "edit": {
@@ -979,6 +1009,7 @@ export default function (pi: ExtensionAPI) {
 				continuations: 0,
 			};
 			saveAndEmit(ctx);
+			appendGoalContext();
 			ctx.ui.notify("Session goal set. Auto-continuation is active.", "info");
 			// Kick the first continuation turn immediately.
 			maybeContinue(ctx);
@@ -997,13 +1028,8 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	// ------------------------------------------------------------------------
-	// System prompt injection
+	// Transient continuation context
 	// ------------------------------------------------------------------------
-
-	pi.on("before_agent_start", (event) => {
-		if (!state || state.status !== "active") return;
-		return { systemPrompt: `${event.systemPrompt}\n\n${buildGoalContext(state)}` };
-	});
 
 	pi.on("context", (event: any) => {
 		let lastContinuationIndex = -1;
@@ -1068,8 +1094,12 @@ export default function (pi: ExtensionAPI) {
 		maybeContinue(ctx);
 	});
 
-	// If compaction runs, re-emit so the overlay stays accurate.
-	pi.on("session_compact", (_event, ctx) => emit(ctx));
+	// Re-anchor the canonical state after compaction without changing the
+	// cacheable system prompt prefix.
+	pi.on("session_compact", (_event, ctx) => {
+		emit(ctx);
+		if (state) appendGoalContext();
+	});
 
 	// ------------------------------------------------------------------------
 	// State persistence / restore
@@ -1124,6 +1154,7 @@ export default function (pi: ExtensionAPI) {
 			};
 		}
 		emit(ctx);
+		if (state) appendGoalContext();
 	};
 
 	pi.on("session_start", (_event, ctx) => restoreState(ctx));
@@ -1298,6 +1329,7 @@ export default function (pi: ExtensionAPI) {
 			// clean continuation count.
 			noToolContinuationStreak = 0;
 			saveAndEmit(ctx);
+			appendGoalContext();
 			ctx.ui.notify(`${replacing ? "Replaced" : "Set"} session goal: ${objective}`, "info");
 			// Kick the auto-continuation loop. maybeContinue is a no-op unless the
 			// thread is idle, so during a tool call this typically just primes state;

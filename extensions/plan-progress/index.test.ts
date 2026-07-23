@@ -39,10 +39,11 @@ mock.module("../overlay-stack/index.js", () => ({
 const { default: planProgress } = await import("./index");
 
 const tools: any[] = [];
+const handlers: Record<string, any[]> = {};
 planProgress({
 	appendEntry() {},
 	events: { emit() {}, on() {} },
-	on() {},
+	on(event: string, handler: any) { (handlers[event] ??= []).push(handler); },
 	registerCommand() {},
 	registerTool(tool: any) { tools.push(tool); },
 } as any);
@@ -54,6 +55,10 @@ const theme = {
 	italic: (text: string) => text,
 	strikethrough: (text: string) => text,
 };
+
+test("does not rebuild the system prompt from mutable plan state", () => {
+	expect(handlers.before_agent_start).toBeUndefined();
+});
 
 test("wrapped plan result lines retain their left padding", () => {
 	const component = updatePlan.renderResult({
