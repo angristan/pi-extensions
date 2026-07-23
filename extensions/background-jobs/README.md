@@ -50,7 +50,9 @@ without mixing metadata into command output:
 heading-colored terminal name, accent reasoning, dim `│` command-output gutter, tail-first
 collapse, and `└` metadata hierarchy: `Interacted with <terminal> to <goal>`,
 `Waited for <terminal> to <goal>`, or `Read from <terminal> to <goal>`. The
-`/jobs` and `/ps` live viewer uses that same normal command-output treatment.
+`job_kill` result line uses the terminal's status icon and color, so no-op stop
+requests render as `◷ <id> is already timed out.` instead of plain status text.
+The `/jobs` and `/ps` live viewer uses that same normal command-output treatment.
 
 After terminals yield into the background, they appear in the shared top-right
 overlay stack:

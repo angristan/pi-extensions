@@ -254,6 +254,28 @@ function statusColor(status: JobStatus): string {
 	return "error";
 }
 
+function isJobStatus(status: unknown): status is JobStatus {
+	return status === "running" || status === "stopping" || status === "completed" || status === "failed" || status === "killed" || status === "timed_out";
+}
+
+function displayStatusText(text: string): string {
+	return text.replace(/\btimed_out\b/g, "timed out");
+}
+
+function textResult(result: any): string {
+	const content = result?.content?.[0];
+	return content?.type === "text" ? content.text : "";
+}
+
+function renderJobKillResult(result: any, theme: any, context: any): Text {
+	const text = displayStatusText(textResult(result));
+	if (!text) return new Text("", 0, 0);
+	const status = result?.details?.status;
+	if (isJobStatus(status)) return new Text(`${theme.fg(statusColor(status), statusSymbol(status))} ${text}`, 0, 0);
+	if (context?.isError) return new Text(`${theme.fg("warning", "■")} ${theme.fg("warning", text)}`, 0, 0);
+	return new Text(text, 0, 0);
+}
+
 function renderOverlayJob(job: ManagedJob, width: number, theme: any): string[] {
 	const mark = theme.fg(statusColor(job.status), statusSymbol(job.status));
 	const name = theme.bold(compactCommand(job.description, Math.max(16, width - 4)));
@@ -1098,7 +1120,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			return { content: [{ type: "text", text: `Sent SIGTERM to background terminal ${job.id}.` }], details: snapshot(job, PERSISTED_OUTPUT_BYTES) };
 		},
 		renderCall: (args: any, theme: any) => new Text(`${theme.fg("warning", "■")} Requesting stop for ${args.job_id ?? "terminal"}`, 0, 0),
-		renderResult: (result: any, _options: any, theme: any, context: any) => new Text(context?.isError ? theme.fg("warning", result?.content?.[0]?.text ?? "") : result?.content?.[0]?.text ?? "", 0, 0),
+		renderResult: (result: any, _options: any, theme: any, context: any) => renderJobKillResult(result, theme, context),
 		renderShell: "self",
 	});
 

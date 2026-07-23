@@ -399,6 +399,23 @@ describe("terminal tools", () => {
 		}, undefined, undefined, harness.ctx)).rejects.toThrow("must be an integer between 1 and 86400");
 	});
 
+	test("renders stop results with terminal status styling", () => {
+		const harness = createHarness();
+		const tool = harness.tools.get("job_kill");
+		const theme = { fg: (color: string, text: string) => `<${color}>${text}</${color}>`, bold: (text: string) => text };
+		const rendered = tool.renderResult(
+			{
+				content: [{ type: "text", text: "confirm-app-he-ff5ed8c6 is already timed_out." }],
+				details: { status: "timed_out" },
+			},
+			{ expanded: false },
+			theme,
+			{ isError: false },
+		).render(120).join("\n").trimEnd();
+
+		expect(rendered).toBe("<warning>◷</warning> confirm-app-he-ff5ed8c6 is already timed out.");
+	});
+
 	test("returns quick commands normally and clears persistent status", async () => {
 		const harness = createHarness();
 		await startHarness(harness);
