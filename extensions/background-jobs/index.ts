@@ -1119,7 +1119,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			requestKill(job, "user");
 			return { content: [{ type: "text", text: `Sent SIGTERM to background terminal ${job.id}.` }], details: snapshot(job, PERSISTED_OUTPUT_BYTES) };
 		},
-		renderCall: (args: any, theme: any) => new Text(`${theme.fg("warning", "■")} Requesting stop for ${args.job_id ?? "terminal"}`, 0, 0),
+		renderCall: (args: any, theme: any) => new Text(`${theme.fg("warning", "◌")} Stopping ${args.job_id ?? "terminal"}`, 0, 0),
 		renderResult: (result: any, _options: any, theme: any, context: any) => renderJobKillResult(result, theme, context),
 		renderShell: "self",
 	});
