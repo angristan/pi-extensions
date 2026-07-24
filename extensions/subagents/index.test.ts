@@ -195,7 +195,7 @@ describe("subagents", () => {
 		const harness = createHarness();
 		expect(harness.tool).toBeDefined();
 		expect(Object.keys(harness.tool.parameters.properties)).toEqual([
-			"reasoning", "action", "task", "context", "name", "agent_name", "message", "agent_names", "timeout_ms",
+			"reasoning", "action", "task", "context", "name", "agent_name", "message", "agent_names", "return_when", "timeout_ms",
 		]);
 		expect(harness.tool.parameters.required).toEqual(["reasoning", "action"]);
 		expect(harness.tool.parameters.properties).not.toHaveProperty("agent_type");
@@ -205,10 +205,13 @@ describe("subagents", () => {
 		expect(harness.tool.description).toContain("inherit the current model");
 		expect(harness.tool.parameters.properties.context).toMatchObject({ enum: ["fresh", "compacted", "forked"], description: expect.stringContaining("default fresh") });
 		expect(harness.tool.parameters.properties.name).toMatchObject({ maxLength: 80, description: expect.stringContaining("Required unique") });
+		expect(harness.tool.parameters.properties.return_when).toMatchObject({ enum: ["any", "all"], description: expect.stringContaining("default all") });
+		expect(harness.tool.parameters.properties.timeout_ms.description).toContain("default 300000");
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("context=compacted") && guideline.includes("context=forked"))).toBe(true);
 		expect(harness.tool.parameters.properties.action.enum).toEqual(["spawn", "send", "wait", "list", "read", "interrupt", "close"]);
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("action=close") && guideline.includes("conversation slot"))).toBe(true);
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("action=read") && guideline.includes("action=interrupt"))).toBe(true);
+		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("return_when=any") && guideline.includes("five-minute default"))).toBe(true);
 		expect(harness.tool.prepareArguments({ action: "send", agent_id: "legacy-id" })).toEqual({ action: "send", agent_name: "legacy-id" });
 		expect(harness.tool.prepareArguments({ action: "wait", agent_ids: ["legacy-a"] })).toEqual({ action: "wait", agent_names: ["legacy-a"] });
 	});
@@ -408,8 +411,9 @@ describe("subagents", () => {
 		const timeoutArgs = { reasoning: "Check slow task", action: "wait", agent_names: [second.details.agents[0].name], timeout_ms: 0 };
 		const timeout = await harness.tool.execute("timeout", timeoutArgs, undefined, undefined, harness.ctx);
 		const timedOut = rendered(harness.tool.renderResult(timeout, { isPartial: false, expanded: false }, renderTheme, { args: timeoutArgs }));
-		expect(timedOut[0]).toBe("• Wait timed out Check slow task");
+		expect(timedOut[0]).toBe("• Wait interval ended Check slow task");
 		expect(timedOut.join("\n")).toContain("running");
+		expect(timeout.content[0].text).toStartWith("No agent completed during this wait interval.\nAgents continue running and will report automatically.\n");
 
 		const failed = rendered(harness.tool.renderResult(
 			{ content: [{ type: "text", text: "Subagent not found" }] },
@@ -700,6 +704,42 @@ describe("subagents", () => {
 		expect(result.content[0].text).toContain("Second result");
 		expect(result.details.timedOut).toBe(false);
 		expect(harness.sentMessages).toHaveLength(0);
+	});
+
+	test("returns after any selected agent settles", async () => {
+		const harness = createHarness();
+		const first = await spawnAgent(harness, "First task");
+		const second = await spawnAgent(harness, "Second task");
+		const waiting = harness.tool.execute("wait-any", {
+			action: "wait",
+			agent_names: [first.details.agents[0].name, second.details.agents[0].name],
+			return_when: "any",
+			timeout_ms: 1_000,
+		}, undefined, undefined, harness.ctx);
+
+		harness.clients[0].complete("First result");
+		const result = await waiting;
+		expect(result.details.timedOut).toBe(false);
+		expect(result.details.agents.map((agent: any) => agent.status)).toEqual(["completed", "running"]);
+		expect(result.content[0].text).toContain("First result");
+		expect(result.content[0].text).toContain("(still running)");
+		expect(harness.sentMessages).toHaveLength(0);
+
+		harness.clients[1].complete("Second result");
+		await Bun.sleep(0);
+		expect(harness.sentMessages).toHaveLength(1);
+		expect(harness.sentMessages[0].message.content).toContain("Second result");
+	});
+
+	test("rejects invalid wait completion conditions", async () => {
+		const harness = createHarness();
+		const started = await spawnAgent(harness, "Inspect wait validation");
+		await expect(harness.tool.execute("invalid-wait", {
+			action: "wait",
+			agent_names: [started.details.agents[0].name],
+			return_when: "first",
+			timeout_ms: 0,
+		}, undefined, undefined, harness.ctx)).rejects.toThrow("return_when must be any or all");
 	});
 
 	test("steers a running agent and prompts an idle agent", async () => {

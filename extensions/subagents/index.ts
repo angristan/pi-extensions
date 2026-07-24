@@ -29,8 +29,8 @@ const TOOL_NAME = "agents";
 const COMPLETION_MESSAGE_TYPE = "subagent-result";
 const DEFAULT_MAX_AGENTS = 6;
 const MAX_RETAINED_CLOSED = 20;
-const DEFAULT_WAIT_MS = 30_000;
 const MAX_WAIT_MS = 5 * 60_000;
+const DEFAULT_WAIT_MS = MAX_WAIT_MS;
 const RESULT_BYTES = 24 * 1024;
 const TOOL_OUTPUT_BYTES = 48 * 1024;
 const MAX_TASK_CHARS = 16_000;
@@ -49,6 +49,7 @@ Work autonomously with the available tools. Return a concise final result with r
 Do not ask the user questions; report any missing information to the parent agent.`;
 
 export type AgentStatus = "starting" | "running" | "completed" | "failed" | "interrupted" | "closed";
+type WaitReturn = "any" | "all";
 
 interface AgentUsage {
 	input: number;
@@ -379,7 +380,7 @@ function actionVerb(action: unknown, partial: boolean, details?: ToolDetails): s
 	if (action === "send") return partial ? "Sending to agent" : "Sent to agent";
 	if (action === "wait") {
 		if (!partial && details?.interrupted) return "Wait interrupted";
-		if (!partial && details?.timedOut) return "Wait timed out";
+		if (!partial && details?.timedOut) return "Wait interval ended";
 		return partial ? "Waiting for agents" : "Waited for agents";
 	}
 	if (action === "list") return partial ? "Listing agents" : "Listed agents";
@@ -395,10 +396,11 @@ function actionDetail(args: Record<string, unknown> | undefined): string {
 	if (args.action === "send") return [compact(String(args.agent_name ?? ""), 48), compact(String(args.message ?? ""), 120)].filter(Boolean).join(" · ");
 	if (args.action === "wait") {
 		const names = Array.isArray(args.agent_names) && args.agent_names.length ? args.agent_names.join(", ") : "running agents";
+		const returnWhen = args.return_when === "any" ? "first completion" : args.return_when === "all" ? "all completions" : "";
 		const timeout = Number.isInteger(args.timeout_ms)
 			? (args.timeout_ms === 0 ? "no wait" : `${formatElapsed(args.timeout_ms as number)} timeout`)
 			: "";
-		return [compact(names, 120), timeout].filter(Boolean).join(" · ");
+		return [compact(names, 120), returnWhen, timeout].filter(Boolean).join(" · ");
 	}
 	if (args.action === "list") return "current session";
 	return compact(String(args.agent_name ?? ""), 80);
@@ -960,9 +962,16 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			reservation.release();
 		}
 	};
-	const waitForAgents = async (targets: ManagedAgent[], timeoutMs: number, signal?: AbortSignal): Promise<{ timedOut: boolean; interrupted: boolean }> => {
+	const waitForAgents = async (
+		targets: ManagedAgent[],
+		timeoutMs: number,
+		returnWhen: WaitReturn,
+		signal?: AbortSignal,
+	): Promise<{ timedOut: boolean; interrupted: boolean }> => {
 		const running = targets.filter(isActive);
-		if (running.length === 0) return { timedOut: false, interrupted: false };
+		if (running.length === 0 || (returnWhen === "any" && running.length < targets.length)) {
+			return { timedOut: false, interrupted: false };
+		}
 		for (const agent of running) agent.waiting += 1;
 		let timedOut = false;
 		let interrupted = false;
@@ -978,7 +987,10 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				};
 				const onAbort = () => { interrupted = true; finish(); };
 				const timer = setTimeout(() => { timedOut = true; finish(); }, timeoutMs);
-				Promise.all(running.map((agent) => agent.completion)).then(finish);
+				const completion = returnWhen === "any"
+					? Promise.race(running.map((agent) => agent.completion))
+					: Promise.all(running.map((agent) => agent.completion));
+				completion.then(finish);
 				if (signal?.aborted) onAbort();
 				else signal?.addEventListener("abort", onAbort, { once: true });
 			});
@@ -996,13 +1008,13 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	pi.registerTool({
 		name: TOOL_NAME,
 		label: "Agents",
-		description: "Spawn and coordinate uniquely named child agents with isolated persistent context. Actions: spawn starts one; send steers or resumes it; wait collects results; list shows status; read returns the latest response; interrupt stops the current turn but preserves context; close deletes it. Settled child processes hibernate until send resumes them. Children inherit the current model, tools, working directory, and project instructions. Conversation context can be fresh, compacted, or forked; fresh is the default. Completion results also arrive automatically.",
+		description: "Spawn and coordinate uniquely named child agents with isolated persistent context. Actions: spawn starts one; send steers or resumes it; wait collects results for up to five minutes by default and can return after any or all selected agents settle; list shows status; read returns the latest response; interrupt stops the current turn but preserves context; close deletes it. Settled child processes hibernate until send resumes them. Children inherit the current model, tools, working directory, and project instructions. Conversation context can be fresh, compacted, or forked; fresh is the default. Completion results also arrive automatically.",
 		promptSnippet: "Spawn and coordinate isolated child agents for explicitly delegated work",
 		promptGuidelines: [
 			"Use agents only when the user or applicable project instructions request delegation, subagents, or parallel agent work.",
 			"Call agents with action=spawn for concrete independent tasks; give each child a concise task-specific name that is unique in the current session; multiple spawn calls can run concurrently, and the parent should continue useful non-overlapping work.",
 			"Agents use fresh conversation context by default. Set context=compacted when prior decisions matter, or context=forked only when the exact parent conversation is required.",
-			"Use agents action=wait only when blocked on child results; completed children report back automatically.",
+			"Use agents action=wait only when blocked on child results; omit timeout_ms for the five-minute default, use return_when=any to resume after the first completion, and remember that an ended wait interval does not stop agents because completions report automatically.",
 			"Use agents action=read to retrieve a child's latest response again without restarting it, and action=interrupt to stop active work while preserving the conversation for follow-up.",
 			"After collecting a child's final result, call agents with action=close when no further follow-up is needed; settled children hibernate but retain a conversation slot until closed.",
 			"Give concurrently writing child agents disjoint file scopes to avoid conflicting edits.",
@@ -1017,6 +1029,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				agent_name: { type: "string", description: "Agent name for send, read, interrupt, or close" },
 				message: { type: "string", maxLength: MAX_MESSAGE_CHARS, description: "Follow-up instruction for send" },
 				agent_names: { type: "array", items: { type: "string" }, description: "Agent names for wait; defaults to all running agents" },
+				return_when: { type: "string", enum: ["any", "all"], description: "Wait completion condition (default all)" },
 				timeout_ms: { type: "integer", minimum: 0, maximum: MAX_WAIT_MS, description: `Wait timeout in milliseconds (default ${DEFAULT_WAIT_MS})` },
 			},
 			required: ["action"],
@@ -1110,7 +1123,9 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 					: orderedAgents().filter(isActive);
 				const timeoutMs = params.timeout_ms ?? DEFAULT_WAIT_MS;
 				if (!Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_WAIT_MS) throw new Error(`timeout_ms must be an integer between 0 and ${MAX_WAIT_MS}`);
-				const waited = await waitForAgents(targets, timeoutMs, signal);
+				const returnWhen: WaitReturn = params.return_when ?? "all";
+				if (returnWhen !== "any" && returnWhen !== "all") throw new Error("return_when must be any or all");
+				const waited = await waitForAgents(targets, timeoutMs, returnWhen, signal);
 				const alreadyReportedAgentIds = targets
 					.filter((agent) => agent.completionDelivery === "automatic")
 					.map((agent) => agent.id);
@@ -1118,8 +1133,15 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 					if (!isActive(agent) && agent.completionDelivery === "none") agent.completionDelivery = "wait";
 				}
 				const data = targets.map(snapshot);
+				const waitStatus = waited.interrupted
+					? "Wait interrupted.\n"
+					: waited.timedOut
+						? targets.some((agent) => !isActive(agent))
+							? "Wait interval ended before all selected agents completed.\nRunning agents continue and will report automatically.\n"
+							: "No agent completed during this wait interval.\nAgents continue running and will report automatically.\n"
+						: "";
 				return {
-					content: [{ type: "text", text: `${waited.interrupted ? "Wait interrupted.\n" : waited.timedOut ? "Wait timed out.\n" : ""}${formatAgents(data, true)}` }],
+					content: [{ type: "text", text: `${waitStatus}${formatAgents(data, true)}` }],
 					details: { action: "wait", agents: data, alreadyReportedAgentIds, ...waited } satisfies ToolDetails,
 				};
 			}
