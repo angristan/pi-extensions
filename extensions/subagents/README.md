@@ -22,7 +22,7 @@ tools.
 |---|---|---|
 | `spawn` | `task`, `name`, `context?` | Start a uniquely named child; context is `fresh` (default), `compacted`, or `forked` |
 | `send` | `agent_name`, `message` | Steer a running child or continue an idle child |
-| `wait` | `agent_names?`, `return_when?`, `timeout_ms?` | Wait for selected children, or every running child; return after `all` (default) or `any` settle |
+| `wait` | `agent_names?`, `return_when?`, `timeout_ms?` | Wait for selected children, or every running child; return after `any` (default) or `all` settle |
 | `list` | — | List child status without waiting |
 | `read` | `agent_name` | Return the child's latest final response without restarting it |
 | `interrupt` | `agent_name` | Stop the current turn while retaining the conversation for follow-up |
@@ -52,8 +52,8 @@ A late `wait` hides its duplicate card when the automatic result was already
 reported.
 
 `wait` uses a five-minute interval by default and returns sooner when its
-completion condition is met. Set `return_when` to `any` to resume after the first
-selected child settles, or leave it as `all` to collect every selected child.
+completion condition is met. It resumes after the first selected child settles;
+set `return_when` to `all` only when every selected result is required.
 `timeout_ms` can shorten the interval when a quick status check is intentional.
 An ended interval never cancels children: the result explains that they continue
 running and will report automatically.

@@ -31,6 +31,7 @@ const DEFAULT_MAX_AGENTS = 6;
 const MAX_RETAINED_CLOSED = 20;
 const MAX_WAIT_MS = 5 * 60_000;
 const DEFAULT_WAIT_MS = MAX_WAIT_MS;
+const DEFAULT_WAIT_RETURN = "any";
 const RESULT_BYTES = 24 * 1024;
 const TOOL_OUTPUT_BYTES = 48 * 1024;
 const MAX_TASK_CHARS = 16_000;
@@ -1008,13 +1009,13 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	pi.registerTool({
 		name: TOOL_NAME,
 		label: "Agents",
-		description: "Spawn and coordinate uniquely named child agents with isolated persistent context. Actions: spawn starts one; send steers or resumes it; wait collects results for up to five minutes by default and can return after any or all selected agents settle; list shows status; read returns the latest response; interrupt stops the current turn but preserves context; close deletes it. Settled child processes hibernate until send resumes them. Children inherit the current model, tools, working directory, and project instructions. Conversation context can be fresh, compacted, or forked; fresh is the default. Completion results also arrive automatically.",
+		description: "Spawn and coordinate uniquely named child agents with isolated persistent context. Actions: spawn starts one; send steers or resumes it; wait collects results for up to five minutes and returns after any selected agent settles by default, or after all when requested; list shows status; read returns the latest response; interrupt stops the current turn but preserves context; close deletes it. Settled child processes hibernate until send resumes them. Children inherit the current model, tools, working directory, and project instructions. Conversation context can be fresh, compacted, or forked; fresh is the default. Completion results also arrive automatically.",
 		promptSnippet: "Spawn and coordinate isolated child agents for explicitly delegated work",
 		promptGuidelines: [
 			"Use agents only when the user or applicable project instructions request delegation, subagents, or parallel agent work.",
 			"Call agents with action=spawn for concrete independent tasks; give each child a concise task-specific name that is unique in the current session; multiple spawn calls can run concurrently, and the parent should continue useful non-overlapping work.",
 			"Agents use fresh conversation context by default. Set context=compacted when prior decisions matter, or context=forked only when the exact parent conversation is required.",
-			"Use agents action=wait only when blocked on child results; omit timeout_ms for the five-minute default, use return_when=any to resume after the first completion, and remember that an ended wait interval does not stop agents because completions report automatically.",
+			"Use agents action=wait only when blocked on child results; it waits up to five minutes and resumes after the first completion by default, so use return_when=all only when every selected result is required. An ended wait interval does not stop agents because completions report automatically.",
 			"Use agents action=read to retrieve a child's latest response again without restarting it, and action=interrupt to stop active work while preserving the conversation for follow-up.",
 			"After collecting a child's final result, call agents with action=close when no further follow-up is needed; settled children hibernate but retain a conversation slot until closed.",
 			"Give concurrently writing child agents disjoint file scopes to avoid conflicting edits.",
@@ -1029,7 +1030,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				agent_name: { type: "string", description: "Agent name for send, read, interrupt, or close" },
 				message: { type: "string", maxLength: MAX_MESSAGE_CHARS, description: "Follow-up instruction for send" },
 				agent_names: { type: "array", items: { type: "string" }, description: "Agent names for wait; defaults to all running agents" },
-				return_when: { type: "string", enum: ["any", "all"], description: "Wait completion condition (default all)" },
+				return_when: { type: "string", enum: ["any", "all"], description: `Wait completion condition (default ${DEFAULT_WAIT_RETURN})` },
 				timeout_ms: { type: "integer", minimum: 0, maximum: MAX_WAIT_MS, description: `Wait timeout in milliseconds (default ${DEFAULT_WAIT_MS})` },
 			},
 			required: ["action"],
@@ -1123,7 +1124,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 					: orderedAgents().filter(isActive);
 				const timeoutMs = params.timeout_ms ?? DEFAULT_WAIT_MS;
 				if (!Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_WAIT_MS) throw new Error(`timeout_ms must be an integer between 0 and ${MAX_WAIT_MS}`);
-				const returnWhen: WaitReturn = params.return_when ?? "all";
+				const returnWhen: WaitReturn = params.return_when ?? DEFAULT_WAIT_RETURN;
 				if (returnWhen !== "any" && returnWhen !== "all") throw new Error("return_when must be any or all");
 				const waited = await waitForAgents(targets, timeoutMs, returnWhen, signal);
 				const alreadyReportedAgentIds = targets

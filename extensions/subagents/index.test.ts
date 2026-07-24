@@ -205,13 +205,13 @@ describe("subagents", () => {
 		expect(harness.tool.description).toContain("inherit the current model");
 		expect(harness.tool.parameters.properties.context).toMatchObject({ enum: ["fresh", "compacted", "forked"], description: expect.stringContaining("default fresh") });
 		expect(harness.tool.parameters.properties.name).toMatchObject({ maxLength: 80, description: expect.stringContaining("Required unique") });
-		expect(harness.tool.parameters.properties.return_when).toMatchObject({ enum: ["any", "all"], description: expect.stringContaining("default all") });
+		expect(harness.tool.parameters.properties.return_when).toMatchObject({ enum: ["any", "all"], description: expect.stringContaining("default any") });
 		expect(harness.tool.parameters.properties.timeout_ms.description).toContain("default 300000");
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("context=compacted") && guideline.includes("context=forked"))).toBe(true);
 		expect(harness.tool.parameters.properties.action.enum).toEqual(["spawn", "send", "wait", "list", "read", "interrupt", "close"]);
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("action=close") && guideline.includes("conversation slot"))).toBe(true);
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("action=read") && guideline.includes("action=interrupt"))).toBe(true);
-		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("return_when=any") && guideline.includes("five-minute default"))).toBe(true);
+		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("return_when=all") && guideline.includes("first completion by default"))).toBe(true);
 		expect(harness.tool.prepareArguments({ action: "send", agent_id: "legacy-id" })).toEqual({ action: "send", agent_name: "legacy-id" });
 		expect(harness.tool.prepareArguments({ action: "wait", agent_ids: ["legacy-a"] })).toEqual({ action: "wait", agent_names: ["legacy-a"] });
 	});
@@ -687,7 +687,7 @@ describe("subagents", () => {
 		expect(existsSync(fork.directory)).toBe(false);
 	});
 
-	test("waits for multiple agents and avoids duplicate completion messages", async () => {
+	test("waits for all selected agents when requested", async () => {
 		const harness = createHarness();
 		const first = await spawnAgent(harness, "First task");
 		const second = await spawnAgent(harness, "Second task");
@@ -698,6 +698,7 @@ describe("subagents", () => {
 		const result = await harness.tool.execute("wait", {
 			action: "wait",
 			agent_names: [first.details.agents[0].name, second.details.agents[0].name],
+			return_when: "all",
 			timeout_ms: 1_000,
 		}, undefined, undefined, harness.ctx);
 		expect(result.content[0].text).toContain("First result");
@@ -706,14 +707,13 @@ describe("subagents", () => {
 		expect(harness.sentMessages).toHaveLength(0);
 	});
 
-	test("returns after any selected agent settles", async () => {
+	test("returns after any selected agent settles by default", async () => {
 		const harness = createHarness();
 		const first = await spawnAgent(harness, "First task");
 		const second = await spawnAgent(harness, "Second task");
 		const waiting = harness.tool.execute("wait-any", {
 			action: "wait",
 			agent_names: [first.details.agents[0].name, second.details.agents[0].name],
-			return_when: "any",
 			timeout_ms: 1_000,
 		}, undefined, undefined, harness.ctx);
 
