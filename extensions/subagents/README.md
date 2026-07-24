@@ -22,7 +22,7 @@ tools.
 |---|---|---|
 | `spawn` | `task`, `name`, `context?` | Start a uniquely named child; context is `fresh` (default), `compacted`, or `forked` |
 | `send` | `agent_name`, `message` | Steer a running child or continue an idle child |
-| `wait` | `agent_names?`, `return_when?`, `timeout_ms?` | Wait for selected children, or every running child; return after `any` (default) or `all` settle |
+| `wait` | `agent_names?`, `return_when?`, `timeout_ms?` | Wait for selected children, or every running child; return after the first mailbox message or completion (`any`, default), or after `all` settle |
 | `list` | — | List child status without waiting |
 | `read` | `agent_name` | Return the child's latest final response without restarting it |
 | `interrupt` | `agent_name` | Stop the current turn while retaining the conversation for follow-up |
@@ -45,18 +45,27 @@ Continue reviewing the implementation while they run.
 Send the API child a follow-up asking it to verify the upstream documentation.
 ```
 
-Completed children inject a compact result into the parent conversation and
-wake the parent if it is idle. Each run has one completion owner: `wait` renders
-the result when it collects the run; otherwise the automatic completion does.
-A late `wait` hides its duplicate card when the automatic result was already
-reported.
+## Mailbox coordination
+
+Each child has a `report_to_parent` tool for material interim findings that can
+unblock or redirect the parent. Interim reports and final results enter a bounded
+parent mailbox. `wait` consumes matching mailbox updates directly. Multiple
+updates already queued for the selected children are returned together.
+
+Updates without an active matching wait never force a model turn. While the
+parent is running they queue for its next turn instead of interrupting current
+reasoning. While the parent is idle they appear immediately in the transcript
+without starting another response. Each run has one completion owner: `wait`
+renders a final result when it collects the run; otherwise automatic delivery
+does. A late `wait` hides its duplicate card when that result was already delivered.
 
 `wait` uses a five-minute interval by default and returns sooner when its
-completion condition is met. It resumes after the first selected child settles;
-set `return_when` to `all` only when every selected result is required.
-`timeout_ms` can shorten the interval when a quick status check is intentional.
-An ended interval never cancels children: the result explains that they continue
-running and will report automatically.
+completion condition is met. It resumes after the first selected mailbox message
+or completion; set `return_when` to `all` only when every selected final result
+is required. `timeout_ms` accepts zero through one hour, so callers can request
+an immediate status snapshot or a longer blocking interval. An ended interval
+never cancels children: updates remain queued without forcing another parent
+turn.
 
 ## UI
 
@@ -134,6 +143,7 @@ session:
 - For `compacted` and `forked`, the unresolved assistant tool-call turn is excluded.
 - The child runs in the same working directory and sees the same project files.
 - Child dialogs are cancelled because no interactive UI is attached to the RPC process.
+- Children can send bounded interim mailbox updates with `report_to_parent`; final responses are reported automatically.
 - Settled and interrupted children hibernate: their RPC process exits while the temporary session remains available.
 - Follow-ups lazily start a new child process against the retained session and continue the same conversation.
 - `read` retrieves the latest response without waking a hibernated child.
@@ -152,6 +162,7 @@ current parent session.
 ## Input and output limits
 
 - Spawn tasks and follow-up messages are capped at 16,000 characters each.
+- Interim mailbox reports are capped at 4,000 characters.
 - One child result is capped at 24 KiB.
 - Combined `wait` output is capped below Pi's 50 KiB tool-result limit.
 - Individual RPC records are capped at 2 MiB.

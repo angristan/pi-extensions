@@ -206,14 +206,31 @@ describe("subagents", () => {
 		expect(harness.tool.parameters.properties.context).toMatchObject({ enum: ["fresh", "compacted", "forked"], description: expect.stringContaining("default fresh") });
 		expect(harness.tool.parameters.properties.name).toMatchObject({ maxLength: 80, description: expect.stringContaining("Required unique") });
 		expect(harness.tool.parameters.properties.return_when).toMatchObject({ enum: ["any", "all"], description: expect.stringContaining("default any") });
-		expect(harness.tool.parameters.properties.timeout_ms.description).toContain("default 300000");
+		expect(harness.tool.parameters.properties.timeout_ms.description).toContain("default 300000, max 3600000");
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("context=compacted") && guideline.includes("context=forked"))).toBe(true);
 		expect(harness.tool.parameters.properties.action.enum).toEqual(["spawn", "send", "wait", "list", "read", "interrupt", "close"]);
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("action=close") && guideline.includes("conversation slot"))).toBe(true);
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("action=read") && guideline.includes("action=interrupt"))).toBe(true);
-		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("return_when=all") && guideline.includes("first completion by default"))).toBe(true);
+		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("return_when=all") && guideline.includes("first mailbox message or completion by default"))).toBe(true);
 		expect(harness.tool.prepareArguments({ action: "send", agent_id: "legacy-id" })).toEqual({ action: "send", agent_name: "legacy-id" });
 		expect(harness.tool.prepareArguments({ action: "wait", agent_ids: ["legacy-a"] })).toEqual({ action: "wait", agent_names: ["legacy-a"] });
+	});
+
+	test("exposes a bounded progress reporter only inside child processes", async () => {
+		const previous = process.env.PI_SUBAGENT_CHILD;
+		const tools = new Map<string, any>();
+		try {
+			process.env.PI_SUBAGENT_CHILD = "1";
+			registerSubagents({ registerTool(definition: any) { tools.set(definition.name, definition); } } as any);
+		} finally {
+			if (previous === undefined) delete process.env.PI_SUBAGENT_CHILD;
+			else process.env.PI_SUBAGENT_CHILD = previous;
+		}
+		expect([...tools.keys()]).toEqual(["report_to_parent"]);
+		const reporter = tools.get("report_to_parent");
+		expect(reporter.parameters.properties.message.maxLength).toBe(4_000);
+		const result = await reporter.execute("report", { reasoning: "Share useful progress", message: "API schema is stable" });
+		expect(result.content[0].text).toBe("Reported to parent: API schema is stable");
 	});
 
 	test("spawns immediately, inherits runtime choices, and reports completion", async () => {
@@ -226,7 +243,7 @@ describe("subagents", () => {
 		expect(client.options.args).toContain("test-provider/test-model");
 		expect(client.options.args).toContain("medium");
 		const toolsArg = client.options.args[client.options.args.indexOf("--tools") + 1];
-		expect(toolsArg).toBe("read,grep");
+		expect(toolsArg).toBe("read,grep,report_to_parent");
 		expect(started.details.agents[0].status).toBe("running");
 		expect(client.prompts[0]).toContain(`Child agent name: ${started.details.agents[0].name}`);
 		expect(started.content[0].text).toContain(`Started ${started.details.agents[0].name}`);
@@ -243,7 +260,7 @@ describe("subagents", () => {
 		expect(harness.sentMessages[0].message.content).toContain(`Agent: ${started.details.agents[0].name}`);
 		expect(harness.sentMessages[0].message.content).not.toContain(started.details.agents[0].id);
 		expect(harness.sentMessages[0].message.content).not.toContain("\u001b");
-		expect(harness.sentMessages[0].options).toEqual({ deliverAs: "steer", triggerTurn: true });
+		expect(harness.sentMessages[0].options).toEqual({ triggerTurn: false });
 		expect(harness.statuses.size).toBe(0);
 		const usageEntry = harness.parent.getEntries().at(-1);
 		expect(usageEntry).toMatchObject({
@@ -413,7 +430,7 @@ describe("subagents", () => {
 		const timedOut = rendered(harness.tool.renderResult(timeout, { isPartial: false, expanded: false }, renderTheme, { args: timeoutArgs }));
 		expect(timedOut[0]).toBe("• Wait interval ended Check slow task");
 		expect(timedOut.join("\n")).toContain("running");
-		expect(timeout.content[0].text).toStartWith("No agent completed during this wait interval.\nAgents continue running and will report automatically.\n");
+		expect(timeout.content[0].text).toStartWith("No mailbox update arrived during this wait interval.\nAgents continue running and updates remain queued without forcing a parent turn.\n");
 
 		const failed = rendered(harness.tool.renderResult(
 			{ content: [{ type: "text", text: "Subagent not found" }] },
@@ -687,22 +704,114 @@ describe("subagents", () => {
 		expect(existsSync(fork.directory)).toBe(false);
 	});
 
-	test("waits for all selected agents when requested", async () => {
+	test("returns after a selected agent reports mailbox progress", async () => {
+		const harness = createHarness();
+		const first = await spawnAgent(harness, "Inspect API");
+		const second = await spawnAgent(harness, "Inspect tests");
+		const waitArgs = {
+			reasoning: "Collect first useful update",
+			action: "wait",
+			agent_names: [first.details.agents[0].name, second.details.agents[0].name],
+			timeout_ms: 1_000,
+		};
+		const waiting = harness.tool.execute("wait-message", waitArgs, undefined, undefined, harness.ctx);
+
+		harness.clients[1].emit({
+			type: "tool_execution_start",
+			toolName: "report_to_parent",
+			args: { reasoning: "Share useful progress", message: "The renderer needs one edge-case test." },
+		});
+		const result = await waiting;
+		expect(result.details.timedOut).toBe(false);
+		expect(result.details.agents.map((agent: any) => agent.status)).toEqual(["running", "running"]);
+		expect(result.details.mailbox).toMatchObject([{
+			kind: "message",
+			agentName: second.details.agents[0].name,
+			content: "The renderer needs one edge-case test.",
+		}]);
+		expect(result.content[0].text).toContain("<subagent_message>");
+		expect(harness.sentMessages).toHaveLength(0);
+		const lines = rendered(harness.tool.renderResult(result, { isPartial: false, expanded: false }, renderTheme, { args: waitArgs }));
+		expect(lines.join("\n")).toContain(`${second.details.agents[0].name} · message`);
+		expect(lines.join("\n")).toContain("The renderer needs one edge-case test.");
+	});
+
+	test("queues active-turn progress for the next parent request boundary", async () => {
+		const harness = createHarness();
+		await harness.handlers.get("agent_start")?.({}, harness.ctx);
+		const started = await spawnAgent(harness, "Inspect API");
+		harness.clients[0].emit({
+			type: "tool_execution_start",
+			toolName: "report_to_parent",
+			args: { message: "The API contract is stable." },
+		});
+		await Bun.sleep(0);
+		expect(harness.sentMessages).toHaveLength(0);
+
+		await harness.handlers.get("agent_settled")?.({}, harness.ctx);
+		const delivery = await harness.handlers.get("before_agent_start")?.({ prompt: "Continue" }, harness.ctx);
+		expect(delivery.message).toMatchObject({
+			customType: "subagent-mailbox",
+			content: expect.stringContaining("The API contract is stable."),
+			details: {
+				action: "mailbox",
+				agents: [],
+				mailbox: [{ kind: "message", agentName: started.details.agents[0].name }],
+			},
+		});
+		const renderer = harness.messageRenderers.get("subagent-mailbox")!;
+		const lines = rendered(renderer(delivery.message, { expanded: false }, renderTheme));
+		expect(lines[0]).toBe("• Agent mailbox");
+		expect(lines.join("\n")).toContain("The API contract is stable.");
+		expect(await harness.handlers.get("before_agent_start")?.({ prompt: "Again" }, harness.ctx)).toBeUndefined();
+	});
+
+	test("batches active-turn final results without starting another turn", async () => {
+		const harness = createHarness();
+		await harness.handlers.get("agent_start")?.({}, harness.ctx);
+		const started = await spawnAgent(harness, "Inspect API");
+		harness.clients[0].complete("API review complete.");
+		await Bun.sleep(0);
+		expect(harness.sentMessages).toHaveLength(0);
+
+		await harness.handlers.get("agent_settled")?.({}, harness.ctx);
+		const delivery = await harness.handlers.get("before_agent_start")?.({ prompt: "Continue" }, harness.ctx);
+		expect(delivery.message.content).toContain("API review complete.");
+		expect(delivery.message.details.agents).toMatchObject([{
+			name: started.details.agents[0].name,
+			status: "completed",
+			output: "API review complete.",
+		}]);
+		const renderer = harness.messageRenderers.get("subagent-mailbox")!;
+		const lines = rendered(renderer(delivery.message, { expanded: false }, renderTheme));
+		expect(lines[0]).toBe("• Agent mailbox");
+		expect(lines.join("\n")).toContain("API review complete.");
+	});
+
+	test("waits for all selected agents while retaining interim updates", async () => {
 		const harness = createHarness();
 		const first = await spawnAgent(harness, "First task");
 		const second = await spawnAgent(harness, "Second task");
-		setTimeout(() => {
-			harness.clients[0].complete("First result");
-			harness.clients[1].complete("Second result");
-		}, 5);
-		const result = await harness.tool.execute("wait", {
+		const waiting = harness.tool.execute("wait", {
 			action: "wait",
 			agent_names: [first.details.agents[0].name, second.details.agents[0].name],
 			return_when: "all",
 			timeout_ms: 1_000,
 		}, undefined, undefined, harness.ctx);
+		harness.clients[0].emit({
+			type: "tool_execution_start",
+			toolName: "report_to_parent",
+			args: { message: "First interim update" },
+		});
+		setTimeout(() => {
+			harness.clients[0].complete("First result");
+			harness.clients[1].complete("Second result");
+		}, 5);
+		const result = await waiting;
+		expect(result.content[0].text).toContain("First interim update");
 		expect(result.content[0].text).toContain("First result");
 		expect(result.content[0].text).toContain("Second result");
+		expect(result.details.mailbox).toContainEqual(expect.objectContaining({ kind: "message", content: "First interim update" }));
 		expect(result.details.timedOut).toBe(false);
 		expect(harness.sentMessages).toHaveLength(0);
 	});
@@ -731,7 +840,7 @@ describe("subagents", () => {
 		expect(harness.sentMessages[0].message.content).toContain("Second result");
 	});
 
-	test("rejects invalid wait completion conditions", async () => {
+	test("rejects invalid wait completion conditions and excessive timeouts", async () => {
 		const harness = createHarness();
 		const started = await spawnAgent(harness, "Inspect wait validation");
 		await expect(harness.tool.execute("invalid-wait", {
@@ -740,6 +849,11 @@ describe("subagents", () => {
 			return_when: "first",
 			timeout_ms: 0,
 		}, undefined, undefined, harness.ctx)).rejects.toThrow("return_when must be any or all");
+		await expect(harness.tool.execute("invalid-timeout", {
+			action: "wait",
+			agent_names: [started.details.agents[0].name],
+			timeout_ms: 3_600_001,
+		}, undefined, undefined, harness.ctx)).rejects.toThrow("between 0 and 3600000");
 	});
 
 	test("steers a running agent and prompts an idle agent", async () => {
