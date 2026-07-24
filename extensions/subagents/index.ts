@@ -23,6 +23,8 @@ import {
 	type AgentClientOptions,
 	type RpcAgentEvent,
 } from "./rpc.js";
+import { loadSubagentsConfig, type SubagentsRuntimeConfig } from "./config.js";
+import { AgentMailbox, type AgentMailboxEvent, type MailboxSnapshot } from "./mailbox.js";
 import { SUBAGENT_USAGE_ENTRY_TYPE, SUBAGENT_USAGE_EVENT, persistedSubagentUsage } from "./usage.js";
 
 const TOOL_NAME = "agents";
@@ -30,17 +32,18 @@ const REPORT_TOOL_NAME = "report_to_parent";
 const COMPLETION_MESSAGE_TYPE = "subagent-result";
 const MAILBOX_MESSAGE_TYPE = "subagent-message";
 const MAILBOX_BATCH_TYPE = "subagent-mailbox";
+const MAILBOX_STATE_ENTRY_TYPE = "subagent-mailbox-state";
+const MAILBOX_HISTORY_ENTRY_TYPE = "subagent-mailbox-history";
 const DEFAULT_MAX_AGENTS = 6;
 const MAX_RETAINED_CLOSED = 20;
-const DEFAULT_WAIT_MS = 5 * 60_000;
-const MAX_WAIT_MS = 60 * 60_000;
 const DEFAULT_WAIT_RETURN = "any";
+const DEFAULT_WAIT_WAKE = "any";
 const RESULT_BYTES = 24 * 1024;
 const TOOL_OUTPUT_BYTES = 48 * 1024;
 const MAX_TASK_CHARS = 16_000;
 const MAX_MESSAGE_CHARS = 16_000;
+const MAX_QUEUED_CHILD_MESSAGES = 4;
 const MAX_REPORT_CHARS = 4_000;
-const MAX_MAILBOX_EVENTS = 100;
 const MAX_AGENT_NAME_CHARS = 80;
 const RESULT_PREVIEW_CHARS = 180;
 const TOOL_BRANCH = "  └ ";
@@ -57,17 +60,7 @@ Do not ask the user questions; report any missing information to the parent agen
 
 export type AgentStatus = "starting" | "running" | "completed" | "failed" | "interrupted" | "closed";
 type WaitReturn = "any" | "all";
-type MailboxEventKind = "message" | "final";
-
-interface AgentMailboxEvent {
-	sequence: number;
-	kind: MailboxEventKind;
-	agentId: string;
-	agentName: string;
-	content: string;
-	createdAt: number;
-	status?: AgentStatus;
-}
+type WaitWake = "any" | "final";
 
 interface AgentUsage {
 	input: number;
@@ -102,6 +95,8 @@ interface ManagedAgent extends AgentSnapshot {
 	resolveCompletion: () => void;
 	runSettled: boolean;
 	waiting: number;
+	queuedMessages: string[];
+	pendingReports: Map<string, string>;
 	completionDelivery: "none" | "automatic" | "wait";
 	suppressNotifications: boolean;
 	generation: number;
@@ -109,6 +104,35 @@ interface ManagedAgent extends AgentSnapshot {
 	hibernatePromise?: Promise<void>;
 	resumePromise?: Promise<AgentClient>;
 	closePromise?: Promise<void>;
+	transitioning: boolean;
+}
+
+interface PersistedMailboxState {
+	version: 1;
+	key: string;
+	state: "unread" | "delivered";
+	event?: Omit<AgentMailboxEvent<AgentSnapshot>, "sequence">;
+}
+
+function isAgentSnapshot(value: unknown): value is AgentSnapshot {
+	if (!value || typeof value !== "object") return false;
+	const agent = value as Record<string, unknown>;
+	const usage = agent.usage as Record<string, unknown> | undefined;
+	return typeof agent.id === "string"
+		&& (agent.name === undefined || typeof agent.name === "string")
+		&& typeof agent.task === "string"
+		&& (["fresh", "compacted", "forked"] as unknown[]).includes(agent.contextMode)
+		&& (["starting", "running", "completed", "failed", "interrupted", "closed"] as unknown[]).includes(agent.status)
+		&& typeof agent.cwd === "string"
+		&& (agent.model === undefined || typeof agent.model === "string")
+		&& typeof agent.startedAt === "number"
+		&& (agent.endedAt === undefined || typeof agent.endedAt === "number")
+		&& typeof agent.output === "string"
+		&& (agent.error === undefined || typeof agent.error === "string")
+		&& Array.isArray(agent.activity)
+		&& agent.activity.every((item) => typeof item === "string")
+		&& Boolean(usage)
+		&& [usage?.input, usage?.output, usage?.cacheRead, usage?.cacheWrite, usage?.cost, usage?.turns].every((item) => typeof item === "number");
 }
 
 interface ToolDetails {
@@ -126,6 +150,7 @@ export interface SubagentsOptions {
 	compactContext?: CompactContext;
 	registerOverlayCard?: typeof registerOverlayCard;
 	maxAgents?: number;
+	config?: SubagentsRuntimeConfig;
 }
 
 function sanitizeTerminal(text: string): string {
@@ -196,6 +221,12 @@ function tokenText(count: number): string {
 	return `${Math.round(count / 1_000)}k`;
 }
 
+function formatBytes(bytes: number): string {
+	if (bytes < 1024) return `${bytes} B`;
+	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KiB`;
+	return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
 function usageText(agent: AgentSnapshot): string {
 	const parts: string[] = [];
 	if (agent.usage.turns) parts.push(`${agent.usage.turns} turn${agent.usage.turns === 1 ? "" : "s"}`);
@@ -257,14 +288,40 @@ function renderOverlayAgent(agent: AgentSnapshot, width: number, theme: any): st
 	return [headline, taskLine, activityLine];
 }
 
-export function renderAgentsOverlayBody(agents: AgentSnapshot[], width: number, maxHeight: number, theme: any): string[] {
+export function renderAgentsOverlayBody(
+	agents: AgentSnapshot[],
+	width: number,
+	maxHeight: number,
+	theme: any,
+	mailbox?: MailboxSnapshot,
+): string[] {
 	const rowBudget = Math.max(0, Math.min(OVERLAY_MAX_ROWS, maxHeight));
-	if (rowBudget < OVERLAY_AGENT_ROWS || agents.length === 0) return [];
-	const shownCount = Math.min(agents.length, Math.floor(rowBudget / OVERLAY_AGENT_ROWS));
-	const lines = agents.slice(0, shownCount).flatMap((agent) => renderOverlayAgent(agent, width, theme));
+	const unread = mailbox?.unread ?? 0;
+	if (rowBudget === 0 || (agents.length === 0 && unread === 0)) return [];
+	const lines: string[] = [];
+	if (unread > 0) {
+		lines.push(theme.fg("accent", `✉ ${unread} unread · ${formatBytes(mailbox?.messageBytes ?? 0)} progress · /agents`));
+	}
+	const agentBudget = Math.max(0, rowBudget - lines.length);
+	const shownCount = Math.min(agents.length, Math.floor(agentBudget / OVERLAY_AGENT_ROWS));
+	lines.push(...agents.slice(0, shownCount).flatMap((agent) => renderOverlayAgent(agent, width, theme)));
 	const hidden = agents.length - shownCount;
 	if (hidden > 0 && lines.length < rowBudget) lines.push(theme.fg("dim", `… ${hidden} more · /agents`));
 	return lines.map((line) => truncateToWidth(line, width, "…"));
+}
+
+function mailboxStatus(snapshot: MailboxSnapshot): string {
+	const metrics = snapshot.metrics;
+	return [
+		`${snapshot.unread} unread`,
+		`${formatBytes(snapshot.messageBytes)} progress`,
+		`${metrics.published} published`,
+		`${metrics.delivered} delivered`,
+		`${metrics.consumed} consumed`,
+		`${metrics.coalesced} coalesced`,
+		`${metrics.dropped} dropped`,
+		`${metrics.recovered} recovered`,
+	].join(" · ");
 }
 
 function isActive(agent: Pick<ManagedAgent, "status">): boolean {
@@ -375,9 +432,10 @@ function mailboxMessageContent(event: AgentMailboxEvent): string {
 	return boundedText([
 		"<subagent_message>",
 		`Agent: ${sanitizeTerminal(event.agentName)}`,
+		event.omittedBefore ? `Earlier updates omitted: ${event.omittedBefore}` : "",
 		`Message:\n${sanitizeTerminal(event.content)}`,
 		"</subagent_message>",
-	].join("\n\n"), MAX_REPORT_CHARS + 256);
+	].filter(Boolean).join("\n\n"), MAX_REPORT_CHARS + 256);
 }
 
 function formatMailboxEvents(events: AgentMailboxEvent[]): string {
@@ -387,7 +445,12 @@ function formatMailboxEvents(events: AgentMailboxEvent[]): string {
 }
 
 function mailboxBatchContent(events: AgentMailboxEvent[], agents: AgentSnapshot[]): string {
+	const omissions = events
+		.filter((event) => event.omittedBefore && event.kind === "final")
+		.map((event) => `Earlier updates omitted for ${sanitizeTerminal(event.agentName)}: ${event.omittedBefore}`)
+		.join("\n");
 	return boundedText([
+		omissions,
 		formatMailboxEvents(events),
 		agents.length > 0 ? formatAgents(agents, true) : "",
 	].filter(Boolean).join("\n\n"), TOOL_OUTPUT_BYTES);
@@ -437,7 +500,8 @@ function toolHeadline(partial: boolean, isError: boolean, verb: string, detail: 
 
 function actionVerb(action: unknown, partial: boolean, details?: ToolDetails): string {
 	if (action === "spawn") return partial ? "Spawning agent" : "Spawned agent";
-	if (action === "send") return partial ? "Sending to agent" : "Sent to agent";
+	if (action === "send" || action === "followup") return partial ? "Sending follow-up" : "Sent follow-up";
+	if (action === "message") return partial ? "Queueing agent message" : "Queued agent message";
 	if (action === "wait") {
 		if (!partial && details?.interrupted) return "Wait interrupted";
 		if (!partial && details?.timedOut) return "Wait interval ended";
@@ -453,14 +517,15 @@ function actionVerb(action: unknown, partial: boolean, details?: ToolDetails): s
 function actionDetail(args: Record<string, unknown> | undefined): string {
 	if (!args) return "";
 	if (args.action === "spawn") return compact(String(args.task ?? ""), 180);
-	if (args.action === "send") return [compact(String(args.agent_name ?? ""), 48), compact(String(args.message ?? ""), 120)].filter(Boolean).join(" · ");
+	if (args.action === "send" || args.action === "followup" || args.action === "message") return [compact(String(args.agent_name ?? ""), 48), compact(String(args.message ?? ""), 120)].filter(Boolean).join(" · ");
 	if (args.action === "wait") {
 		const names = Array.isArray(args.agent_names) && args.agent_names.length ? args.agent_names.join(", ") : "running agents";
 		const returnWhen = args.return_when === "any" ? "first mailbox update" : args.return_when === "all" ? "all completions" : "";
+		const wakeOn = args.wake_on === "final" ? "final only" : "";
 		const timeout = Number.isInteger(args.timeout_ms)
 			? (args.timeout_ms === 0 ? "no wait" : `${formatElapsed(args.timeout_ms as number)} timeout`)
 			: "";
-		return [compact(names, 120), returnWhen, timeout].filter(Boolean).join(" · ");
+		return [compact(names, 120), returnWhen, wakeOn, timeout].filter(Boolean).join(" · ");
 	}
 	if (args.action === "list") return "current session";
 	return compact(String(args.agent_name ?? ""), 80);
@@ -541,8 +606,9 @@ function agentBodyLines(
 }
 
 function mailboxEventLines(event: AgentMailboxEvent, width: number, theme: any): string[] {
+	const omission = event.omittedBefore ? ` · ${event.omittedBefore} earlier omitted` : "";
 	return [
-		`${theme.fg("dim", TOOL_BRANCH)}${theme.fg("accent", "↳")} ${theme.fg("text", theme.bold(event.agentName))} · ${theme.fg("muted", "message")}`,
+		`${theme.fg("dim", TOOL_BRANCH)}${theme.fg("accent", "↳")} ${theme.fg("text", theme.bold(event.agentName))} · ${theme.fg("muted", `message${omission}`)}`,
 		detailLine("message", compact(event.content, 240), width, theme),
 	];
 }
@@ -594,7 +660,7 @@ function renderAgentResult(result: any, options: ToolRenderOptions, theme: any, 
 			const completed = isSettled(agent);
 			const prompt = action === "close"
 				? undefined
-				: action === "send"
+				: action === "send" || action === "followup" || action === "message"
 					? compact(String(args?.message ?? ""), 240)
 					: agent.task;
 			const showsCompletion = (action === "wait" || action === "list" || action === "read") && completed;
@@ -647,6 +713,9 @@ class MailboxBatchComponent implements Component {
 			for (const event of details.mailbox?.filter((candidate) => candidate.kind === "message") ?? []) {
 				lines.push(...mailboxEventLines(event, width, theme));
 			}
+			for (const event of details.mailbox?.filter((candidate) => candidate.kind === "final" && candidate.omittedBefore) ?? []) {
+				lines.push(`${TOOL_BRANCH}${theme.fg("muted", `${event.agentName} · ${event.omittedBefore} earlier updates omitted`)}`);
+			}
 			for (const agent of details.agents) {
 				lines.push(...agentBodyLines(agent, width, theme, {
 					prompt: agent.task,
@@ -673,14 +742,22 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	const summarizeContext = options.compactContext ?? compactContext;
 	const registerCard = options.registerOverlayCard ?? registerOverlayCard;
 	const maxAgents = options.maxAgents ?? DEFAULT_MAX_AGENTS;
+	const runtimeConfig = options.config ?? loadSubagentsConfig();
 	let generation = 0;
 	let sessionActive = false;
 	let parentRunning = false;
 	let spawnReservations = 0;
 	let compactedSnapshot: { key: string; promise: Promise<string> } | undefined;
 	let activeTranscriptRefresh: (() => void) | undefined;
-	let mailboxSequence = 0;
-	const mailbox: AgentMailboxEvent[] = [];
+	let activeMailboxAnchor: number | undefined;
+	const mailbox = new AgentMailbox<AgentSnapshot>(
+		runtimeConfig.mailbox.maxMessageBytes,
+		runtimeConfig.mailbox.maxMessagesPerAgent,
+	);
+	const activeTurnMailbox = new AgentMailbox<AgentSnapshot>(
+		runtimeConfig.mailbox.maxMessageBytes,
+		runtimeConfig.mailbox.maxMessagesPerAgent,
+	);
 	const mailboxListeners = new Set<() => void>();
 	const usedAgentNames = new Set<string>();
 	const reservedAgentNames = new Set<string>();
@@ -692,12 +769,16 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		id: "subagents",
 		order: 15,
 		width: OVERLAY_WIDTH,
-		minBodyHeight: OVERLAY_AGENT_ROWS,
+		minBodyHeight: 1,
 		minTerminalWidth: 90,
 		minTerminalHeight: 10,
-		visible: () => activeAgents().length > 0,
-		title: (theme) => `${theme.bold(" Agents ")}${theme.fg("accent", `● ${activeAgents().length} running`)} `,
-		renderBody: (width, maxHeight, theme) => renderAgentsOverlayBody(activeAgents().map(snapshot), width, maxHeight, theme),
+		visible: () => activeAgents().length > 0 || mailbox.snapshot().unread > 0,
+		title: (theme) => {
+			const active = activeAgents().length;
+			const unread = mailbox.snapshot().unread;
+			return `${theme.bold(" Agents ")}${theme.fg("accent", `● ${active} running${unread > 0 ? ` · ✉ ${unread} unread` : ""}`)} `;
+		},
+		renderBody: (width, maxHeight, theme) => renderAgentsOverlayBody(activeAgents().map(snapshot), width, maxHeight, theme, mailbox.snapshot()),
 	});
 	const updateOverlay = () => overlayCard.invalidate();
 	const showTranscript = async (agent: ManagedAgent, ctx: any) => {
@@ -739,6 +820,12 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		const key = agentNameKey(query);
 		return [...agents.values()].find((agent) => agent.name && agentNameKey(agent.name) === key)
 			?? agents.get(query);
+	};
+	const queueChildMessage = (agent: ManagedAgent, message: string) => {
+		if (agent.queuedMessages.length >= MAX_QUEUED_CHILD_MESSAGES) {
+			throw new Error(`Agent ${agent.name} already has ${MAX_QUEUED_CHILD_MESSAGES} queued messages; send a follow-up before queueing more`);
+		}
+		agent.queuedMessages.push(message);
 	};
 	const trimClosed = () => {
 		const closed = [...agents.values()]
@@ -790,15 +877,56 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		compactedSnapshot = { key, promise };
 		return promise;
 	};
-	const removeMailboxEvent = (event: AgentMailboxEvent) => {
-		const index = mailbox.findIndex((candidate) => candidate.sequence === event.sequence);
-		if (index >= 0) mailbox.splice(index, 1);
+	const mailboxEventKey = (event: Pick<AgentMailboxEvent, "agentId" | "createdAt" | "persistenceKey">) => event.persistenceKey ?? `${event.agentId}:${event.createdAt}`;
+	const persistMailboxFinal = (event: AgentMailboxEvent<AgentSnapshot>, state: "unread" | "delivered") => {
+		if (event.kind !== "final") return;
+		const persisted: PersistedMailboxState = state === "unread"
+			? {
+				version: 1,
+				key: mailboxEventKey(event),
+				state,
+				event: {
+					kind: event.kind,
+					agentId: event.agentId,
+					agentName: event.agentName,
+					content: event.content,
+					createdAt: event.createdAt,
+					persistenceKey: event.persistenceKey,
+					status: event.status,
+					final: event.final,
+					omittedBefore: event.omittedBefore,
+				},
+			}
+			: { version: 1, key: mailboxEventKey(event), state };
+		pi.appendEntry(MAILBOX_STATE_ENTRY_TYPE, persisted);
 	};
-	const deliverMailboxEvent = (event: AgentMailboxEvent) => {
-		if (!mailbox.some((candidate) => candidate.sequence === event.sequence)) return;
-		const agent = agents.get(event.agentId);
-		if (!agent || agent.suppressNotifications || agent.waiting > 0 || agent.generation !== generation || agent.status === "closed") return;
-		if (event.kind === "final" && agent.completionDelivery !== "none") {
+	const restoreMailboxFinals = (ctx: any) => {
+		const latest = new Map<string, PersistedMailboxState>();
+		for (const entry of ctx.sessionManager.getBranch()) {
+			if (entry?.type !== "custom" || entry.customType !== MAILBOX_STATE_ENTRY_TYPE) continue;
+			const data = entry.data as PersistedMailboxState | undefined;
+			if (data?.version !== 1 || typeof data.key !== "string" || (data.state !== "unread" && data.state !== "delivered")) continue;
+			latest.set(data.key, data);
+		}
+		for (const data of latest.values()) {
+			const event = data.state === "unread" ? data.event : undefined;
+			if (!event || event.kind !== "final" || !isAgentSnapshot(event.final) || typeof event.agentId !== "string" || typeof event.agentName !== "string" || typeof event.content !== "string" || typeof event.createdAt !== "number") continue;
+			if ((event.persistenceKey !== undefined && typeof event.persistenceKey !== "string") || mailboxEventKey(event) !== data.key) continue;
+			mailbox.restore(event);
+		}
+	};
+	const removeMailboxEvent = (event: AgentMailboxEvent<AgentSnapshot>) => {
+		mailbox.remove(event.sequence);
+		persistMailboxFinal(event, "delivered");
+		updateOverlay();
+	};
+	const deliverMailboxEvent = (event: AgentMailboxEvent<AgentSnapshot>) => {
+		if (!mailbox.has((candidate) => candidate.sequence === event.sequence)) return;
+		const candidate = agents.get(event.agentId);
+		const agent = candidate?.generation === generation ? candidate : undefined;
+		if (agent && (agent.suppressNotifications || agent.waiting > 0 || agent.status === "closed")) return;
+		if (!agent && !(event.recovered && event.kind === "final" && event.final)) return;
+		if (event.kind === "final" && agent && agent.completionDelivery !== "none") {
 			removeMailboxEvent(event);
 			return;
 		}
@@ -806,14 +934,15 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		try {
 			const delivery = { triggerTurn: false };
 			if (event.kind === "final") {
-				const data = snapshot(agent);
+				const data = event.final ?? snapshot(agent!);
 				pi.sendMessage({
 					customType: COMPLETION_MESSAGE_TYPE,
 					content: messageContent(data),
 					display: true,
 					details: data,
 				}, delivery);
-				agent.completionDelivery = "automatic";
+				if (agent) agent.completionDelivery = "automatic";
+				persistMailboxFinal(event, "delivered");
 			} else {
 				pi.sendMessage({
 					customType: MAILBOX_MESSAGE_TYPE,
@@ -822,51 +951,64 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 					details: event,
 				}, delivery);
 			}
-			removeMailboxEvent(event);
+			mailbox.take((candidate) => candidate.sequence === event.sequence, "delivered");
+			updateOverlay();
 		} catch {
 			// Leave the event queued so a later wait can collect it.
 		}
 	};
-	const publishMailboxEvent = (agent: ManagedAgent, kind: MailboxEventKind, content: string): AgentMailboxEvent => {
-		const event: AgentMailboxEvent = {
-			sequence: ++mailboxSequence,
+	const publishMailboxEvent = (agent: ManagedAgent, kind: AgentMailboxEvent["kind"], content: string): AgentMailboxEvent<AgentSnapshot> => {
+		const event = mailbox.publish({
 			kind,
 			agentId: agent.id,
 			agentName: agent.name ?? "unnamed agent",
 			content: boundedText(sanitizeTerminal(content), kind === "message" ? MAX_REPORT_CHARS : RESULT_BYTES),
 			createdAt: Date.now(),
+			persistenceKey: kind === "final" ? `${agent.id}:${randomBytes(6).toString("hex")}` : undefined,
 			status: kind === "final" ? agent.status : undefined,
-		};
-		mailbox.push(event);
-		while (mailbox.length > MAX_MAILBOX_EVENTS) {
-			const messageIndex = mailbox.findIndex((candidate) => candidate.kind === "message");
-			mailbox.splice(messageIndex >= 0 ? messageIndex : 0, 1);
-		}
+			final: kind === "final" ? snapshot(agent) : undefined,
+		});
+		if (kind === "final") persistMailboxFinal(event, "unread");
 		for (const listener of [...mailboxListeners]) listener();
+		updateOverlay();
 		if (agent.waiting === 0) queueMicrotask(() => deliverMailboxEvent(event));
 		return event;
 	};
-	const takeMailboxEvents = (targets: ManagedAgent[]): AgentMailboxEvent[] => {
+	const takeMailboxEvents = (targets: ManagedAgent[]): AgentMailboxEvent<AgentSnapshot>[] => {
 		const targetIds = new Set(targets.map((agent) => agent.id));
-		const events = mailbox.filter((event) => targetIds.has(event.agentId));
-		for (const event of events) removeMailboxEvent(event);
+		const events = mailbox.take((event) => targetIds.has(event.agentId), "consumed");
+		for (const event of events) persistMailboxFinal(event, "delivered");
+		updateOverlay();
 		return events;
 	};
-	const takeAutomaticMailboxDelivery = (): { events: AgentMailboxEvent[]; agents: AgentSnapshot[] } | undefined => {
-		const events = mailbox.splice(0).filter((event) => {
+	const takeAutomaticMailboxDelivery = (): { events: AgentMailboxEvent<AgentSnapshot>[]; agents: AgentSnapshot[] } | undefined => {
+		const events = mailbox.take((event) => {
 			const agent = agents.get(event.agentId);
 			return Boolean(agent && !agent.suppressNotifications && agent.generation === generation && agent.status !== "closed");
-		});
+		}, "delivered");
 		if (events.length === 0) return undefined;
 		const completed = new Map<string, AgentSnapshot>();
 		for (const event of events) {
+			persistMailboxFinal(event, "delivered");
 			if (event.kind !== "final") continue;
 			const agent = agents.get(event.agentId);
 			if (!agent || agent.completionDelivery !== "none") continue;
 			agent.completionDelivery = "automatic";
-			completed.set(agent.id, snapshot(agent));
+			completed.set(agent.id, event.final ?? snapshot(agent));
 		}
+		updateOverlay();
 		return { events, agents: [...completed.values()] };
+	};
+	const mailboxDeliveryMessage = (delivery: { events: AgentMailboxEvent<AgentSnapshot>[]; agents: AgentSnapshot[] }) => {
+		const details = { action: "mailbox", agents: delivery.agents, mailbox: delivery.events } satisfies ToolDetails;
+		return {
+			role: "custom",
+			customType: MAILBOX_BATCH_TYPE,
+			content: mailboxBatchContent(delivery.events, delivery.agents),
+			display: true,
+			details,
+			timestamp: Date.now(),
+		};
 	};
 	const hibernateAgent = async (agent: ManagedAgent): Promise<void> => {
 		if (agent.hibernatePromise) return agent.hibernatePromise;
@@ -909,13 +1051,22 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		if (event.type === "tool_execution_start") {
 			if (event.toolName === REPORT_TOOL_NAME) {
 				const message = boundedText(sanitizeTerminal(String(event.args?.message ?? "").trim()), MAX_REPORT_CHARS);
-				if (message) publishMailboxEvent(agent, "message", message);
+				const callId = String(event.toolCallId ?? "");
+				if (message && callId) agent.pendingReports.set(callId, message);
+				else if (message) publishMailboxEvent(agent, "message", message);
 			}
 			const detail = event.args?.command ?? (event.toolName === REPORT_TOOL_NAME ? event.args?.message : undefined);
 			const description = `${event.toolName ?? "tool"}${detail ? `: ${compact(String(detail), 100)}` : ""}`;
 			agent.activity.push(description);
 			if (agent.activity.length > 12) agent.activity.shift();
 			overlayCard.invalidate();
+			return;
+		}
+		if (event.type === "tool_execution_end" && event.toolName === REPORT_TOOL_NAME) {
+			const callId = String(event.toolCallId ?? "");
+			const message = agent.pendingReports.get(callId);
+			agent.pendingReports.delete(callId);
+			if (message && !event.isError) publishMailboxEvent(agent, "message", message);
 			return;
 		}
 		if (event.type === "message_end" && event.message?.role === "assistant") {
@@ -1018,7 +1169,9 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		agent.suppressNotifications ||= suppressNotification;
 		if (agent.closePromise) return agent.closePromise;
 		if (agent.status === "closed" && !agent.client && agent.cleanupComplete) return;
-		for (const event of mailbox.filter((candidate) => candidate.agentId === agent.id)) removeMailboxEvent(event);
+		for (const event of mailbox.peek((candidate) => candidate.agentId === agent.id)) removeMailboxEvent(event);
+		agent.pendingReports.clear();
+		agent.queuedMessages = [];
 		agent.status = "closed";
 		agent.endedAt ??= Date.now();
 		if (!agent.runSettled) {
@@ -1110,10 +1263,13 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				resolveCompletion,
 				runSettled: false,
 				waiting: 0,
+				queuedMessages: [],
+				pendingReports: new Map(),
 				completionDelivery: "none",
 				suppressNotifications: false,
 				generation: reservation.generation,
 				cleanupComplete: false,
+				transitioning: false,
 			};
 			agents.set(id, agent);
 			reservation.commit();
@@ -1148,11 +1304,14 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		targets: ManagedAgent[],
 		timeoutMs: number,
 		returnWhen: WaitReturn,
+		wakeOn: WaitWake,
 		signal?: AbortSignal,
 	): Promise<{ timedOut: boolean; interrupted: boolean }> => {
 		const targetIds = new Set(targets.map((agent) => agent.id));
-		const hasMailboxActivity = () => mailbox.some((event) => targetIds.has(event.agentId));
+		const hasMailboxActivity = () => mailbox.has((event) => targetIds.has(event.agentId) && (wakeOn === "any" || event.kind === "final"));
 		const running = targets.filter(isActive);
+		const alreadyWaiting = targets.find((agent) => agent.waiting > 0);
+		if (alreadyWaiting) throw new Error(`Agent ${alreadyWaiting.name} already has an active wait`);
 		if (running.length === 0 || (returnWhen === "any" && (running.length < targets.length || hasMailboxActivity()))) {
 			return { timedOut: false, interrupted: false };
 		}
@@ -1202,17 +1361,22 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		const data = message.details as ToolDetails | undefined;
 		return data ? new MailboxBatchComponent(data, Boolean(options.expanded), theme) : new Text(String(message.content ?? ""), 0, 0);
 	});
+	pi.registerEntryRenderer(MAILBOX_HISTORY_ENTRY_TYPE, (entry: any, options: any, theme: any) => {
+		const data = entry.data?.details as ToolDetails | undefined;
+		return data ? new MailboxBatchComponent(data, Boolean(options.expanded), theme) : new Text("Agent mailbox update", 0, 0);
+	});
 
 	pi.registerTool({
 		name: TOOL_NAME,
 		label: "Agents",
-		description: "Spawn and coordinate uniquely named child agents with isolated persistent context. Actions: spawn starts one; send steers or resumes it; wait collects mailbox updates for up to five minutes by default and returns after the first selected message or completion, or after all selected agents settle when requested; list shows status; read returns the latest response; interrupt stops the current turn but preserves context; close deletes it. Settled child processes hibernate until send resumes them. Children inherit the current model, tools, working directory, and project instructions. Conversation context can be fresh, compacted, or forked; fresh is the default. Interim and final updates queue automatically without forcing a parent turn.",
+		description: "Spawn and coordinate uniquely named child agents with isolated persistent context. Actions: spawn starts one; message queues context without starting an idle child turn; followup steers or resumes a child; send is a legacy followup alias; wait collects mailbox updates using configurable bounds and can wake on any update, final results only, or all selected finals; list shows status; read returns the latest response; interrupt stops the current turn but preserves context; close deletes it. Children inherit the current model, tools, working directory, and project instructions and can report bounded interim progress. Mailbox updates enter the next safe model request, display when idle without starting a turn, and preserve unread finals across reloads.",
 		promptSnippet: "Spawn and coordinate isolated child agents for explicitly delegated work",
 		promptGuidelines: [
 			"Use agents only when the user or applicable project instructions request delegation, subagents, or parallel agent work.",
 			"Call agents with action=spawn for concrete independent tasks; give each child a concise task-specific name that is unique in the current session; multiple spawn calls can run concurrently, and the parent should continue useful non-overlapping work.",
 			"Agents use fresh conversation context by default. Set context=compacted when prior decisions matter, or context=forked only when the exact parent conversation is required.",
-			"Use agents action=wait only when blocked on child results; it waits up to five minutes and resumes after the first mailbox message or completion by default, so use return_when=all only when every selected final result is required. An ended wait interval does not stop agents, and queued updates do not force a new parent turn.",
+			"Use action=message for queue-only context and action=followup to trigger or steer work; send remains a compatibility alias for followup.",
+			"Use agents action=wait only when blocked on child results; it resumes after the first mailbox update by default, accepts wake_on=final when progress must not wake it, and uses return_when=all only when every selected final result is required. Timeouts do not stop agents or force parent turns.",
 			"Use agents action=read to retrieve a child's latest response again without restarting it, and action=interrupt to stop active work while preserving the conversation for follow-up.",
 			"After collecting a child's final result, call agents with action=close when no further follow-up is needed; settled children hibernate but retain a conversation slot until closed.",
 			"Give concurrently writing child agents disjoint file scopes to avoid conflicting edits.",
@@ -1220,15 +1384,21 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		parameters: withReasoning({
 			type: "object",
 			properties: {
-				action: { type: "string", enum: ["spawn", "send", "wait", "list", "read", "interrupt", "close"], description: "Lifecycle action" },
+				action: { type: "string", enum: ["spawn", "message", "followup", "send", "wait", "list", "read", "interrupt", "close"], description: "Lifecycle action; send is a legacy alias for followup" },
 				task: { type: "string", maxLength: MAX_TASK_CHARS, description: "Concrete task for spawn" },
 				context: { type: "string", enum: ["fresh", "compacted", "forked"], description: "Conversation context for spawn (default fresh)" },
 				name: { type: "string", maxLength: MAX_AGENT_NAME_CHARS, description: "Required unique human-readable name for spawn" },
-				agent_name: { type: "string", description: "Agent name for send, read, interrupt, or close" },
-				message: { type: "string", maxLength: MAX_MESSAGE_CHARS, description: "Follow-up instruction for send" },
+				agent_name: { type: "string", description: "Agent name for message, followup, send, read, interrupt, or close" },
+				message: { type: "string", maxLength: MAX_MESSAGE_CHARS, description: "Queued context or follow-up instruction for message, followup, or send" },
 				agent_names: { type: "array", items: { type: "string" }, description: "Agent names for wait; defaults to all running agents" },
 				return_when: { type: "string", enum: ["any", "all"], description: `Wait completion condition (default ${DEFAULT_WAIT_RETURN})` },
-				timeout_ms: { type: "integer", minimum: 0, maximum: MAX_WAIT_MS, description: `Wait timeout in milliseconds (default ${DEFAULT_WAIT_MS}, max ${MAX_WAIT_MS})` },
+				wake_on: { type: "string", enum: ["any", "final"], description: `Mailbox event filter when return_when is any (default ${DEFAULT_WAIT_WAKE})` },
+				timeout_ms: {
+					type: "integer",
+					minimum: runtimeConfig.wait.minimumMs,
+					maximum: runtimeConfig.wait.maximumMs,
+					description: `Wait timeout in milliseconds (default ${runtimeConfig.wait.defaultMs}, min ${runtimeConfig.wait.minimumMs}, max ${runtimeConfig.wait.maximumMs})`,
+				},
 			},
 			required: ["action"],
 		} as any),
@@ -1250,12 +1420,15 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 					details: { action: "spawn", agents: [data] } satisfies ToolDetails,
 				};
 			}
-			if (params.action === "send") {
+			if (params.action === "send" || params.action === "followup" || params.action === "message") {
+				const action = params.action as "send" | "followup" | "message";
 				const agent = resolveAgent(String(params.agent_name ?? ""));
 				if (!agent) throw new Error(`Agent not found: ${params.agent_name ?? ""}`);
 				if (agent.status === "closed" || agent.cleanupComplete) throw new Error(`Agent ${agent.name} is closed`);
-				const message = boundedInput(params.message, "send message", MAX_MESSAGE_CHARS);
+				const message = boundedInput(params.message, `${action} message`, MAX_MESSAGE_CHARS);
 				const beginFollowUp = async () => {
+					if (agent.transitioning) throw new Error(`Agent ${agent.name} is already resuming`);
+					agent.transitioning = true;
 					const previous = {
 						status: agent.status,
 						startedAt: agent.startedAt,
@@ -1263,53 +1436,71 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 						output: agent.output,
 						error: agent.error,
 						activity: agent.activity,
+						queuedMessages: [...agent.queuedMessages],
 						completionDelivery: agent.completionDelivery,
 						suppressNotifications: agent.suppressNotifications,
 						completion: agent.completion,
 						resolveCompletion: agent.resolveCompletion,
 						runSettled: agent.runSettled,
 					};
-					const client = await ensureClient(agent);
-					agent.status = "running";
-					agent.startedAt = Date.now();
-					agent.endedAt = undefined;
-					agent.output = "";
-					agent.error = undefined;
-					agent.activity = [`follow-up: ${compact(message, 100)}`];
-					for (const event of mailbox.filter((candidate) => candidate.agentId === agent.id)) removeMailboxEvent(event);
-					agent.completionDelivery = "none";
-					agent.suppressNotifications = false;
-					newCompletion(agent);
-					const rejectedRunResolve = agent.resolveCompletion;
-					updateOverlay();
 					try {
-						await client.prompt(message);
-					} catch (error) {
-						if (agent.client === client && isActive(agent) && !agent.runSettled) {
-							Object.assign(agent, previous);
-							rejectedRunResolve();
-							updateOverlay();
-							void hibernateAgent(agent).catch(() => { /* Retried by close or send. */ });
+						const client = await ensureClient(agent);
+						const queued = [...agent.queuedMessages];
+						const prompt = queued.length > 0
+							? `${queued.map((item) => `Queued message:\n${item}`).join("\n\n")}\n\nFollow-up task:\n${message}`
+							: message;
+						agent.status = "running";
+						agent.startedAt = Date.now();
+						agent.endedAt = undefined;
+						agent.output = "";
+						agent.error = undefined;
+						agent.activity = [`follow-up: ${compact(message, 100)}`];
+						agent.queuedMessages = [];
+						agent.pendingReports.clear();
+						for (const event of mailbox.peek((candidate) => candidate.agentId === agent.id)) removeMailboxEvent(event);
+						agent.completionDelivery = "none";
+						agent.suppressNotifications = false;
+						newCompletion(agent);
+						const rejectedRunResolve = agent.resolveCompletion;
+						updateOverlay();
+						const run = client.prompt(prompt);
+						agent.transitioning = false;
+						try {
+							await run;
+						} catch (error) {
+							if (agent.client === client && isActive(agent) && !agent.runSettled) {
+								Object.assign(agent, previous);
+								rejectedRunResolve();
+								updateOverlay();
+								void hibernateAgent(agent).catch(() => { /* Retried by close or followup. */ });
+							}
+							throw error;
 						}
-						throw error;
+					} finally {
+						agent.transitioning = false;
 					}
 				};
-				if (isActive(agent)) {
+				if (action === "message" && !isActive(agent)) {
+					queueChildMessage(agent, message);
+					agent.activity.push(`queued message: ${compact(message, 100)}`);
+				} else if (isActive(agent)) {
 					const client = await ensureClient(agent);
 					try {
 						await client.steer(message);
-						agent.activity.push(`steered: ${compact(message, 100)}`);
+						agent.activity.push(`${action === "message" ? "message" : "follow-up"}: ${compact(message, 100)}`);
 						if (agent.activity.length > 12) agent.activity.shift();
 					} catch (error) {
-						// The child may settle between our status check and the RPC
-						// command. In that case continue it as a fresh prompt.
-						if (!isActive(agent)) await beginFollowUp();
+						if (!isActive(agent) && action !== "message") await beginFollowUp();
+						else if (!isActive(agent)) queueChildMessage(agent, message);
 						else throw error;
 					}
 				} else await beginFollowUp();
 				updateOverlay();
 				const data = snapshot(agent);
-				return { content: [{ type: "text", text: `Sent follow-up to ${agent.name}.` }], details: { action: "send", agents: [data] } satisfies ToolDetails };
+				const text = action === "message"
+					? `Queued message for ${agent.name} without starting a turn.`
+					: `Sent follow-up to ${agent.name}.`;
+				return { content: [{ type: "text", text }], details: { action, agents: [data] } satisfies ToolDetails };
 			}
 			if (params.action === "wait") {
 				const requested: string[] = Array.isArray(params.agent_names) ? params.agent_names : [];
@@ -1320,11 +1511,15 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 						return agent;
 					})
 					: orderedAgents().filter(isActive);
-				const timeoutMs = params.timeout_ms ?? DEFAULT_WAIT_MS;
-				if (!Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_WAIT_MS) throw new Error(`timeout_ms must be an integer between 0 and ${MAX_WAIT_MS}`);
+				const timeoutMs = params.timeout_ms ?? runtimeConfig.wait.defaultMs;
+				if (!Number.isInteger(timeoutMs) || timeoutMs < runtimeConfig.wait.minimumMs || timeoutMs > runtimeConfig.wait.maximumMs) {
+					throw new Error(`timeout_ms must be an integer between ${runtimeConfig.wait.minimumMs} and ${runtimeConfig.wait.maximumMs}`);
+				}
 				const returnWhen: WaitReturn = params.return_when ?? DEFAULT_WAIT_RETURN;
 				if (returnWhen !== "any" && returnWhen !== "all") throw new Error("return_when must be any or all");
-				const waited = await waitForAgents(targets, timeoutMs, returnWhen, signal);
+				const wakeOn: WaitWake = params.wake_on ?? DEFAULT_WAIT_WAKE;
+				if (wakeOn !== "any" && wakeOn !== "final") throw new Error("wake_on must be any or final");
+				const waited = await waitForAgents(targets, timeoutMs, returnWhen, wakeOn, signal);
 				const mailboxEvents = takeMailboxEvents(targets);
 				const alreadyReportedAgentIds = targets
 					.filter((agent) => agent.completionDelivery === "automatic")
@@ -1346,8 +1541,9 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 							: "No mailbox update arrived during this wait interval.\nAgents continue running and updates remain queued without forcing a parent turn.\n"
 						: "";
 				const mailboxText = formatMailboxEvents(mailboxEvents);
+				const text = boundedText([waitStatus.trimEnd(), mailboxText, formatAgents(data, true)].filter(Boolean).join("\n\n"), TOOL_OUTPUT_BYTES);
 				return {
-					content: [{ type: "text", text: [waitStatus.trimEnd(), mailboxText, formatAgents(data, true)].filter(Boolean).join("\n\n") }],
+					content: [{ type: "text", text }],
 					details: { action: "wait", agents: data, mailbox: mailboxEvents, alreadyReportedAgentIds, ...waited } satisfies ToolDetails,
 				};
 			}
@@ -1364,6 +1560,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			if (params.action === "interrupt") {
 				const agent = resolveAgent(String(params.agent_name ?? ""));
 				if (!agent) throw new Error(`Agent not found: ${params.agent_name ?? ""}`);
+				if (agent.transitioning && !isActive(agent)) throw new Error(`Agent ${agent.name} is resuming; retry interrupt after startup settles`);
 				const wasActive = isActive(agent);
 				await interruptAgent(agent);
 				const data = snapshot(agent);
@@ -1387,16 +1584,26 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	});
 
 	pi.registerCommand("agents", {
-		description: "Select a child agent and open its live transcript",
+		description: "Inspect mailbox metrics or open a child transcript",
 		handler: async (_args, ctx) => {
 			const ordered = orderedAgents();
+			const mailboxSnapshot = mailbox.snapshot();
+			const mailboxLabel = `✉ Mailbox · ${mailboxStatus(mailboxSnapshot)}`;
 			if (ordered.length === 0) {
-				ctx.ui.notify("No subagents in this session.", "info");
+				ctx.ui.notify(`No subagents in this session. Mailbox: ${mailboxStatus(mailboxSnapshot)}`, "info");
 				return;
 			}
-			const labels = ordered.map((agent) => `${statusSymbol(agent.status)} ${agent.name ?? agent.id} · ${agent.contextMode} context · ${agent.status} · ${compact(agent.task, 72)}`);
-			const selected = await ctx.ui.select(`Subagents (${ordered.filter(isActive).length} running)`, labels);
+			const labels = ordered.map((agent) => {
+				const unread = mailboxSnapshot.byAgent[agent.name ?? agent.id] ?? 0;
+				return `${statusSymbol(agent.status)} ${agent.name ?? agent.id} · ${agent.contextMode} context · ${agent.status}${unread > 0 ? ` · ✉ ${unread}` : ""} · ${compact(agent.task, 72)}`;
+			});
+			const choices = [mailboxLabel, ...labels];
+			const selected = await ctx.ui.select(`Subagents (${ordered.filter(isActive).length} running · ${mailboxSnapshot.unread} unread)`, choices);
 			if (!selected) return;
+			if (selected === mailboxLabel) {
+				ctx.ui.notify(`Mailbox: ${mailboxStatus(mailbox.snapshot())}`, "info");
+				return;
+			}
 			const agent = ordered[labels.indexOf(selected)];
 			if (!agent) return;
 			if (ctx.mode && ctx.mode !== "tui") {
@@ -1407,36 +1614,62 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		},
 	});
 
-	pi.on("session_start", () => {
+	pi.on("session_start", (_event, ctx) => {
 		generation += 1;
 		compactedSnapshot = undefined;
-		mailbox.length = 0;
+		mailbox.reset();
+		activeTurnMailbox.reset();
+		activeMailboxAnchor = undefined;
 		mailboxListeners.clear();
 		sessionActive = true;
 		parentRunning = false;
+		restoreMailboxFinals(ctx);
 		updateOverlay();
+		for (const event of mailbox.peek()) queueMicrotask(() => deliverMailboxEvent(event));
 	});
 	pi.on("before_agent_start", () => {
 		const delivery = takeAutomaticMailboxDelivery();
 		if (!delivery) return;
-		const details = { action: "mailbox", agents: delivery.agents, mailbox: delivery.events } satisfies ToolDetails;
-		return {
-			message: {
-				customType: MAILBOX_BATCH_TYPE,
-				content: mailboxBatchContent(delivery.events, delivery.agents),
-				display: true,
-				details,
-			},
-		};
+		const { role: _role, timestamp: _timestamp, ...message } = mailboxDeliveryMessage(delivery);
+		return { message };
 	});
-	pi.on("agent_start", () => { parentRunning = true; });
-	pi.on("agent_settled", () => { parentRunning = false; });
+	pi.on("agent_start", () => {
+		if (!parentRunning) {
+			activeTurnMailbox.clear();
+			activeMailboxAnchor = undefined;
+		}
+		parentRunning = true;
+	});
+	pi.on("context", (event) => {
+		const delivery = takeAutomaticMailboxDelivery();
+		if (delivery) {
+			activeMailboxAnchor ??= event.messages.length;
+			for (const mailboxEvent of delivery.events) activeTurnMailbox.publish(mailboxEvent);
+			const historyMessage = mailboxDeliveryMessage(delivery);
+			pi.appendEntry(MAILBOX_HISTORY_ENTRY_TYPE, { version: 1, details: historyMessage.details });
+		}
+		const activeEvents = activeTurnMailbox.peek();
+		if (activeEvents.length === 0) return;
+		const completed = activeEvents.flatMap((mailboxEvent) => mailboxEvent.kind === "final" && mailboxEvent.final ? [mailboxEvent.final] : []);
+		const message = mailboxDeliveryMessage({ events: activeEvents, agents: completed });
+		const messages = [...event.messages];
+		messages.splice(Math.min(activeMailboxAnchor ?? messages.length, messages.length), 0, message);
+		return { messages };
+	});
+	pi.on("agent_settled", () => {
+		parentRunning = false;
+		activeTurnMailbox.clear();
+		activeMailboxAnchor = undefined;
+		for (const event of mailbox.peek()) queueMicrotask(() => deliverMailboxEvent(event));
+	});
 	pi.on("session_shutdown", async () => {
 		sessionActive = false;
 		parentRunning = false;
 		generation += 1;
 		compactedSnapshot = undefined;
-		mailbox.length = 0;
+		mailbox.clear();
+		activeTurnMailbox.clear();
+		activeMailboxAnchor = undefined;
 		mailboxListeners.clear();
 		const current = [...agents.values()];
 		for (const agent of current) agent.suppressNotifications = true;

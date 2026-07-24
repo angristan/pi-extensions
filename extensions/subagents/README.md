@@ -14,15 +14,17 @@ specialization.
 
 ## Agent tool
 
-The extension registers one `agents` tool with seven actions. Every call also
+The extension registers one `agents` tool with nine actions. Every call also
 uses the same concise `reasoning` intent field as the repository's native-style
 tools.
 
 | Action | Fields | Behavior |
 |---|---|---|
 | `spawn` | `task`, `name`, `context?` | Start a uniquely named child; context is `fresh` (default), `compacted`, or `forked` |
-| `send` | `agent_name`, `message` | Steer a running child or continue an idle child |
-| `wait` | `agent_names?`, `return_when?`, `timeout_ms?` | Wait for selected children, or every running child; return after the first mailbox message or completion (`any`, default), or after `all` settle |
+| `message` | `agent_name`, `message` | Queue context without starting an idle child turn; deliver at the next boundary if already running |
+| `followup` | `agent_name`, `message` | Steer a running child or start a new turn in a hibernated child |
+| `send` | `agent_name`, `message` | Legacy compatibility alias for `followup` |
+| `wait` | `agent_names?`, `return_when?`, `wake_on?`, `timeout_ms?` | Wait for selected children, or every running child; wake after any update (default), final updates only, or all finals |
 | `list` | — | List child status without waiting |
 | `read` | `agent_name` | Return the child's latest final response without restarting it |
 | `interrupt` | `agent_name` | Stop the current turn while retaining the conversation for follow-up |
@@ -43,29 +45,34 @@ Continue reviewing the implementation while they run.
 
 ```text
 Send the API child a follow-up asking it to verify the upstream documentation.
+Queue a message for the test child without starting another turn.
 ```
 
 ## Mailbox coordination
 
 Each child has a `report_to_parent` tool for material interim findings that can
-unblock or redirect the parent. Interim reports and final results enter a bounded
-parent mailbox. `wait` consumes matching mailbox updates directly. Multiple
-updates already queued for the selected children are returned together.
+unblock or redirect the parent. Reports publish only after that tool succeeds.
+Interim reports and final results enter a bounded parent mailbox. `wait` consumes
+matching updates directly and returns multiple already-queued updates together.
 
 Updates without an active matching wait never force a model turn. While the
-parent is running they queue for its next turn instead of interrupting current
-reasoning. While the parent is idle they appear immediately in the transcript
-without starting another response. Each run has one completion owner: `wait`
-renders a final result when it collects the run; otherwise automatic delivery
-does. A late `wait` hides its duplicate card when that result was already delivered.
+parent is running, new updates enter the next safe LLM request and remain present
+for later requests in that run. If no further request occurs, they display when
+the parent settles without starting another response. Idle updates display
+immediately. Each run has one completion owner, so waited and automatic results
+do not create duplicate cards.
 
-`wait` uses a five-minute interval by default and returns sooner when its
-completion condition is met. It resumes after the first selected mailbox message
-or completion; set `return_when` to `all` only when every selected final result
-is required. `timeout_ms` accepts zero through one hour, so callers can request
-an immediate status snapshot or a longer blocking interval. An ended interval
-never cancels children: updates remain queued without forcing another parent
-turn.
+`wait` resumes after the first selected mailbox message or completion by default.
+Set `wake_on` to `final` when progress must remain queued until a final result, or
+set `return_when` to `all` when every selected final result is required. Ending or
+interrupting a wait never cancels children. Overlapping waits on the same active
+child are rejected to keep event ownership deterministic.
+
+Interim messages are bounded by aggregate bytes and per-agent counts. Old progress
+is coalesced or dropped first, omission counts are included in the next update,
+and final results are never dropped. Unread final results are stored as durable
+session state and recovered after reload or an unexpected runtime restart when
+the same session is resumed.
 
 ## UI
 
@@ -85,8 +92,8 @@ Waited and automatic completions share the exact same body.
     usage   2 turns · ↑18k · ↓1.2k · R31k · $0.0842 · provider/model
 ```
 
-Spawn cards show identity and prompt. Send cards show identity and the follow-up
-prompt. Read cards show the latest result and usage. Interrupt and close cards show
+Spawn cards show identity and prompt. Message and follow-up cards show identity
+and their supplied text. Read cards show the latest result and usage. Interrupt and close cards show
 identity only, avoiding repeated historical details.
 
 In TUI mode, actively running children also appear in the shared top-right
@@ -107,13 +114,16 @@ preview, and latest activity. Elapsed startup time is intentionally omitted. The
 token total combines input, output, cache-read, and cache-write usage across the
 persistent conversation. Completed and failed children disappear from the live
 overlay as soon as they settle, but remain available through `/agents` while
-their conversation is open. The card hides automatically when no children are running. It shows up to three detailed
-children and uses an `/agents` overflow hint when space permits. The card hides
+their conversation is open. The card remains visible while children are running or mailbox updates are unread.
+Its title and body show unread counts. It shows up to three detailed children and
+uses an `/agents` overflow hint when space permits. The card hides
 on terminals narrower than 90 columns or shorter than 10 rows. Use `/overlay`
 or `Ctrl+Shift+O` to toggle the shared overlay stack.
 
 Live child status is shown only in the overlay to avoid duplicating it in the footer.
-Run `/agents`, select a child, and Pi opens a scrollable live transcript that
+Run `/agents` to inspect unread progress bytes and published, delivered,
+consumed, coalesced, dropped, and recovered counters, or select a child to open a
+scrollable live transcript that
 follows new messages and tool results. Entries are grouped into labeled Task,
 Agent, Thinking, Tool, and Tool result blocks instead of raw JSON. The viewer
 starts at the latest entry; scroll up to pause tail-following or press End to
@@ -145,6 +155,7 @@ session:
 - Child dialogs are cancelled because no interactive UI is attached to the RPC process.
 - Children can send bounded interim mailbox updates with `report_to_parent`; final responses are reported automatically.
 - Settled and interrupted children hibernate: their RPC process exits while the temporary session remains available.
+- Up to four queue-only messages remain pending on a hibernated child; a fifth is rejected until a follow-up delivers the queue.
 - Follow-ups lazily start a new child process against the retained session and continue the same conversation.
 - `read` retrieves the latest response without waking a hibernated child.
 - `interrupt` aborts active work, hibernates the child, and preserves its session; `close` permanently removes it.
@@ -159,9 +170,26 @@ called. The parent is instructed to close a child after collecting its final res
 when no further follow-up is needed. Closed child summaries remain visible for the
 current parent session.
 
+## Configuration
+
+Optional settings are read from `~/.pi/agent/subagents.json` (or
+`$PI_CODING_AGENT_DIR/subagents.json`):
+
+```json
+{
+  "wait": { "minimumMs": 0, "defaultMs": 300000, "maximumMs": 3600000 },
+  "mailbox": { "maxMessageBytes": 49152, "maxMessagesPerAgent": 4 }
+}
+```
+
+Wait values must be ordered integers between zero and the one-hour hard maximum.
+Mailbox bytes must be 8 KiB–1 MiB and per-agent messages 1–100. Invalid sections
+fall back independently to defaults. Per-call `timeout_ms` must fit the resolved
+minimum and maximum.
+
 ## Input and output limits
 
-- Spawn tasks and follow-up messages are capped at 16,000 characters each.
+- Spawn tasks, queue-only messages, and follow-up messages are capped at 16,000 characters each.
 - Interim mailbox reports are capped at 4,000 characters.
 - One child result is capped at 24 KiB.
 - Combined `wait` output is capped below Pi's 50 KiB tool-result limit.
