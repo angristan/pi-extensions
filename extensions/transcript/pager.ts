@@ -5,6 +5,21 @@ export type TranscriptEntry = any;
 export interface TranscriptPagerOptions {
 	title?: string;
 	startAtEnd?: boolean;
+	maxHeight?: () => number;
+}
+
+export const TRANSCRIPT_OVERLAY_OPTIONS = {
+	width: "95%",
+	maxHeight: "92%",
+	anchor: "center",
+	margin: 1,
+} as const;
+
+export function resolveTranscriptOverlayHeight(terminalRows: number): number {
+	const rows = Math.max(1, Math.floor(terminalRows));
+	const percentageBudget = Math.floor(rows * 0.92);
+	const marginBudget = rows - (TRANSCRIPT_OVERLAY_OPTIONS.margin * 2);
+	return Math.max(1, Math.min(percentageBudget, marginBudget));
 }
 
 function displayText(value: string): string {
@@ -128,6 +143,7 @@ export class TranscriptPager {
 	private cachedLines: string[] = [];
 	private followEnd: boolean;
 	private maxScroll = 0;
+	private bodyHeight = 1;
 	constructor(
 		private readonly getEntries: () => TranscriptEntry[],
 		private readonly theme: any,
@@ -153,21 +169,22 @@ export class TranscriptPager {
 	}
 	render(width: number): string[] {
 		const max = Math.max(1, width);
-		const height = Math.max(8, (process.stdout.rows || 24) - 6);
-		const bodyHeight = height - 2;
+		const height = Math.max(1, Math.floor(this.options.maxHeight?.() ?? resolveTranscriptOverlayHeight(process.stdout.rows || 24)));
+		this.bodyHeight = Math.max(0, height - 2);
 		const lines = this.lines(max);
-		this.maxScroll = Math.max(0, lines.length - bodyHeight);
+		this.maxScroll = Math.max(0, lines.length - this.bodyHeight);
 		this.scroll = this.followEnd ? this.maxScroll : Math.min(this.scroll, this.maxScroll);
 		const percent = this.maxScroll === 0 ? 100 : Math.round((this.scroll / this.maxScroll) * 100);
 		const title = this.options.title ?? "Transcript";
 		const header = truncateToWidth(`${this.theme.fg("accent", title)} ${this.theme.fg("dim", `(${lines.length} rows)`)}`, max);
-		const visible = lines.slice(this.scroll, this.scroll + bodyHeight).map((line) => truncateToWidth(line, max, "…"));
-		while (visible.length < bodyHeight) visible.push("");
+		if (height === 1) return [header];
+		const visible = lines.slice(this.scroll, this.scroll + this.bodyHeight).map((line) => truncateToWidth(line, max, "…"));
+		while (visible.length < this.bodyHeight) visible.push("");
 		const footer = truncateToWidth(this.theme.fg("dim", `↑↓/PgUp/PgDn scroll · Home/End · q close · ${percent}%`), max);
 		return [header, ...visible, footer];
 	}
 	handleInput(data: string): void {
-		const page = Math.max(5, (process.stdout.rows || 24) - 10);
+		const page = Math.max(1, this.bodyHeight - 2);
 		if (matchesKey(data, Key.escape) || data === "q") return this.done();
 		if (matchesKey(data, Key.up)) {
 			this.followEnd = false;

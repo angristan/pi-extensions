@@ -1,14 +1,22 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { TranscriptPager } from "./pager.js";
+import { resolveTranscriptOverlayHeight, TRANSCRIPT_OVERLAY_OPTIONS, TranscriptPager } from "./pager.js";
 
-export { TranscriptPager, type TranscriptEntry, type TranscriptPagerOptions } from "./pager.js";
+export {
+	resolveTranscriptOverlayHeight,
+	TRANSCRIPT_OVERLAY_OPTIONS,
+	TranscriptPager,
+	type TranscriptEntry,
+	type TranscriptPagerOptions,
+} from "./pager.js";
 
 export default function (pi: ExtensionAPI) {
 	const showTranscript = async (ctx: any) => {
 		await ctx.ui.custom((tui: any, theme: any, _kb: any, done: () => void) =>
-			new TranscriptPager(() => ctx.sessionManager.getBranch(), theme, () => tui.requestRender(), done), {
+			new TranscriptPager(() => ctx.sessionManager.getBranch(), theme, () => tui.requestRender(), done, {
+				maxHeight: () => resolveTranscriptOverlayHeight(tui.terminal.rows),
+			}), {
 			overlay: true,
-			overlayOptions: { width: "95%", maxHeight: "92%", anchor: "center", margin: 1 },
+			overlayOptions: TRANSCRIPT_OVERLAY_OPTIONS,
 		});
 	};
 

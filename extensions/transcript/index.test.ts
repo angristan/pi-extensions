@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import transcript from "./index";
-import { TranscriptPager } from "./pager";
+import { resolveTranscriptOverlayHeight, TranscriptPager } from "./pager";
 
 test("opens a cleaned scrollable transcript from both command and shortcut", async () => {
 	const commands = new Map<string, any>();
@@ -33,14 +33,16 @@ test("opens a cleaned scrollable transcript from both command and shortcut", asy
 		ui: {
 			custom: async (factory: any, options: any) => {
 				overlayOptions = options;
-				component = factory({ requestRender() {} }, theme, {}, () => { closed = true; });
+				component = factory({ terminal: { rows: 100 }, requestRender() {} }, theme, {}, () => { closed = true; });
 			},
 		},
 	};
 
 	expect(shortcuts.has("ctrl+shift+t")).toBe(true);
 	await commands.get("transcript").handler("", ctx);
-	const rendered = component.render(80).join("\n");
+	const renderedLines = component.render(80);
+	expect(renderedLines).toHaveLength(92);
+	const rendered = renderedLines.join("\n");
 	expect(rendered).toContain("› User\n  hello world");
 	expect(rendered).toContain("· Thinking\n  considering");
 	expect(rendered).toContain("● Agent\n  answer");
@@ -51,6 +53,29 @@ test("opens a cleaned scrollable transcript from both command and shortcut", asy
 	expect(overlayOptions.overlay).toBe(true);
 	component.handleInput("q");
 	expect(closed).toBe(true);
+});
+
+test("resolved pager height matches the percentage and margin overlay budget", () => {
+	expect(resolveTranscriptOverlayHeight(24)).toBe(22);
+	expect(resolveTranscriptOverlayHeight(25)).toBe(23);
+	expect(resolveTranscriptOverlayHeight(26)).toBe(23);
+	expect(resolveTranscriptOverlayHeight(100)).toBe(92);
+	expect(resolveTranscriptOverlayHeight(200)).toBe(184);
+
+	const entries = Array.from({ length: 120 }, (_, index) => ({
+		type: "message",
+		message: { role: "assistant", content: `row-${index}` },
+	}));
+	const theme = { fg: (_color: string, text: string) => text };
+	for (const terminalRows of [1, 2, 3, 24, 25, 26, 100, 200]) {
+		const pager = new TranscriptPager(() => entries, theme, () => {}, () => {}, {
+			startAtEnd: true,
+			maxHeight: () => resolveTranscriptOverlayHeight(terminalRows),
+		});
+		const rendered = pager.render(80);
+		expect(rendered).toHaveLength(resolveTranscriptOverlayHeight(terminalRows));
+		if (rendered.length > 2) expect(rendered.join("\n")).toContain("row-119");
+	}
 });
 
 test("reusable transcript pager follows appended entries", () => {

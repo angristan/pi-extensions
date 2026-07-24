@@ -3,9 +3,10 @@
 Open a full, scrollable view of the entire session transcript.
 
 `/transcript` (or `Ctrl+Shift+T`) opens a near-fullscreen overlay (95% width,
-centered) over every entry — user, assistant (with thinking), tool calls +
-arguments, tool results — rendered with the same styling as the live
-transcript, plus cleaned-up web-search metadata.
+up to 92% height with a one-row margin, centered) over every entry — user,
+assistant (with thinking), tool calls + arguments, tool results — rendered
+with the same styling as the live transcript, plus cleaned-up web-search
+metadata.
 
 ```
 /transcript
@@ -24,4 +25,4 @@ lines so the reading view is clean. Navigate with the usual pager keys.
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
 - **Depends on extensions:** None.
-- **Used by extensions:** None.
+- **Used by extensions:** [`subagents`](../subagents/).
