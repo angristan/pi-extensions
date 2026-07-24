@@ -71,23 +71,15 @@ function bashSessionEnvironment(ctx: any, getThinkingLevel: () => unknown): Node
 }
 
 // ---------------------------------------------------------------------------
-// Last-resort reaper: prevent orphaned managed terminals on ungraceful exit.
+// Last-resort reaper: prevent orphaned managed terminals on hard process exit.
 // ---------------------------------------------------------------------------
-// `session_shutdown` (graceful /quit, Ctrl+D, SIGTERM, /reload) calls
-// requestKill + awaits completion, so jobs are reaped there. But pi has other
-// exit paths that do NOT fire session_shutdown:
-//   - emergencyTerminalExit() (dead/EIO terminal) calls process.exit(129).
-//   - uncaughtException / unhandledRejection hard exits.
-//   - SIGKILL of the pi process itself.
-//   - a crash mid-run while a job is `trap '' TERM`-ignoring SIGTERM.
-// On those paths the killTimer (5s SIGTERM->SIGKILL escalation) never fires,
-// and detached children (each its own session leader via spawnTerminal) are
-// re-parented to PID 1 and live forever as resource-leaking orphans. Register
-// every live job's pids here and SIGKILL their whole process tree from process exit + the same
-// signals pi listens to, as a sync best-effort. Idempotent and re-entrant.
+// Normal exits, including SIGINT/SIGTERM/SIGHUP, flow through session_shutdown,
+// which performs the graceful SIGTERM -> grace period -> SIGKILL sequence.
+// Registering our own signal listeners would suppress Node's default signal
+// behavior and could race Pi's shutdown handler, so this fallback intentionally
+// runs only from the synchronous process `exit` event.
 const liveJobPids = new Set<number>();
 let lastResortReaperArmed = false;
-const LAST_RESORT_SIGNALS: NodeJS.Signals[] = ["SIGTERM", "SIGHUP", "SIGINT"];
 
 function reapLiveJobPidsSync(): void {
 	for (const pid of liveJobPids) {
@@ -106,15 +98,9 @@ function reapLiveJobPidsSync(): void {
 function armLastResortReaper(): void {
 	if (lastResortReaperArmed) return;
 	lastResortReaperArmed = true;
-	// process 'exit' is sync-only and the only hook guaranteed to run on
-	// process.exit() and uncaught exceptions. Cannot do async work here.
+	// This hook must remain synchronous. SIGKILL cannot be handled, so cleanup
+	// after the parent itself receives SIGKILL is inherently impossible.
 	process.on("exit", reapLiveJobPidsSync);
-	// Signals: reaping from inside a signal handler is best-effort. If pi has
-	// its own handler that calls process.exit, the 'exit' hook above still
-	// runs; if pi is SIGKILLed, nothing can run, which is unavoidable.
-	for (const sig of LAST_RESORT_SIGNALS) {
-		process.once(sig, reapLiveJobPidsSync);
-	}
 }
 
 function trackJobPid(pid: number | undefined): void {
@@ -139,10 +125,6 @@ function outputBytesForTokens(tokens?: number): number {
 }
 const KILL_GRACE_MS = 5_000;
 const MAX_TIMEOUT_SECONDS = 24 * 60 * 60;
-// A 10s hard kill is applied when the model omits `timeout`, so a stuck
-// process can never hang a session indefinitely. The model raises `timeout`
-// for genuinely long work.
-const DEFAULT_TIMEOUT_SECONDS = 10;
 const DEFAULT_YIELD_MS = 10_000;
 const DEFAULT_POLL_MS = 5_000;
 const MAX_POLL_MS = 5 * 60 * 1_000;
@@ -719,6 +701,8 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	};
 	finalize = (job: ManagedJob, code: number | null, signal: NodeJS.Signals | null, spawnError?: Error) => {
 		if (job.finalized) return;
+		untrackJobPid(job.process?.pid);
+		untrackJobPid(job.ptyPid);
 		job.finalized = true;
 		job.endedAt = Date.now();
 		job.exitCode = code ?? undefined;
@@ -744,8 +728,8 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		if (activeJobs().length >= MAX_CONCURRENT_JOBS) throw new Error(`At most ${MAX_CONCURRENT_JOBS} background jobs may run at once`);
 		const command = params.command.trim();
 		if (!command) throw new Error("Background command must not be empty");
-		const timeoutSeconds = params.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS;
-		if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > MAX_TIMEOUT_SECONDS) {
+		const timeoutSeconds = params.timeoutSeconds;
+		if (timeoutSeconds !== undefined && (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > MAX_TIMEOUT_SECONDS)) {
 			throw new Error(`timeoutSeconds must be an integer between 1 and ${MAX_TIMEOUT_SECONDS}`);
 		}
 		if (params.tty && !isPtySupported()) throw new Error("PTY mode is unavailable on this platform");
@@ -810,7 +794,6 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		});
 		job.process.once("close", (code, signal) => {
 			untrackJobPid(job.process?.pid);
-			untrackJobPid(job.ptyPid);
 			if (job.ptyPid && pidExists(job.ptyPid)) {
 				job.pendingClose = { code, signal };
 				if (!job.killReason) {
@@ -821,18 +804,21 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 				}
 				return;
 			}
+			untrackJobPid(job.ptyPid);
 			finalize(job, code, signal);
 		});
-		job.timeout = setTimeout(() => requestKill(job, "timeout"), timeoutSeconds * 1000);
-		job.timeout.unref?.();
+		if (timeoutSeconds !== undefined) {
+			job.timeout = setTimeout(() => requestKill(job, "timeout"), timeoutSeconds * 1000);
+			job.timeout.unref?.();
+		}
 		updateUi();
 		return job;
 	};
 	const waitForCompletion = async (job: ManagedJob, signal: AbortSignal | undefined, waitMs = DEFAULT_WAIT_COMPLETION_MS) => {
 		// Never block unboundedly: wait for completion OR a soft deadline,
 		// whichever comes first, then return so the model can re-decide
-		// (re-poll / kill / move on). The process is NOT killed here —
-		// killing is the job's hard-timeout responsibility.
+		// (re-poll / kill / move on). The process is NOT killed here; only an
+		// explicit hard timeout or stop request ends a still-running terminal.
 		if (!isActive(job) || waitMs <= 0) return;
 		if (signal?.aborted) return;
 		await new Promise<void>((resolvePromise) => {
@@ -1035,7 +1021,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 				type: "object",
 				properties: {
 					command: { type: "string", description: "Shell command to run" },
-					timeout: { type: "integer", minimum: 1, maximum: MAX_TIMEOUT_SECONDS, description: `Optional hard timeout from 1 to ${MAX_TIMEOUT_SECONDS} seconds` },
+					timeout: { type: "integer", minimum: 1, maximum: MAX_TIMEOUT_SECONDS, description: `Optional hard timeout from 1 to ${MAX_TIMEOUT_SECONDS} seconds. Omit to let the command run until completion or an explicit stop.` },
 					cwd: { type: "string", description: "Working directory, relative to the current project unless absolute" },
 					tty: { type: "boolean", description: "Allocate a PTY for prompts, REPLs, and control characters", default: false },
 					"yield-time_ms": { type: "integer", minimum: 250, maximum: 30_000, description: `Wait before yielding a terminal ID (default ${DEFAULT_YIELD_MS} ms)` },
@@ -1237,11 +1223,6 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		activeCtx?.ui.setStatus(STATUS_KEY, undefined);
 		jobs.clear();
 		overlayCard.invalidate();
-		// Belt-and-suspenders: graceful shutdown reaped everything via
-		// requestKill, but clear the reaper set in case any close handler
-		// hasn't fired yet (e.g. a SIGTERM-ignoring job whose SIGKILL is still
-		// mid-escalation). The last-resort reaper stays armed for the next.
-		liveJobPids.clear();
 		clearBackgroundTerminalService(terminalService);
 		activeCtx = undefined;
 	});

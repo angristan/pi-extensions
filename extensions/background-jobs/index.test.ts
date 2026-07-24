@@ -25,6 +25,10 @@ interface Harness {
 
 const cleanupGroups = new Set<number>();
 const activeHarnesses: Harness[] = [];
+const shutdownSignals = ["SIGTERM", "SIGHUP", "SIGINT"] as const;
+const initialSignalListeners = new Map(
+	shutdownSignals.map((signal) => [signal, process.listeners(signal)]),
+);
 
 afterEach(async () => {
 	for (const harness of activeHarnesses.reverse()) await shutdownHarness(harness);
@@ -402,11 +406,31 @@ describe("terminal tools", () => {
 			minimum: 1,
 			maximum: 86_400,
 		});
+		expect(tool.parameters.properties.timeout.description).toContain("Omit to let the command run");
 		await expect(tool.execute("start", {
 			command: "true",
 			reasoning: "validate timeout",
 			timeout: 0.5,
 		}, undefined, undefined, harness.ctx)).rejects.toThrow("must be an integer between 1 and 86400");
+	});
+
+	test("does not install competing process signal listeners", async () => {
+		const harness = createHarness({ killGraceMs: 50 });
+		await startHarness(harness);
+		await harness.tools.get("bash").execute("start", {
+			command: "sleep 2",
+			reasoning: "arm last-resort cleanup",
+			"yield-time_ms": 250,
+		}, undefined, undefined, harness.ctx);
+		try {
+			for (const signal of shutdownSignals) {
+				const initial = initialSignalListeners.get(signal) ?? [];
+				const added = process.listeners(signal).filter((listener) => !initial.includes(listener));
+				expect(added).toEqual([]);
+			}
+		} finally {
+			await shutdownHarness(harness);
+		}
 	});
 
 	test("renders stop calls and results with terminal status styling", () => {
@@ -835,12 +859,11 @@ describe("terminal tools", () => {
 		component.dispose?.();
 	});
 
-	test("last-resort reaper SIGKILLs a trap-TERM orphan on ungraceful exit", async () => {
-		// Regression: when pi exits without firing session_shutdown (crash,
-		// emergencyTerminalExit, SIGKILL of pi), a running job that ignores
-		// SIGTERM (`trap '' TERM`) was re-parented to PID 1 and leaked forever.
-		// background-jobs now registers every live job pid and SIGKILLs the whole
-		// process tree from process 'exit'.
+	test("last-resort reaper SIGKILLs a trap-TERM orphan on hard exit", async () => {
+		// Regression: when pi exits without completing session_shutdown (crash or
+		// emergencyTerminalExit), a running job that ignores SIGTERM was
+		// re-parented to PID 1 and leaked forever. background-jobs registers every
+		// live job pid and SIGKILLs the whole process tree from process 'exit'.
 		// We can't call session_shutdown (that's the graceful path). Instead, emit
 		// the sync 'exit' event the way Node does on process.exit() and assert no
 		// orphan survives.
@@ -865,8 +888,8 @@ describe("terminal tools", () => {
 		const before = ps1.stdout.trim().split("\n").filter(Boolean);
 		expect(before.length).toBeGreaterThan(0);
 
-		// Simulate an ungraceful exit: Node emits 'exit' synchronously on
-		// process.exit(). Our reaper is registered on that event.
+		// Simulate a hard process.exit() path. The fallback is synchronous and
+		// deliberately separate from normal signal-driven session shutdown.
 		process.emit("exit", 0);
 
 		// Give the kernel a beat to reap.
@@ -964,28 +987,28 @@ describe("background terminal UX", () => {
 		}
 	}, 3_000);
 
-	test("applies a default hard timeout when none is provided", async () => {
+	test("omitted timeout leaves yielded commands running past the former deadline", async () => {
 		if (process.platform === "win32") return;
 		const harness = createHarness({ killGraceMs: 50 });
 		await startHarness(harness);
-		// No `timeout` passed: the extension must still kill a stuck process
-		// via the 10s default. We don't wait the full 10s here; we just assert
-		// the timer is armed (job is timed_out after it fires). Use a fast-dying
-		// command first to confirm normal flow still works, then assert the
-		// default applies by checking the timeout field is populated on a stuck job.
-		const quick = await harness.tools.get("bash").execute("start", {
-			command: "printf done\\n",
-			reasoning: "quick command with no explicit timeout",
+		const started = await harness.tools.get("bash").execute("start", {
+			command: "while :; do sleep 1; done",
+			reasoning: "verify no implicit hard timeout",
 			"yield-time_ms": 250,
 		}, undefined, undefined, harness.ctx);
-		const quickDone = await harness.tools.get("job_output").execute("output", {
-			reasoning: "read quick result",
-			job_id: quick.details.id,
-			wait: true,
-		});
-		expect(quickDone.details.status).toBe("completed");
-		expect(quickDone.details.exitCode).toBe(0);
-	});
+		try {
+			expect(started.details.status).toBe("running");
+			await Bun.sleep(10_250);
+			const polled = await harness.tools.get("job_output").execute("output", {
+				reasoning: "check terminal after former timeout",
+				job_id: started.details.id,
+			});
+			expect(polled.details.status).toBe("running");
+			expect(polled.content[0].text).toContain("still running");
+		} finally {
+			await shutdownHarness(harness);
+		}
+	}, 12_000);
 
 	test("wait:true is bounded and returns 'still running' instead of blocking forever", async () => {
 		if (process.platform === "win32") return;

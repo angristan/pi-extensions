@@ -65,7 +65,7 @@ function withTerminalParameters(parameters: any): any {
 		...base,
 		properties: {
 			...base.properties,
-			timeout: { type: "integer", minimum: 1, maximum: 86_400, description: "Optional hard timeout from 1 to 86400 seconds" },
+			timeout: { type: "integer", minimum: 1, maximum: 86_400, description: "Optional hard timeout from 1 to 86400 seconds. Omit to let the command run until completion or an explicit stop." },
 			cwd: { type: "string", description: "Working directory, relative to the current project unless absolute" },
 			tty: { type: "boolean", description: "Allocate a PTY for prompts, REPLs, and control characters. Non-tty commands spawn with stdin closed (EOF) so a command that reads stdin with no input exits instead of hanging; use tty=true for commands you need to feed via terminal_write.", default: false },
 			"yield-time_ms": { type: "integer", minimum: 250, maximum: 30_000, description: "Wait before yielding a terminal ID (default 10000 ms)" },
