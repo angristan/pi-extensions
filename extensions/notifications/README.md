@@ -16,11 +16,14 @@ notifications within a 5s window.
 
 When the `goal` extension has an active self-driving goal, routine turn-complete
 bells are suppressed. Notifications still fire for user input requests, explicit
-notification events, and terminal goal states (`complete` / `blocked`).
+notification events, and terminal goal states (`complete` / `blocked`). A failed
+tool that later succeeds on retry is treated as recovered, so the settled run
+uses the normal turn-complete notification.
 
 ## Config
 
-`~/.pi/agent/notifications.json`:
+`$PI_CODING_AGENT_DIR/notifications.json` (defaults to
+`~/.pi/agent/notifications.json`):
 
 ```json
 { "enabled": true }

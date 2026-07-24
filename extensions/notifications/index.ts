@@ -1,10 +1,11 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-const CONFIG = join(homedir(), ".pi", "agent", "notifications.json");
+export function notificationsConfigPath(): string {
+	return join(getAgentDir(), "notifications.json");
+}
 const DUPLICATE_WINDOW_MS = 5_000;
 const GLOBAL_STATE_KEY = Symbol.for("pi.notifications.state");
 const ENABLE_FOCUS_REPORTING = "\u001b[?1004h";
@@ -22,11 +23,12 @@ function globalNotificationState(): GlobalNotificationState {
 }
 
 function loadEnabled(): boolean {
-	try { return JSON.parse(readFileSync(CONFIG, "utf8"))?.enabled !== false; } catch { return true; }
+	try { return JSON.parse(readFileSync(notificationsConfigPath(), "utf8"))?.enabled !== false; } catch { return true; }
 }
 async function saveEnabled(enabled: boolean) {
-	await mkdir(dirname(CONFIG), { recursive: true });
-	await writeFile(CONFIG, `${JSON.stringify({ enabled }, null, 2)}\n`, "utf8");
+	const path = notificationsConfigPath();
+	await mkdir(dirname(path), { recursive: true });
+	await writeFile(path, `${JSON.stringify({ enabled }, null, 2)}\n`, "utf8");
 }
 function textFromMessage(message: any): string {
 	const content = message?.content;
@@ -68,7 +70,7 @@ function notify(title: string, body: string) {
 	state.lastSentAt = now;
 
 	// Terminal bell only. Each terminal decides how to surface it:
-	// terminal decides how to surface it: Ghostty shows the 🔔 unread-tab
+	// Ghostty shows the 🔔 unread-tab
 	// marker + dock bounce, iTerm/WezTerm/Kitty play a sound or show a marker,
 	// and plain terminals may do nothing. Wrap in tmux passthrough when inside
 	// tmux so the BEL reaches the outer terminal instead of being consumed by
@@ -92,7 +94,8 @@ function isTerminalGoalStatus(status: GoalStatus): boolean {
 export default function (pi: ExtensionAPI) {
 	let enabled = loadEnabled();
 	let finalResponse = "";
-	let failure: string | undefined;
+	let toolFailureOrder = 0;
+	const toolFailures = new Map<string, { message: string; order: number }>();
 	let runId = 0;
 	let completionNotifiedRun = -1;
 	let inputNotifiedRun = -1;
@@ -148,7 +151,8 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", (_event, ctx) => {
 		finalResponse = "";
-		failure = undefined;
+		toolFailureOrder = 0;
+		toolFailures.clear();
 		runId = 0;
 		completionNotifiedRun = -1;
 		inputNotifiedRun = -1;
@@ -182,7 +186,8 @@ export default function (pi: ExtensionAPI) {
 	pi.on("agent_start", () => {
 		runId += 1;
 		finalResponse = "";
-		failure = undefined;
+		toolFailureOrder = 0;
+		toolFailures.clear();
 		completionNotifiedRun = -1;
 		inputNotifiedRun = -1;
 		goalActiveThisRun = goalStatus === "active";
@@ -194,10 +199,18 @@ export default function (pi: ExtensionAPI) {
 		notifyIfUnfocused(`${project}: input required`, "The agent is waiting for answers.");
 	});
 	pi.on("tool_execution_end", (event: any) => {
+		const toolName = typeof event.toolName === "string" ? event.toolName : "tool";
 		if (event.isError) {
 			const text = event.result?.content?.find?.((item: any) => item?.type === "text")?.text;
-			failure = preview(text || `${event.toolName} failed`, 120);
+			toolFailures.set(toolName, {
+				message: preview(text || `${toolName} failed`, 120),
+				order: ++toolFailureOrder,
+			});
+			return;
 		}
+		// A later successful execution of the same tool is a recovered failure,
+		// so it must not replace the eventual turn-complete notification.
+		toolFailures.delete(toolName);
 	});
 	pi.on("agent_end", (event: any) => {
 		const assistant = [...event.messages].reverse().find((message: any) => message.role === "assistant");
@@ -211,6 +224,7 @@ export default function (pi: ExtensionAPI) {
 		if (goalStatus === "active" || goalActiveThisRun) return;
 		completionNotifiedRun = runId;
 		project = ctx.cwd.split("/").filter(Boolean).pop() || project;
+		const failure = [...toolFailures.values()].sort((left, right) => right.order - left.order)[0]?.message;
 		if (failure) notifyIfUnfocused(`${project}: tool failed`, failure);
 		else notifyIfUnfocused(`${project}: turn complete`, finalResponse || "Agent turn complete");
 	});

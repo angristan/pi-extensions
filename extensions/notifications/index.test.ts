@@ -1,6 +1,23 @@
-import { expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-const { default: notificationsExtension } = await import("./index");
+const { default: notificationsExtension, notificationsConfigPath } = await import("./index");
+
+const originalAgentDirectory = process.env.PI_CODING_AGENT_DIR;
+let agentDirectory: string;
+
+beforeEach(() => {
+	agentDirectory = mkdtempSync(join(tmpdir(), "pi-notifications-test-"));
+	process.env.PI_CODING_AGENT_DIR = agentDirectory;
+});
+
+afterEach(() => {
+	if (originalAgentDirectory === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = originalAgentDirectory;
+	rmSync(agentDirectory, { recursive: true, force: true });
+});
 
 type Handler = (event: any, ctx: any) => any;
 type BusHandler = (event: any) => any;
@@ -66,6 +83,10 @@ function bellCount(writes: string[]): number {
 	return writes.filter((write) => write.includes("\x07")).length;
 }
 
+test("reads config from the configured Pi agent directory", () => {
+	expect(notificationsConfigPath()).toBe(join(agentDirectory, "notifications.json"));
+});
+
 test("rings on a normal completed turn", async () => {
 	await captureBellWrites(async (writes) => {
 		const h = makeHarness("/tmp/pi-notifications-normal");
@@ -75,6 +96,30 @@ test("rings on a normal completed turn", async () => {
 		await h.emit("agent_settled");
 
 		expect(bellCount(writes)).toBe(1);
+	});
+});
+
+test("uses turn completion after a failed tool succeeds on retry", async () => {
+	await captureBellWrites(async (writes) => {
+		const h = makeHarness("/tmp/pi-notifications-recovered");
+		await h.emit("session_start");
+		await h.emit("agent_start");
+		await h.emit("tool_execution_end", {
+			toolName: "bash",
+			isError: true,
+			result: { content: [{ type: "text", text: "first attempt failed" }] },
+		});
+		await h.emit("tool_execution_end", {
+			toolName: "bash",
+			isError: false,
+			result: { content: [{ type: "text", text: "retry succeeded" }] },
+		});
+		await h.emit("agent_end", { messages: [assistant("recovered successfully")] });
+		await h.emit("agent_settled");
+
+		expect(bellCount(writes)).toBe(1);
+		const state = (globalThis as any)[Symbol.for("pi.notifications.state")];
+		expect(state.lastSignature).toBe("pi-notifications-recovered: turn complete\0recovered successfully");
 	});
 });
 
