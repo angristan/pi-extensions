@@ -17,7 +17,8 @@ rate. When enabled on a supported model, the bundled `footer` extension shows
 /fast status   Show the saved state and current-model support
 ```
 
-The setting persists globally in `~/.pi/agent/openai-codex-fast.json`.
+The setting persists in `$PI_CODING_AGENT_DIR/openai-codex-fast.json`
+(defaults to `~/.pi/agent/openai-codex-fast.json`).
 
 ## Supported models
 

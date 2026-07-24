@@ -41,7 +41,8 @@ resolved card; answers entered in Pi are not copied back to Telegram.
 3. Run `/telegram setup` in Pi.
 
 The setup flow masks the bot token, sends a test message, and writes the config
-to `~/.pi/agent/telegram-notifications.json` with mode `0600`.
+to `$PI_CODING_AGENT_DIR/telegram-notifications.json` (defaults to
+`~/.pi/agent/telegram-notifications.json`) with mode `0600`.
 
 ```json
 {

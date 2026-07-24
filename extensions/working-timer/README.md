@@ -22,7 +22,8 @@ elapsed timer resumes when the normal working row returns.
 
 ## Config
 
-Optional `~/.pi/agent/working-timer.json`:
+Optional `$PI_CODING_AGENT_DIR/working-timer.json` (defaults to
+`~/.pi/agent/working-timer.json`):
 
 ```json
 {

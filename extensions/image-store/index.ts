@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { convertToPng, keyHint } from "@earendil-works/pi-coding-agent";
+import { convertToPng, getAgentDir, keyHint } from "@earendil-works/pi-coding-agent";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { getCapabilities, Image, Text, type Component } from "@earendil-works/pi-tui";
 import { createHash, randomUUID } from "node:crypto";
@@ -17,8 +17,7 @@ import {
 	unlink,
 	writeFile,
 } from "node:fs/promises";
-import { homedir } from "node:os";
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, join } from "node:path";
 
 const ENTRY_TYPE = "image-store-v1";
 const CONTEXT_MESSAGE_TYPE = "image-store-context-v1";
@@ -97,11 +96,7 @@ function markerPattern(): RegExp {
 }
 
 function configDirectory(): string {
-	const configured = process.env.PI_CODING_AGENT_DIR;
-	if (!configured) return join(homedir(), ".pi", "agent");
-	if (configured === "~") return homedir();
-	if (configured.startsWith("~/")) return join(homedir(), configured.slice(2));
-	return resolve(configured);
+	return getAgentDir();
 }
 
 function extensionForMimeType(mimeType: string): string {

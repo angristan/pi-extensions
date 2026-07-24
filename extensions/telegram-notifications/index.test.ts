@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,10 +9,13 @@ import {
 	loadTelegramConfig,
 	saveTelegramConfig,
 	sendTelegramMessage,
+	telegramConfigPath,
 	type TelegramConfig,
 } from "./index";
 
 const temporaryDirectories: string[] = [];
+const originalAgentDirectory = process.env.PI_CODING_AGENT_DIR;
+let agentDirectory: string;
 const config: TelegramConfig = {
 	botToken: "123456:test-token",
 	chatId: "987654321",
@@ -20,7 +23,15 @@ const config: TelegramConfig = {
 	enabled: true,
 };
 
+beforeEach(() => {
+	agentDirectory = mkdtempSync(join(tmpdir(), "pi-telegram-agent-test-"));
+	temporaryDirectories.push(agentDirectory);
+	process.env.PI_CODING_AGENT_DIR = agentDirectory;
+});
+
 afterEach(() => {
+	if (originalAgentDirectory === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = originalAgentDirectory;
 	for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
@@ -324,6 +335,14 @@ describe("question wait lifecycle", () => {
 });
 
 describe("configuration and Telegram client", () => {
+	test("uses the configured Pi agent directory by default", async () => {
+		await saveTelegramConfig(config);
+
+		expect(telegramConfigPath()).toBe(join(agentDirectory, "telegram-notifications.json"));
+		expect(statSync(telegramConfigPath()).mode & 0o777).toBe(0o600);
+		expect(loadTelegramConfig()).toEqual(config);
+	});
+
 	test("writes credential config with owner-only permissions", async () => {
 		const directory = mkdtempSync(join(tmpdir(), "pi-telegram-test-"));
 		temporaryDirectories.push(directory);

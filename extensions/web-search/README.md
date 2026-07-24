@@ -35,7 +35,8 @@ limits. Firecrawl is credential-gated to avoid flaky shared-IP keyless limits;
 set `FIRECRAWL_API_KEY` before it appears in routes.
 
 Mistral continues to read its API key and base URL from the `mistral` provider in
-`models.json`, with `MISTRAL_API_KEY` as the environment fallback. Without a
+`$PI_CODING_AGENT_DIR/models.json` (defaults to `~/.pi/agent/models.json`), with
+`MISTRAL_API_KEY` as the environment fallback. Without a
 resolvable key, Mistral is omitted from every route.
 
 Optional routing overrides:

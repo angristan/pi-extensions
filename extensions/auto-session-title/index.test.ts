@@ -1,7 +1,30 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { loadTitleModelConfig, titleModelConfigPath } from "./index";
 import { requestTitleCompletion } from "./request";
 
 describe("auto-session-title model requests", () => {
+	test("reads model config from the configured Pi agent directory", () => {
+		const directory = mkdtempSync(join(tmpdir(), "pi-auto-title-test-"));
+		const previous = process.env.PI_CODING_AGENT_DIR;
+		try {
+			process.env.PI_CODING_AGENT_DIR = directory;
+			writeFileSync(join(directory, "auto-session-title.json"), JSON.stringify({
+				provider: "openai-codex",
+				model: "gpt-5.6-luna",
+			}));
+
+			expect(titleModelConfigPath()).toBe(join(directory, "auto-session-title.json"));
+			expect(loadTitleModelConfig()).toEqual({ provider: "openai-codex", model: "gpt-5.6-luna" });
+		} finally {
+			if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = previous;
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
 	test("routes Codex Luna through Pi's provider-aware completion API", async () => {
 		const model = {
 			provider: "openai-codex",

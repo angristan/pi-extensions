@@ -1,7 +1,25 @@
-import { expect, test } from "bun:test";
-import openaiCodexFast from "./index";
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import openaiCodexFast, { openaiCodexFastConfigPath } from "./index";
+
+const originalAgentDirectory = process.env.PI_CODING_AGENT_DIR;
+let agentDirectory: string;
+
+beforeEach(() => {
+	agentDirectory = mkdtempSync(join(tmpdir(), "pi-fast-mode-test-"));
+	process.env.PI_CODING_AGENT_DIR = agentDirectory;
+});
+
+afterEach(() => {
+	if (originalAgentDirectory === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = originalAgentDirectory;
+	rmSync(agentDirectory, { recursive: true, force: true });
+});
 
 test("reports state and only patches supported OpenAI Codex requests when enabled", async () => {
+	writeFileSync(join(agentDirectory, "openai-codex-fast.json"), JSON.stringify({ enabled: true }));
 	const commands = new Map<string, any>();
 	const handlers = new Map<string, (...args: any[]) => any>();
 	openaiCodexFast({
@@ -20,6 +38,8 @@ test("reports state and only patches supported OpenAI Codex requests when enable
 
 	await commands.get("fast").handler("status", supportedCtx);
 	const enabled = notices.at(-1)?.includes("is on") ?? false;
+	expect(openaiCodexFastConfigPath()).toBe(join(agentDirectory, "openai-codex-fast.json"));
+	expect(enabled).toBe(true);
 	expect(notices.at(-1)).toContain("supported");
 	handlers.get("session_start")?.({}, supportedCtx);
 	expect(statuses.at(-1)).toBe(enabled ? "fast" : undefined);
@@ -39,4 +59,13 @@ test("rejects unknown command arguments without writing configuration", async ()
 	const notices: Array<[string, string]> = [];
 	await command.handler("turbo", { ui: { notify: (...args: [string, string]) => notices.push(args) } });
 	expect(notices).toEqual([["Usage: /fast on|off|toggle|status", "warning"]]);
+	expect(existsSync(openaiCodexFastConfigPath())).toBe(false);
+});
+
+test("writes toggles only to the configured Pi agent directory", async () => {
+	let command: any;
+	openaiCodexFast({ registerCommand: (_name: string, options: any) => { command = options; }, on() {} } as any);
+	await command.handler("on", { model: undefined, ui: { notify() {}, setStatus() {} } });
+
+	expect(JSON.parse(readFileSync(join(agentDirectory, "openai-codex-fast.json"), "utf8"))).toEqual({ enabled: true });
 });

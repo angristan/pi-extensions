@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { WebProviderError } from "./provider-error";
 import {
 	newsProviderOrder,
@@ -12,6 +12,20 @@ import {
 	webStatus,
 } from "./router";
 import type { WebProvider, WebSearchResult } from "./types";
+
+const originalAgentDirectory = process.env.PI_CODING_AGENT_DIR;
+let hermeticAgentDirectory: string;
+
+beforeEach(() => {
+	hermeticAgentDirectory = mkdtempSync(join(tmpdir(), "pi-web-router-agent-test-"));
+	process.env.PI_CODING_AGENT_DIR = hermeticAgentDirectory;
+});
+
+afterEach(() => {
+	if (originalAgentDirectory === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = originalAgentDirectory;
+	rmSync(hermeticAgentDirectory, { recursive: true, force: true });
+});
 
 function restoreEnv(name: string, value: string | undefined): void {
 	if (value === undefined) delete process.env[name];

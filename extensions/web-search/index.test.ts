@@ -1,4 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createSearchToolResult, type RagResult } from "./client";
 
 class Container {
@@ -15,12 +18,18 @@ mock.module("typebox", () => ({
 		String: (options: unknown) => options,
 	},
 }));
+const testVisibleWidth = (text: string) => text
+	.replace(/\x1b\[[0-9;]*m/g, "")
+	.replace(/<[^>]+>/g, "")
+	.length;
+
 mock.module("@earendil-works/pi-tui", () => ({
 	Container,
 	hyperlink: (text: string, url: string) => `<link:${url}>${text}</link>`,
-	truncateToWidth: (text: string, width: number, suffix = "…") => text.length <= width ? text : `${text.slice(0, Math.max(0, width - suffix.length))}${suffix}`,
-	visibleWidth: (text: string) => text.replace(/<[^>]+>/g, "").length,
+	truncateToWidth: (text: string, width: number, suffix = "…") => testVisibleWidth(text) <= width ? text : `${text.slice(0, Math.max(0, width - suffix.length))}${suffix}`,
+	visibleWidth: testVisibleWidth,
 	wrapTextWithAnsi: (text: string, width: number) => {
+		if (testVisibleWidth(text) <= width) return [text];
 		const match = /^(<error>)(.*)(<\/error>)$/.exec(text);
 		const style = (value: string) => match ? `${match[1]}${value}${match[3]}` : value;
 		let remaining = match?.[2] ?? text;
@@ -249,11 +258,14 @@ describe("web search renderer", () => {
 	});
 
 	test("registers a status command without exposing credential values", () => {
+		const agentDirectory = mkdtempSync(join(tmpdir(), "pi-web-status-test-"));
 		const previous = {
+			agentDirectory: process.env.PI_CODING_AGENT_DIR,
 			firecrawlKey: process.env.FIRECRAWL_API_KEY,
 			mistralKey: process.env.MISTRAL_API_KEY,
 		};
 		try {
+			process.env.PI_CODING_AGENT_DIR = agentDirectory;
 			process.env.FIRECRAWL_API_KEY = "test-firecrawl-key";
 			process.env.MISTRAL_API_KEY = "test-mistral-key";
 			const status = commands.find((entry) => entry.name === "web-status")?.command;
@@ -266,8 +278,10 @@ describe("web search renderer", () => {
 			expect(message).not.toContain("test-firecrawl-key");
 			expect(message).not.toContain("test-mistral-key");
 		} finally {
+			if (previous.agentDirectory === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous.agentDirectory;
 			if (previous.firecrawlKey === undefined) delete process.env.FIRECRAWL_API_KEY; else process.env.FIRECRAWL_API_KEY = previous.firecrawlKey;
 			if (previous.mistralKey === undefined) delete process.env.MISTRAL_API_KEY; else process.env.MISTRAL_API_KEY = previous.mistralKey;
+			rmSync(agentDirectory, { recursive: true, force: true });
 		}
 	});
 

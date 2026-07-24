@@ -1,5 +1,8 @@
-import { afterEach, expect, test } from "bun:test";
-import workingTimer, { formatWorkingMessage, normalizeWorkingTimerConfig } from "./index";
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import workingTimer, { formatWorkingMessage, loadWorkingTimerConfig, normalizeWorkingTimerConfig, workingTimerConfigPath } from "./index";
 
 const testTheme = {
 	fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
@@ -8,10 +11,27 @@ const stripTestStyles = (text: string | undefined) => text?.replace(/\x1b\[39m|<
 
 const realSetInterval = globalThis.setInterval;
 const realClearInterval = globalThis.clearInterval;
+const originalAgentDirectory = process.env.PI_CODING_AGENT_DIR;
+let agentDirectory: string;
+
+beforeEach(() => {
+	agentDirectory = mkdtempSync(join(tmpdir(), "pi-working-timer-test-"));
+	process.env.PI_CODING_AGENT_DIR = agentDirectory;
+});
 
 afterEach(() => {
 	globalThis.setInterval = realSetInterval;
 	globalThis.clearInterval = realClearInterval;
+	if (originalAgentDirectory === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = originalAgentDirectory;
+	rmSync(agentDirectory, { recursive: true, force: true });
+});
+
+test("reads spinner config from the configured Pi agent directory", () => {
+	writeFileSync(join(agentDirectory, "working-timer.json"), JSON.stringify({ spinner: "rail-3" }));
+
+	expect(workingTimerConfigPath()).toBe(join(agentDirectory, "working-timer.json"));
+	expect(loadWorkingTimerConfig()).toEqual({ spinner: "rail-3" });
 });
 
 test("normalizes spinner config with native as the safe default", () => {

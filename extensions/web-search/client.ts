@@ -1,6 +1,6 @@
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import type {
 	NewsSearchArgs,
@@ -58,7 +58,7 @@ export interface MistralMcpOptions {
 }
 
 function agentDir(): string {
-	return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+	return getAgentDir();
 }
 
 function readModelsConfig(dir: string): ModelsConfig | undefined {

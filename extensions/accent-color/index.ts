@@ -1,11 +1,13 @@
-import { CustomEditor, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { CustomEditor, getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
 // Default accent: Mistral Vibe's canonical orange (`$mistral_orange` in Vibe's TUI).
 export const DEFAULT_ACCENT_HEX = "#FF8205";
-const CONFIG_PATH = join(homedir(), ".pi", "agent", "accent-color.json");
+
+export function accentColorConfigPath(): string {
+	return join(getAgentDir(), "accent-color.json");
+}
 
 const ANSI_FOREGROUND_RESET = "\x1b[39m";
 const ACCENT_BORDER_LOCK = Symbol.for("pi.accent-input-bar.lock");
@@ -33,24 +35,27 @@ function hexToRgb(hex: string): [number, number, number] | undefined {
 
 /**
  * Resolve the accent color used for the editor border (and the plan-progress
- * box). Override via `~/.pi/agent/accent-color.json`:
+ * box). Override via `accent-color.json` in Pi's agent directory:
  *
  *   { "color": "#FF8205" }
  *
  * Accepts any `#RRGGBB` / `#RGB` hex. Defaults to Vibe orange (#FF8205).
  */
 let cachedAnsi: string | undefined;
+let cachedConfigPath: string | undefined;
 let configReadAt = 0;
 const CONFIG_TTL_MS = 5_000;
 
 function accentAnsi(): string {
 	// Cache the ANSI escape briefly so per-keystroke border renders don't re-read
 	// the file on every call, while still picking up edits + /reload within ~5s.
-	if (cachedAnsi && Date.now() - configReadAt < CONFIG_TTL_MS) return cachedAnsi;
+	const path = accentColorConfigPath();
+	if (cachedAnsi && cachedConfigPath === path && Date.now() - configReadAt < CONFIG_TTL_MS) return cachedAnsi;
+	cachedConfigPath = path;
 	configReadAt = Date.now();
 	let hex = DEFAULT_ACCENT_HEX;
 	try {
-		const parsed = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+		const parsed = JSON.parse(readFileSync(path, "utf8"));
 		if (typeof parsed?.color === "string" && parsed.color.trim()) hex = parsed.color;
 	} catch {
 		// Missing, unreadable, or malformed config all fall back to the default.

@@ -1,5 +1,5 @@
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
 export const HARD_MAX_WAIT_MS = 60 * 60_000;
@@ -60,8 +60,7 @@ export function normalizeSubagentsConfig(value: unknown): SubagentsRuntimeConfig
 }
 
 export function subagentsConfigPath(): string {
-	const agentDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
-	return join(agentDir, "subagents.json");
+	return join(getAgentDir(), "subagents.json");
 }
 
 export function loadSubagentsConfig(path = subagentsConfigPath()): SubagentsRuntimeConfig {

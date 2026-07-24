@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 	createSearchToolResult,
 	detectOpenUrlFailure,
 	formatDisplayDate,
+	hasMistralAccess,
 	normalizeHttpUrl,
 	parseSearchResultText,
 	truncateText,
@@ -35,6 +39,31 @@ function largeNewsResult(): NewsSearchResult {
 }
 
 describe("search tool persistence", () => {
+	test("reads models config from the current Pi agent directory override", () => {
+		const configuredDirectory = mkdtempSync(join(tmpdir(), "pi-web-configured-test-"));
+		const emptyDirectory = mkdtempSync(join(tmpdir(), "pi-web-empty-test-"));
+		const previousAgentDirectory = process.env.PI_CODING_AGENT_DIR;
+		const previousApiKey = process.env.MISTRAL_API_KEY;
+		try {
+			writeFileSync(join(configuredDirectory, "models.json"), JSON.stringify({
+				providers: { mistral: { apiKey: "test-key" } },
+			}));
+			delete process.env.MISTRAL_API_KEY;
+			process.env.PI_CODING_AGENT_DIR = configuredDirectory;
+			expect(hasMistralAccess()).toBe(true);
+
+			process.env.PI_CODING_AGENT_DIR = emptyDirectory;
+			expect(hasMistralAccess()).toBe(false);
+		} finally {
+			if (previousAgentDirectory === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = previousAgentDirectory;
+			if (previousApiKey === undefined) delete process.env.MISTRAL_API_KEY;
+			else process.env.MISTRAL_API_KEY = previousApiKey;
+			rmSync(configuredDirectory, { recursive: true, force: true });
+			rmSync(emptyDirectory, { recursive: true, force: true });
+		}
+	});
+
 	test("stores bounded agent content and display details without raw metadata", () => {
 		const toolResult = createSearchToolResult(largeNewsResult());
 		expect(Object.keys(toolResult)).toEqual(["content", "details"]);

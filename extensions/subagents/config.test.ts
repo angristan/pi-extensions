@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_SUBAGENTS_CONFIG, loadSubagentsConfig, normalizeSubagentsConfig } from "./config";
+import { DEFAULT_SUBAGENTS_CONFIG, loadSubagentsConfig, normalizeSubagentsConfig, subagentsConfigPath } from "./config";
 
 test("accepts ordered wait limits and mailbox bounds", () => {
 	expect(normalizeSubagentsConfig({
@@ -12,6 +12,28 @@ test("accepts ordered wait limits and mailbox bounds", () => {
 		wait: { minimumMs: 1_000, defaultMs: 60_000, maximumMs: 600_000 },
 		mailbox: { maxMessageBytes: 96 * 1024, maxMessagesPerAgent: 8 },
 	});
+});
+
+test("loads from the configured Pi agent directory by default", () => {
+	const directory = mkdtempSync(join(tmpdir(), "pi-subagents-agent-dir-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	try {
+		process.env.PI_CODING_AGENT_DIR = directory;
+		writeFileSync(join(directory, "subagents.json"), JSON.stringify({
+			wait: { minimumMs: 250, defaultMs: 2_500, maximumMs: 25_000 },
+			mailbox: { maxMessageBytes: 32 * 1024, maxMessagesPerAgent: 2 },
+		}));
+
+		expect(subagentsConfigPath()).toBe(join(directory, "subagents.json"));
+		expect(loadSubagentsConfig()).toEqual({
+			wait: { minimumMs: 250, defaultMs: 2_500, maximumMs: 25_000 },
+			mailbox: { maxMessageBytes: 32 * 1024, maxMessagesPerAgent: 2 },
+		});
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(directory, { recursive: true, force: true });
+	}
 });
 
 test("loads timeout and mailbox settings from JSON", () => {

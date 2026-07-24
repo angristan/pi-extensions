@@ -3,11 +3,13 @@
 Keeps image-heavy sessions responsive by storing image bytes as content-addressed
 sidecar files instead of embedding base64 payloads in session JSONL.
 
-Images are written under:
+Images are written under Pi's agent directory:
 
 ```text
-~/.pi/agent/image-store/sha256/<prefix>/<sha256>.<ext>
+$PI_CODING_AGENT_DIR/image-store/sha256/<prefix>/<sha256>.<ext>
 ```
+
+`PI_CODING_AGENT_DIR` defaults to `~/.pi/agent`.
 
 The session stores only a small structured SHA-256 reference. Before each model
 request, references in the active context are rehydrated in memory, so the model

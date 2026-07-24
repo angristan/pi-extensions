@@ -1,19 +1,21 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-const CONFIG = join(homedir(), ".pi", "agent", "openai-codex-fast.json");
+export function openaiCodexFastConfigPath(): string {
+	return join(getAgentDir(), "openai-codex-fast.json");
+}
 const FAST_MODELS = /^(?:gpt-5\.4|gpt-5\.5|gpt-5\.6-(?:sol|terra|luna))$/;
 
 function loadEnabled(): boolean {
-	try { return JSON.parse(readFileSync(CONFIG, "utf8"))?.enabled === true; } catch { return false; }
+	try { return JSON.parse(readFileSync(openaiCodexFastConfigPath(), "utf8"))?.enabled === true; } catch { return false; }
 }
 
 async function saveEnabled(enabled: boolean) {
-	await mkdir(dirname(CONFIG), { recursive: true });
-	await writeFile(CONFIG, `${JSON.stringify({ enabled }, null, 2)}\n`, "utf8");
+	const path = openaiCodexFastConfigPath();
+	await mkdir(dirname(path), { recursive: true });
+	await writeFile(path, `${JSON.stringify({ enabled }, null, 2)}\n`, "utf8");
 }
 
 function supportsFastMode(model: any): boolean {

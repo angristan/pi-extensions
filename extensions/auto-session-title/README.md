@@ -35,7 +35,8 @@ history to identify a brief aside without letting old umbrella topics dominate.
 ## Config
 
 Defaults to Mistral Medium 3.5. Override the title-generation model via
-`~/.pi/agent/auto-session-title.json`. Any model available through Pi works,
+`$PI_CODING_AGENT_DIR/auto-session-title.json` (defaults to
+`~/.pi/agent/auto-session-title.json`). Any model available through Pi works,
 including OAuth-backed providers such as OpenAI Codex:
 
 ```json

@@ -7,12 +7,12 @@
  * messages; the elapsed time resumes when the normal working row returns.
  */
 import {
+	getAgentDir,
 	keyText,
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
 const UPDATE_INTERVAL_MS = 1_000;
@@ -46,9 +46,8 @@ const PHASE_LABELS: Record<WorkingPhase, string> = {
 	compacting: "Compacting",
 };
 
-function configPath(): string {
-	const agentDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
-	return join(agentDir, "working-timer.json");
+export function workingTimerConfigPath(): string {
+	return join(getAgentDir(), "working-timer.json");
 }
 
 export function normalizeWorkingTimerConfig(value: unknown): WorkingTimerConfig {
@@ -58,7 +57,7 @@ export function normalizeWorkingTimerConfig(value: unknown): WorkingTimerConfig 
 	return { spinner: "native" };
 }
 
-export function loadWorkingTimerConfig(path = configPath()): WorkingTimerConfig {
+export function loadWorkingTimerConfig(path = workingTimerConfigPath()): WorkingTimerConfig {
 	try {
 		return normalizeWorkingTimerConfig(JSON.parse(readFileSync(path, "utf8")));
 	} catch {

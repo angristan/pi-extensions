@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Input, wrapTextWithAnsi, type Component, type Focusable, type TUI } from "@earendil-works/pi-tui";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -52,9 +52,8 @@ interface RuntimeDependencies {
 	clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
 }
 
-function configPath(): string {
-	const agentDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
-	return join(agentDir, "telegram-notifications.json");
+export function telegramConfigPath(): string {
+	return join(getAgentDir(), "telegram-notifications.json");
 }
 
 function normalizedConfig(value: unknown): TelegramConfig | undefined {
@@ -72,7 +71,7 @@ function normalizedConfig(value: unknown): TelegramConfig | undefined {
 	};
 }
 
-export function loadTelegramConfig(path = configPath()): TelegramConfig | undefined {
+export function loadTelegramConfig(path = telegramConfigPath()): TelegramConfig | undefined {
 	try {
 		return normalizedConfig(JSON.parse(readFileSync(path, "utf8")));
 	} catch {
@@ -80,7 +79,7 @@ export function loadTelegramConfig(path = configPath()): TelegramConfig | undefi
 	}
 }
 
-export async function saveTelegramConfig(config: TelegramConfig, path = configPath()): Promise<void> {
+export async function saveTelegramConfig(config: TelegramConfig, path = telegramConfigPath()): Promise<void> {
 	await mkdir(dirname(path), { recursive: true, mode: 0o700 });
 	const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
 	try {

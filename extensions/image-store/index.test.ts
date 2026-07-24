@@ -28,6 +28,13 @@ afterEach(async () => {
 });
 
 describe("content-addressed storage", () => {
+	test("uses the configured Pi agent directory by default", async () => {
+		const directory = await temporaryDirectory();
+		process.env.PI_CODING_AGENT_DIR = directory;
+
+		expect(new ContentAddressedImageStore().root).toBe(join(directory, "image-store", "sha256"));
+	});
+
 	test("replaces image payloads with stable references and deduplicates blobs", async () => {
 		const directory = await temporaryDirectory();
 		const store = new ContentAddressedImageStore(directory);

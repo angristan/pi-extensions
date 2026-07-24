@@ -1,7 +1,6 @@
 import { complete } from "@earendil-works/pi-ai/compat";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import {
 	buildTitleContext,
@@ -16,16 +15,18 @@ import {
 } from "./context";
 import { requestTitleCompletion } from "./request";
 
-const CONFIG_PATH = join(homedir(), ".pi", "agent", "auto-session-title.json");
+export function titleModelConfigPath(): string {
+	return join(getAgentDir(), "auto-session-title.json");
+}
 
-interface TitleModelConfig {
+export interface TitleModelConfig {
 	provider: string;
 	model: string;
 }
 
 /**
  * Resolve the provider/model used to generate titles. Override via
- * `~/.pi/agent/auto-session-title.json`:
+ * `auto-session-title.json` in Pi's agent directory:
  *
  *   { "provider": "mistral", "model": "mistral-medium-3.5" }
  *
@@ -39,17 +40,20 @@ const DEFAULT_TITLE_MODEL: TitleModelConfig = {
 };
 
 let cachedConfig: TitleModelConfig | undefined;
+let cachedConfigPath: string | undefined;
 let configReadAt = 0;
 const CONFIG_TTL_MS = 5_000;
 
-function loadTitleModelConfig(): TitleModelConfig {
+export function loadTitleModelConfig(): TitleModelConfig {
 	// Cache briefly so a burst of title requests within one session doesn't
 	// re-read the file on every call, while still picking up edits + /reload
 	// within a few seconds.
-	if (cachedConfig && Date.now() - configReadAt < CONFIG_TTL_MS) return cachedConfig;
+	const path = titleModelConfigPath();
+	if (cachedConfig && cachedConfigPath === path && Date.now() - configReadAt < CONFIG_TTL_MS) return cachedConfig;
+	cachedConfigPath = path;
 	configReadAt = Date.now();
 	try {
-		const parsed = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+		const parsed = JSON.parse(readFileSync(path, "utf8"));
 		const provider = typeof parsed?.provider === "string" ? parsed.provider : DEFAULT_TITLE_MODEL.provider;
 		const model = typeof parsed?.model === "string" ? parsed.model : DEFAULT_TITLE_MODEL.model;
 		cachedConfig = { provider, model };

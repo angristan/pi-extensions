@@ -9,7 +9,8 @@ Default accent is **Mistral Vibe orange** (`#FF8205`). Any hex color works.
 
 ## Config
 
-Override via `~/.pi/agent/accent-color.json` (accepts `#RRGGBB` or `#RGB`):
+Override via `$PI_CODING_AGENT_DIR/accent-color.json` (defaults to
+`~/.pi/agent/accent-color.json`; accepts `#RRGGBB` or `#RGB`):
 
 ```json
 { "color": "#00AAFF" }
