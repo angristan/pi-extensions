@@ -159,6 +159,7 @@ session:
 - Settled and interrupted children hibernate: their RPC process exits while the temporary session remains available.
 - Up to four queue-only messages remain pending on a hibernated child; a fifth is rejected until a follow-up delivers the queue.
 - Follow-ups lazily start a new child process against the retained session and continue the same conversation.
+- Concurrent `message`, `followup`, and `send` calls are dispatched one at a time per child in invocation order. A rejected dispatch cannot roll back or stop a later one; queue-only messages remain queued when the child is still idle at their turn.
 - `read` retrieves the latest response without waking a hibernated child.
 - `interrupt` aborts active work, hibernates the child, and preserves its session; `close` permanently removes it.
 - Session shutdown and `/reload` cancel pending spawns, terminate every child process tree, and remove temporary sessions.

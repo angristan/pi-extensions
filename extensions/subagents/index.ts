@@ -232,6 +232,16 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		}
 		agent.queuedMessages.push(message);
 	};
+	const messageOperationTails = new WeakMap<ManagedAgent, Promise<void>>();
+	const serializeMessageOperation = <T>(agent: ManagedAgent, operation: () => Promise<T>): Promise<T> => {
+		const previous = messageOperationTails.get(agent) ?? Promise.resolve();
+		const result = previous.then(operation);
+		const tail = result.then(() => undefined, () => undefined);
+		messageOperationTails.set(agent, tail);
+		return result.finally(() => {
+			if (messageOperationTails.get(agent) === tail) messageOperationTails.delete(agent);
+		});
+	};
 	const trimClosed = () => {
 		const closed = [...agents.values()]
 			.filter((agent) => agent.status === "closed" && agent.cleanupComplete)
@@ -594,81 +604,83 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				if (!agent) throw new Error(`Agent not found: ${params.agent_name ?? ""}`);
 				if (agent.status === "closed" || agent.cleanupComplete) throw new Error(`Agent ${agent.name} is closed`);
 				const message = boundedInput(params.message, `${action} message`, MAX_MESSAGE_CHARS);
-				const beginFollowUp = async () => {
-					if (agent.transitioning) throw new Error(`Agent ${agent.name} is already resuming`);
-					agent.transitioning = true;
-					const previous = {
-						status: agent.status,
-						startedAt: agent.startedAt,
-						endedAt: agent.endedAt,
-						output: agent.output,
-						error: agent.error,
-						activity: agent.activity,
-						queuedMessages: [...agent.queuedMessages],
-						completionDelivery: agent.completionDelivery,
-						suppressNotifications: agent.suppressNotifications,
-						completion: agent.completion,
-						resolveCompletion: agent.resolveCompletion,
-						runSettled: agent.runSettled,
-					};
-					try {
-						const client = await ensureClient(agent);
-						const queued = [...agent.queuedMessages];
-						const prompt = queued.length > 0
-							? `${queued.map((item) => `Queued message:\n${item}`).join("\n\n")}\n\nFollow-up task:\n${message}`
-							: message;
-						agent.status = "running";
-						agent.startedAt = Date.now();
-						agent.endedAt = undefined;
-						agent.output = "";
-						agent.error = undefined;
-						agent.activity = [`follow-up: ${compact(message, 100)}`];
-						agent.queuedMessages = [];
-						agent.pendingReports.clear();
-						for (const event of mailbox.peek((candidate) => candidate.agentId === agent.id)) removeMailboxEvent(event);
-						agent.completionDelivery = "none";
-						agent.suppressNotifications = false;
-						newCompletion(agent);
-						const rejectedRunResolve = agent.resolveCompletion;
-						updateOverlay();
-						const run = client.prompt(prompt);
-						agent.transitioning = false;
+				return serializeMessageOperation(agent, async () => {
+					if (agent.status === "closed" || agent.cleanupComplete) throw new Error(`Agent ${agent.name} is closed`);
+					const beginFollowUp = async () => {
+						if (agent.transitioning) throw new Error(`Agent ${agent.name} is already resuming`);
+						agent.transitioning = true;
+						const previous = {
+							status: agent.status,
+							startedAt: agent.startedAt,
+							endedAt: agent.endedAt,
+							output: agent.output,
+							error: agent.error,
+							activity: agent.activity,
+							queuedMessages: [...agent.queuedMessages],
+							completionDelivery: agent.completionDelivery,
+							suppressNotifications: agent.suppressNotifications,
+							completion: agent.completion,
+							resolveCompletion: agent.resolveCompletion,
+							runSettled: agent.runSettled,
+						};
 						try {
-							await run;
-						} catch (error) {
-							if (agent.client === client && isActive(agent) && !agent.runSettled) {
-								Object.assign(agent, previous);
-								rejectedRunResolve();
-								updateOverlay();
-								void hibernateAgent(agent).catch(() => { /* Retried by close or followup. */ });
+							const client = await ensureClient(agent);
+							const queued = [...agent.queuedMessages];
+							const prompt = queued.length > 0
+								? `${queued.map((item) => `Queued message:\n${item}`).join("\n\n")}\n\nFollow-up task:\n${message}`
+								: message;
+							agent.status = "running";
+							agent.startedAt = Date.now();
+							agent.endedAt = undefined;
+							agent.output = "";
+							agent.error = undefined;
+							agent.activity = [`follow-up: ${compact(message, 100)}`];
+							agent.queuedMessages = [];
+							agent.pendingReports.clear();
+							for (const event of mailbox.peek((candidate) => candidate.agentId === agent.id)) removeMailboxEvent(event);
+							agent.completionDelivery = "none";
+							agent.suppressNotifications = false;
+							newCompletion(agent);
+							const rejectedRunResolve = agent.resolveCompletion;
+							updateOverlay();
+							try {
+								await client.prompt(prompt);
+							} catch (error) {
+								if (agent.client === client && isActive(agent) && !agent.runSettled) {
+									Object.assign(agent, previous);
+									rejectedRunResolve();
+									updateOverlay();
+									try { await hibernateAgent(agent); }
+									catch { /* Retried by close or the next follow-up. */ }
+								}
+								throw error;
 							}
-							throw error;
+						} finally {
+							agent.transitioning = false;
 						}
-					} finally {
-						agent.transitioning = false;
-					}
-				};
-				if (action === "message" && !isActive(agent)) {
-					queueChildMessage(agent, message);
-					agent.activity.push(`queued message: ${compact(message, 100)}`);
-				} else if (isActive(agent)) {
-					const client = await ensureClient(agent);
-					try {
-						await client.steer(message);
-						agent.activity.push(`${action === "message" ? "message" : "follow-up"}: ${compact(message, 100)}`);
-						if (agent.activity.length > 12) agent.activity.shift();
-					} catch (error) {
-						if (!isActive(agent) && action !== "message") await beginFollowUp();
-						else if (!isActive(agent)) queueChildMessage(agent, message);
-						else throw error;
-					}
-				} else await beginFollowUp();
-				updateOverlay();
-				const data = snapshot(agent);
-				const text = action === "message"
-					? `Queued message for ${agent.name} without starting a turn.`
-					: `Sent follow-up to ${agent.name}.`;
-				return { content: [{ type: "text", text }], details: { action, agents: [data] } satisfies ToolDetails };
+					};
+					if (action === "message" && !isActive(agent)) {
+						queueChildMessage(agent, message);
+						agent.activity.push(`queued message: ${compact(message, 100)}`);
+					} else if (isActive(agent)) {
+						const client = await ensureClient(agent);
+						try {
+							await client.steer(message);
+							agent.activity.push(`${action === "message" ? "message" : "follow-up"}: ${compact(message, 100)}`);
+							if (agent.activity.length > 12) agent.activity.shift();
+						} catch (error) {
+							if (!isActive(agent) && action !== "message") await beginFollowUp();
+							else if (!isActive(agent)) queueChildMessage(agent, message);
+							else throw error;
+						}
+					} else await beginFollowUp();
+					updateOverlay();
+					const data = snapshot(agent);
+					const text = action === "message"
+						? `Queued message for ${agent.name} without starting a turn.`
+						: `Sent follow-up to ${agent.name}.`;
+					return { content: [{ type: "text", text }], details: { action, agents: [data] } satisfies ToolDetails };
+				});
 			}
 			if (params.action === "wait") {
 				const requested: string[] = Array.isArray(params.agent_names) ? params.agent_names : [];

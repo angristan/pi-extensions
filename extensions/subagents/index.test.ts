@@ -1139,7 +1139,7 @@ setInterval(() => {}, 1000);
 		}, undefined, undefined, harness.ctx)).rejects.toThrow("already has 4 queued messages");
 	});
 
-	test("rejects concurrent resumptions before child startup settles", async () => {
+	test("serializes concurrent resumptions while child startup settles", async () => {
 		let releaseStart!: () => void;
 		const startGate = new Promise<void>((resolve) => { releaseStart = resolve; });
 		let created = 0;
@@ -1158,13 +1158,138 @@ setInterval(() => {}, 1000);
 		clients[0].complete("Initial result");
 		await Bun.sleep(0);
 		const first = harness.tool.execute("followup-first", { action: "followup", agent_name: name, message: "First" }, undefined, undefined, harness.ctx);
-		await Bun.sleep(0);
-		await expect(harness.tool.execute("followup-second", {
+		const second = harness.tool.execute("followup-second", {
 			action: "followup", agent_name: name, message: "Second",
-		}, undefined, undefined, harness.ctx)).rejects.toThrow("already resuming");
+		}, undefined, undefined, harness.ctx);
+		await Bun.sleep(0);
+		expect(clients).toHaveLength(2);
+		expect(clients[1].prompts).toHaveLength(0);
+		expect(clients[1].steering).toHaveLength(0);
 		releaseStart();
-		await first;
+		await Promise.all([first, second]);
 		expect(clients[1].prompts).toEqual(["First"]);
+		expect(clients[1].steering).toEqual(["Second"]);
+	});
+
+	test("serializes concurrent send, followup, and message dispatch", async () => {
+		const harness = createHarness();
+		const started = await spawnAgent(harness, "Process ordered instructions");
+		const name = started.details.agents[0].name;
+		const client = harness.clients[0];
+		let releaseFirst!: () => void;
+		const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+		let inFlight = 0;
+		let maxInFlight = 0;
+		client.steer = async (message) => {
+			client.steering.push(message);
+			inFlight += 1;
+			maxInFlight = Math.max(maxInFlight, inFlight);
+			if (message === "First") await firstGate;
+			inFlight -= 1;
+		};
+
+		const first = harness.tool.execute("send-first", { action: "send", agent_name: name, message: "First" }, undefined, undefined, harness.ctx);
+		const second = harness.tool.execute("followup-second", { action: "followup", agent_name: name, message: "Second" }, undefined, undefined, harness.ctx);
+		const third = harness.tool.execute("message-third", { action: "message", agent_name: name, message: "Third" }, undefined, undefined, harness.ctx);
+		await Bun.sleep(0);
+		expect(client.steering).toEqual(["First"]);
+		expect(inFlight).toBe(1);
+		releaseFirst();
+		await Promise.all([first, second, third]);
+		expect(client.steering).toEqual(["First", "Second", "Third"]);
+		expect(maxInFlight).toBe(1);
+	});
+
+	test("does not let a rejected send roll back a newer followup", async () => {
+		let rejectPrompt!: (error: Error) => void;
+		const promptGate = new Promise<void>((_resolve, reject) => { rejectPrompt = reject; });
+		let created = 0;
+		const clients: FakeClient[] = [];
+		const harness = createHarness({
+			clientFactory: (options) => {
+				const client = new FakeClient(options);
+				created += 1;
+				if (created === 2) {
+					client.prompt = async (message) => {
+						client.prompts.push(message);
+						await promptGate;
+					};
+				}
+				clients.push(client);
+				return client;
+			},
+		});
+		const started = await spawnAgent(harness, "Reject one resume");
+		const name = started.details.agents[0].name;
+		clients[0].complete("Initial result");
+		await Bun.sleep(0);
+
+		const rejected = harness.tool.execute("send-rejected", {
+			action: "send", agent_name: name, message: "Rejected older instruction",
+		}, undefined, undefined, harness.ctx).then(() => undefined, (error: Error) => error);
+		await Bun.sleep(0);
+		expect(clients[1].prompts).toEqual(["Rejected older instruction"]);
+		const accepted = harness.tool.execute("followup-accepted", {
+			action: "followup", agent_name: name, message: "Accepted newer instruction",
+		}, undefined, undefined, harness.ctx);
+		await Bun.sleep(0);
+		expect(clients).toHaveLength(2);
+		expect(clients[1].steering).toHaveLength(0);
+
+		rejectPrompt(new Error("prompt rejected"));
+		expect((await rejected)?.message).toBe("prompt rejected");
+		await accepted;
+		expect(clients[1].stopped).toBe(true);
+		expect(clients).toHaveLength(3);
+		expect(clients[2].prompts).toEqual(["Accepted newer instruction"]);
+		const listed = await harness.tool.execute("list", { action: "list" }, undefined, undefined, harness.ctx);
+		expect(listed.details.agents[0]).toMatchObject({ status: "running", output: "", error: undefined });
+	});
+
+	test("keeps a concurrent message queue-only after a rejected followup", async () => {
+		let rejectPrompt!: (error: Error) => void;
+		const promptGate = new Promise<void>((_resolve, reject) => { rejectPrompt = reject; });
+		let created = 0;
+		const clients: FakeClient[] = [];
+		const harness = createHarness({
+			clientFactory: (options) => {
+				const client = new FakeClient(options);
+				created += 1;
+				if (created === 2) {
+					client.prompt = async (message) => {
+						client.prompts.push(message);
+						await promptGate;
+					};
+				}
+				clients.push(client);
+				return client;
+			},
+		});
+		const started = await spawnAgent(harness, "Preserve queued context");
+		const name = started.details.agents[0].name;
+		clients[0].complete("Initial result");
+		await Bun.sleep(0);
+
+		const rejected = harness.tool.execute("followup-rejected", {
+			action: "followup", agent_name: name, message: "Rejected turn",
+		}, undefined, undefined, harness.ctx).then(() => undefined, (error: Error) => error);
+		await Bun.sleep(0);
+		const queued = harness.tool.execute("message-queued", {
+			action: "message", agent_name: name, message: "Retained queue-only context",
+		}, undefined, undefined, harness.ctx);
+		rejectPrompt(new Error("prompt rejected"));
+		expect((await rejected)?.message).toBe("prompt rejected");
+		expect((await queued).content[0].text).toContain("without starting a turn");
+		expect(clients).toHaveLength(2);
+		expect(clients[1].stopped).toBe(true);
+
+		const listed = await harness.tool.execute("list", { action: "list" }, undefined, undefined, harness.ctx);
+		expect(listed.details.agents[0]).toMatchObject({ status: "completed", output: "Initial result" });
+		await harness.tool.execute("followup-after-queue", {
+			action: "followup", agent_name: name, message: "Use retained context",
+		}, undefined, undefined, harness.ctx);
+		expect(clients[2].prompts[0]).toContain("Queued message:\nRetained queue-only context");
+		expect(clients[2].prompts[0]).toContain("Follow-up task:\nUse retained context");
 	});
 
 	test("keeps send as a legacy follow-up alias", async () => {
@@ -1225,25 +1350,37 @@ setInterval(() => {}, 1000);
 	});
 
 	test("preserves child state when steer or follow-up dispatch is rejected", async () => {
-		const harness = createHarness();
+		let releaseResume!: () => void;
+		const resumeGate = new Promise<void>((resolve) => { releaseResume = resolve; });
+		const clients: FakeClient[] = [];
+		const harness = createHarness({
+			clientFactory: (options) => {
+				const client = new FakeClient(options);
+				clients.push(client);
+				if (clients.length === 2) client.start = async () => { await resumeGate; client.started = true; };
+				return client;
+			},
+		});
 		const started = await spawnAgent(harness);
 		const name = started.details.agents[0].name;
-		harness.clients[0].steerError = new Error("not streaming");
+		clients[0].steerError = new Error("not streaming");
 		await expect(harness.tool.execute("send-running", {
 			action: "send", agent_name: name, message: "Race with completion",
 		}, undefined, undefined, harness.ctx)).rejects.toThrow("not streaming");
 		let listed = await harness.tool.execute("list", { action: "list" }, undefined, undefined, harness.ctx);
 		expect(listed.details.agents[0]).toMatchObject({ status: "running", error: undefined });
 
-		harness.clients[0].steerError = undefined;
-		harness.clients[0].complete("Initial result");
+		clients[0].steerError = undefined;
+		clients[0].complete("Initial result");
 		await Bun.sleep(0);
 		const notificationCount = harness.sentMessages.length;
 		const rejectedFollowUp = harness.tool.execute("send-idle", {
 			action: "send", agent_name: name, message: "Rejected follow-up",
 		}, undefined, undefined, harness.ctx);
-		expect(harness.clients).toHaveLength(2);
-		harness.clients[1].promptError = new Error("prompt rejected");
+		await Bun.sleep(0);
+		expect(clients).toHaveLength(2);
+		clients[1].promptError = new Error("prompt rejected");
+		releaseResume();
 		await expect(rejectedFollowUp).rejects.toThrow("prompt rejected");
 		await Bun.sleep(0);
 		listed = await harness.tool.execute("list", { action: "list" }, undefined, undefined, harness.ctx);
