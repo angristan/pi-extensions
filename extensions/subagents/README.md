@@ -65,8 +65,10 @@ do not create duplicate cards.
 `wait` resumes after the first selected mailbox message or completion by default.
 Set `wake_on` to `final` when progress must remain queued until a final result, or
 set `return_when` to `all` when every selected final result is required. Ending or
-interrupting a wait never cancels children. Overlapping waits on the same active
-child are rejected to keep event ownership deterministic.
+interrupting a wait never cancels children. A timeout alone is not a reason to ask
+healthy running children to stop or finalize; continue independent work or wait
+again. Overlapping waits on the same active child are rejected to keep event
+ownership deterministic.
 
 Interim messages are bounded by aggregate bytes and per-agent counts. Old progress
 is coalesced or dropped first, omission counts are included in the next update,

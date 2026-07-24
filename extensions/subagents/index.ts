@@ -544,6 +544,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			"Agents use fresh conversation context by default. Set context=compacted when prior decisions matter, or context=forked only when the exact parent conversation is required.",
 			"Use action=message for queue-only context and action=followup to trigger or steer work; send remains a compatibility alias for followup.",
 			"Use agents action=wait only when blocked on child results; it resumes after the first mailbox update by default, accepts wake_on=final when progress must not wake it, and uses return_when=all only when every selected final result is required. Timeouts do not stop agents or force parent turns.",
+			"Never ask a healthy running agent to stop or finalize merely because a wait timed out. Continue independent work or wait again; curtail an agent only when it is stuck, mis-scoped, or constrained by a user deadline.",
 			"Use agents action=read to retrieve a child's latest response again without restarting it, and action=interrupt to stop active work while preserving the conversation for follow-up.",
 			"After collecting a child's final result, call agents with action=close when no further follow-up is needed; settled children hibernate but retain a conversation slot until closed.",
 			"Give concurrently writing child agents disjoint file scopes to avoid conflicting edits.",
@@ -704,8 +705,8 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 					? "Wait interrupted by new input or cancellation.\n"
 					: waited.timedOut
 						? mailboxEvents.length > 0 || targets.some((agent) => !isActive(agent))
-							? "Wait interval ended before the requested completion condition.\nRunning agents continue and queued updates do not force a parent turn.\n"
-							: "No mailbox update arrived during this wait interval.\nAgents continue running and updates remain queued without forcing a parent turn.\n"
+							? "Wait interval ended before the requested completion condition.\nRunning agents continue and queued updates do not force a parent turn. Do not ask healthy running agents to stop or finalize because of this timeout.\n"
+							: "No mailbox update arrived during this wait interval.\nAgents continue running and updates remain queued without forcing a parent turn. Do not ask healthy running agents to stop or finalize because of this timeout.\n"
 						: "";
 				const mailboxText = formatMailboxEvents(mailboxEvents);
 				const text = boundedText([waitStatus.trimEnd(), mailboxText, formatAgents(data, true)].filter(Boolean).join("\n\n"), TOOL_OUTPUT_BYTES);

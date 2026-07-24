@@ -265,7 +265,7 @@ function actionVerb(action: unknown, partial: boolean, details?: ToolDetails): s
 	if (action === "message") return partial ? "Queueing agent message" : "Queued agent message";
 	if (action === "wait") {
 		if (!partial && details?.interrupted) return "Wait interrupted";
-		if (!partial && details?.timedOut) return "Wait interval ended";
+		if (!partial && details?.timedOut) return "Agents still running";
 		return partial ? "Waiting for agents" : "Waited for agents";
 	}
 	if (action === "list") return partial ? "Listing agents" : "Listed agents";

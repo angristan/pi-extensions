@@ -227,6 +227,7 @@ describe("subagents", () => {
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("action=close") && guideline.includes("conversation slot"))).toBe(true);
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("action=read") && guideline.includes("action=interrupt"))).toBe(true);
 		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("return_when=all") && guideline.includes("first mailbox update by default"))).toBe(true);
+		expect(harness.tool.promptGuidelines.some((guideline: string) => guideline.includes("Never ask a healthy running agent") && guideline.includes("wait timed out"))).toBe(true);
 		expect(harness.tool.prepareArguments({ action: "send", agent_id: "legacy-id" })).toEqual({ action: "send", agent_name: "legacy-id" });
 		expect(harness.tool.prepareArguments({ action: "wait", agent_ids: ["legacy-a"] })).toEqual({ action: "wait", agent_names: ["legacy-a"] });
 	});
@@ -461,9 +462,9 @@ describe("subagents", () => {
 		const timeoutArgs = { reasoning: "Check slow task", action: "wait", agent_names: [second.details.agents[0].name], timeout_ms: 0 };
 		const timeout = await harness.tool.execute("timeout", timeoutArgs, undefined, undefined, harness.ctx);
 		const timedOut = rendered(harness.tool.renderResult(timeout, { isPartial: false, expanded: false }, renderTheme, { args: timeoutArgs }));
-		expect(timedOut[0]).toBe("• Wait interval ended Check slow task");
+		expect(timedOut[0]).toBe("• Agents still running Check slow task");
 		expect(timedOut.join("\n")).toContain("running");
-		expect(timeout.content[0].text).toStartWith("No mailbox update arrived during this wait interval.\nAgents continue running and updates remain queued without forcing a parent turn.\n");
+		expect(timeout.content[0].text).toStartWith("No mailbox update arrived during this wait interval.\nAgents continue running and updates remain queued without forcing a parent turn. Do not ask healthy running agents to stop or finalize because of this timeout.\n");
 
 		const failed = rendered(harness.tool.renderResult(
 			{ content: [{ type: "text", text: "Subagent not found" }] },
