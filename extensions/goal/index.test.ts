@@ -1,34 +1,5 @@
 import { expect, mock, test } from "bun:test";
 
-class Text {
-	constructor(private readonly text: string) {}
-	render(): string[] { return this.text.split("\n"); }
-	invalidate(): void {}
-}
-
-mock.module("@earendil-works/pi-tui", () => ({
-	Text,
-	Container: class Container { render(): string[] { return []; } invalidate(): void {} },
-	truncateToWidth: (text: string, width: number, suffix = "") => {
-		if (text.length <= width) return text;
-		return `${text.slice(0, Math.max(0, width - suffix.length))}${suffix}`;
-	},
-	visibleWidth: (text: string) => text.length,
-	wrapTextWithAnsi: (text: string, width: number) => {
-		const lines: string[] = [];
-		for (const paragraph of text.split("\n")) {
-			let current = "";
-			for (const word of paragraph.split(/\s+/).filter(Boolean)) {
-				if (!current) current = word;
-				else if (current.length + 1 + word.length <= width) current += ` ${word}`;
-				else { lines.push(current); current = word; }
-			}
-			lines.push(current);
-		}
-		return lines;
-	},
-}));
-
 // The goal tools now render as compact 2-line blocks reusing better-native-pi's
 // palette + line-fitting helpers; stub them so the render slots are testable
 // without pulling the real restyler module graph.
@@ -75,6 +46,7 @@ function makeHarness() {
 	const confirmCalls: Array<{ title: string; message: string }> = [];
 	const confirmResponses: boolean[] = [];
 	let editorValue: string | undefined;
+	let branchReadCount = 0;
 
 	const ctx: any = {
 		mode: "tui",
@@ -82,8 +54,9 @@ function makeHarness() {
 		isIdle: () => true,
 		hasPendingMessages: () => false,
 		sessionManager: {
-			getBranch: () => entries,
+			getBranch: () => { branchReadCount += 1; return entries; },
 			getEntries: () => entries,
+			getLeafId: () => entries.length ? String(entries.length) : null,
 		},
 		ui: {
 			notify(message: string, type?: string) { notifications.push({ message, type }); },
@@ -98,7 +71,7 @@ function makeHarness() {
 	};
 
 	goalExtension({
-		appendEntry(customType: string, data: any) { entries.push({ type: "custom", customType, data }); },
+		appendEntry(customType: string, data: any) { entries.push({ type: "custom", id: String(entries.length + 1), customType, data }); },
 		sendMessage(message: any, options: any) { sent.push({ message, options }); },
 		events: { emit() {}, on() { return () => {}; } },
 		on(event: string, handler: any) { (handlers[event] ??= []).push(handler); },
@@ -122,6 +95,7 @@ function makeHarness() {
 		confirmCalls,
 		confirmResponses,
 		ctx,
+		getBranchReadCount: () => branchReadCount,
 		setEditorValue(value: string | undefined) { editorValue = value; },
 	};
 }
@@ -207,7 +181,7 @@ test("renders a semantic goal status indicator", async () => {
 	expect(title).toContain("Goal ● active");
 });
 
-test("includes tool, compaction, and branch-summary usage in goal stats", async () => {
+test("includes tool, compaction, and branch-summary usage in cached goal stats", async () => {
 	const h = makeHarness();
 	await h.commands.goal.handler("ship the feature", h.ctx);
 	h.entries.push(
@@ -215,10 +189,62 @@ test("includes tool, compaction, and branch-summary usage in goal stats", async 
 		{ type: "compaction", usage: { input: 7, output: 11, cacheRead: 13, cacheWrite: 17 } },
 		{ type: "branch_summary", usage: { input: 19, output: 23, cacheRead: 29, cacheWrite: 31 } },
 	);
+	await emit(h, "session_compact");
 
 	const card = registeredOverlayCards.at(-1)!;
 	const text = card.renderBody(58, 7, h.ctx.ui.theme).join("\n");
 	expect(text).toContain("Usage  ↓28  ↑37 · cached 46 · written 53");
+});
+
+test("updates cached usage from finalized messages before persistence", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("ship the feature", h.ctx);
+	await emit(h, "message_end", {
+		message: { role: "assistant", stopReason: "stop", usage: { input: 23, output: 29, cacheRead: 31, cacheWrite: 37 } },
+	});
+
+	const card = registeredOverlayCards.at(-1)!;
+	expect(card.renderBody(58, 7, h.ctx.ui.theme).join("\n")).toContain("Usage  ↓23  ↑29 · cached 31 · written 37");
+});
+
+test("overlay repaint reuses cached usage without reading the branch", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("ship the feature", h.ctx);
+	const card = registeredOverlayCards.at(-1)!;
+	const readsBeforeRender = h.getBranchReadCount();
+
+	card.renderBody(58, 7, h.ctx.ui.theme);
+	card.renderBody(58, 7, h.ctx.ui.theme);
+
+	expect(h.getBranchReadCount()).toBe(readsBeforeRender);
+});
+
+test("recomputes cached usage after branch restore", async () => {
+	const h = makeHarness();
+	const persistedGoal = {
+		type: "custom",
+		customType: "goal-state",
+		data: {
+			state: {
+				objective: "finish the migration",
+				validation: [],
+				status: "active",
+				createdAt: 1,
+				updatedAt: 1,
+				activeSince: 1,
+				accumulatedActiveMs: 0,
+				continuations: 2,
+			},
+		},
+	};
+	h.entries.push(persistedGoal, { type: "message", message: { role: "assistant", usage: { input: 3, output: 4 } } });
+	await emit(h, "session_start");
+	const card = registeredOverlayCards.at(-1)!;
+	expect(card.renderBody(58, 7, h.ctx.ui.theme).join("\n")).toContain("Usage  ↓3  ↑4");
+
+	h.entries.splice(0, h.entries.length, persistedGoal, { type: "message", message: { role: "assistant", usage: { input: 17, output: 19 } } });
+	await emit(h, "session_tree");
+	expect(card.renderBody(58, 7, h.ctx.ui.theme).join("\n")).toContain("Usage  ↓17  ↑19");
 });
 
 test("labels the initial goal-loop kickoff as cycle one", async () => {
@@ -410,6 +436,8 @@ function renderBlock(component: any, width = 80): string[] {
 test("goal_complete renders one compact completed block and hides stale calls", async () => {
 	const h = makeHarness();
 	await h.commands.goal.handler("reduce p95 latency below 120ms", h.ctx);
+	h.entries.push({ type: "message", message: { role: "assistant", usage: { input: 41, output: 43, cacheRead: 47, cacheWrite: 53 } } });
+	await emit(h, "session_compact");
 	const notificationsBeforeCompletion = h.notifications.length;
 
 	const result = await h.tools.goal_complete.execute("call", { summary: "shipped the fix" }, undefined, undefined, h.ctx);
@@ -417,6 +445,7 @@ test("goal_complete renders one compact completed block and hides stale calls", 
 	expect(result.details.completion).toBeDefined();
 	expect(result.details.completion.activeTimeMs).toBeGreaterThanOrEqual(0);
 	expect(result.details.completion.validationCount).toBe(0);
+	expect(result.details.completion.tokens).toEqual({ inputTokens: 41, outputTokens: 43, cacheReadTokens: 47, cacheWriteTokens: 53 });
 	const block = h.tools.goal_complete.renderResult(result, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
 	const lines = renderBlock(block);
 	expect(lines[0]).toContain("Completed goal");
@@ -445,41 +474,71 @@ test("/goal complete surfaces lifetime stats in the notification", async () => {
 	expect(note.message).toMatch(/active.*cycle/i);
 });
 
-test("goal_block renders recorded, blocked, and duplicate outcomes", async () => {
+test("goal_block counts once per settled run across a final tool-less turn", async () => {
 	const h = makeHarness();
 	await h.commands.goal.handler("reduce p95 latency below 120ms", h.ctx);
 
-	// First report: recorded (1/3), goal stays active.
-	await emit(h, "turn_start", { turnIndex: 0, timestamp: 0 });
-	const recorded = await h.tools.goal_block.execute("call-1", { blocker: "flaky CI on macOS" }, undefined, undefined, h.ctx);
-	expect(recorded.details.blocked).toBe(false);
-	let block = h.tools.goal_block.renderResult(recorded, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
-	let lines = renderBlock(block);
-	expect(lines[0]).toContain("Blocker recorded");
-	expect(lines[1]).toContain("flaky CI on macOS");
-	expect(lines[1]).toContain("1/3");
+	let result: any;
+	for (let run = 1; run <= 3; run++) {
+		await emit(h, "agent_start");
+		await emit(h, "turn_start", { turnIndex: 0, timestamp: 0 });
+		result = await h.tools.goal_block.execute(`call-${run}`, { blocker: "flaky CI on macOS" }, undefined, undefined, h.ctx);
+		await emit(h, "turn_end", { turnIndex: 0, toolResults: [{ toolName: "goal_block" }] });
+		// Pi performs a final model turn after the tool result. It has no goal_block
+		// call, but belongs to the same low-level run and must not erase the audit.
+		await emit(h, "turn_start", { turnIndex: 1, timestamp: 0 });
+		await emit(h, "turn_end", { turnIndex: 1, toolResults: [] });
+		await emit(h, "agent_settled");
 
-	// Same blocker repeated to threshold across separate turns: blocked (red headline).
-	let blocked: any;
-	for (let i = 2; i <= 3; i++) {
-		await emit(h, "turn_start", { turnIndex: i, timestamp: 0 });
-		blocked = await h.tools.goal_block.execute(`call-${i}`, { blocker: "flaky CI on macOS" }, undefined, undefined, h.ctx);
+		const settled = latestGoalState(h);
+		expect(settled.blockedAudit.count).toBe(run);
+		expect(settled.status).toBe(run === 3 ? "blocked" : "active");
 	}
-	expect(blocked.details.blocked).toBe(true);
-	block = h.tools.goal_block.renderResult(blocked, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
-	lines = renderBlock(block);
+
+	expect(result.details.blocked).toBe(true);
+	let block = h.tools.goal_block.renderResult(result, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
+	let lines = renderBlock(block);
 	expect(lines[0]).toContain("Goal blocked");
 	expect(lines[1]).toContain("flaky CI on macOS");
 
-	// A second report in the same turn is a duplicate and renders as such.
+	// Even if another turn follows the first tool call, the same low-level run
+	// cannot count a second blocker report.
 	await h.commands.goal.handler("fresh goal", h.ctx);
-	await emit(h, "turn_start", { turnIndex: 10, timestamp: 0 });
-	await h.tools.goal_block.execute("dup-1", { blocker: "same blocker" }, undefined, undefined, h.ctx);
+	await emit(h, "agent_start");
+	await emit(h, "turn_start", { turnIndex: 0, timestamp: 0 });
+	const recorded = await h.tools.goal_block.execute("dup-1", { blocker: "same blocker" }, undefined, undefined, h.ctx);
+	expect(recorded.details.blocked).toBe(false);
+	block = h.tools.goal_block.renderResult(recorded, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
+	lines = renderBlock(block);
+	expect(lines[0]).toContain("Blocker recorded");
+	expect(lines[1]).toContain("1/3");
+
+	await emit(h, "turn_end", { turnIndex: 0, toolResults: [{ toolName: "goal_block" }] });
+	await emit(h, "turn_start", { turnIndex: 1, timestamp: 0 });
 	const duplicate = await h.tools.goal_block.execute("dup-2", { blocker: "same blocker" }, undefined, undefined, h.ctx);
-	expect(duplicate.details.duplicateTurn).toBe(true);
+	expect(duplicate.details.duplicateRun).toBe(true);
 	block = h.tools.goal_block.renderResult(duplicate, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
 	lines = renderBlock(block);
 	expect(lines[0]).toContain("Blocker already recorded");
+	expect(lines[1]).toContain("settled run");
+});
+
+test("a settled run without goal_block breaks the blocker audit", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("reduce p95 latency below 120ms", h.ctx);
+
+	await emit(h, "turn_start", { turnIndex: 0, timestamp: 0 });
+	await h.tools.goal_block.execute("call-1", { blocker: "flaky CI on macOS" }, undefined, undefined, h.ctx);
+	await emit(h, "turn_end", { turnIndex: 0, toolResults: [{ toolName: "goal_block" }] });
+	await emit(h, "turn_start", { turnIndex: 1, timestamp: 0 });
+	await emit(h, "turn_end", { turnIndex: 1, toolResults: [] });
+	await emit(h, "agent_settled");
+	expect(latestGoalState(h).blockedAudit.count).toBe(1);
+
+	await emit(h, "turn_start", { turnIndex: 0, timestamp: 0 });
+	await emit(h, "turn_end", { turnIndex: 0, toolResults: [] });
+	await emit(h, "agent_settled");
+	expect(latestGoalState(h).blockedAudit).toBeUndefined();
 });
 
 test("goal_set is always available and sets a fresh active goal", async () => {

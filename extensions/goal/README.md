@@ -4,8 +4,10 @@ Track an explicit objective for the session as a **persistent, self-driving
 loop**: the objective stays in view, and after each turn
 the agent keeps working toward it until it's done or blocked.
 
-Blocked status uses three-turn auditing: the same blocker must repeat across at
-least three consecutive goal turns before the goal is marked blocked.
+Blocked status uses settled-run auditing: the same blocker must repeat across at
+least three consecutive settled goal runs before the goal is marked blocked. A
+run can contain a `goal_block` tool turn and a final tool-less follow-up turn;
+only one matching report counts for that whole run.
 
 A goal is a control mode, not the default planning primitive. Ordinary coding or
 research tasks—including multi-step work—should use `update_plan` instead.
@@ -68,8 +70,9 @@ a requirement-by-requirement completion audit before completion.
   `goal_complete` when current evidence proves every requirement is satisfied
   and no required work remains.
 - **Blocked audit** — `goal_block` records blockers while leaving the goal
-  active until the same blocker has recurred three times. Resuming a blocked
-  goal starts a fresh audit.
+  active until the same blocker has recurred across three settled agent runs.
+  At most one report counts per run, including runs with a final tool-less turn.
+  Resuming a blocked goal starts a fresh audit.
 
 ## Commands
 
@@ -121,7 +124,7 @@ All sections except `# Goal` are optional.
 - **`goal_block`** — introduced when a `/goal` first becomes active; records a
   blocker. Optional fields can describe the blocker, attempted work, supporting
   detail, and next input; marks the goal `blocked` only after the same blocker
-  repeats three times.
+  repeats across three settled agent runs. Multiple reports in one run count once.
 
 `goal_set` is always registered. `goal_complete` and `goal_block` start inactive,
 are added when the first goal becomes active, and remain in the active loadout for
@@ -169,7 +172,9 @@ Usage  ↓42K  ↑3K · cached 310K
 Run `/goal-status` for the full objective, timing, blocker, and validation
 view. A cycle is one automatic pass through the goal loop, including the initial
 kickoff. Usage uses `↓` for input and `↑` for output; cache reads and writes are
-shown as `cached` and `written` when present.
+shown as `cached` and `written` when present. Usage totals are refreshed on
+message, compaction, restore, and branch lifecycle events, then reused across
+repaints so rendering does not rescan the transcript.
 
 Status colors: `● active` (green), `● paused` (yellow), `● blocked` (red), and
 `● complete` (dim).

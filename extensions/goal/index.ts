@@ -187,7 +187,7 @@ function buildGoalStateContext(state?: GoalState): string {
  * Re-orients the agent around the objective and asks for a completion audit.
  */
 function continuationPrompt(state: GoalState): string {
-	return `[Goal continuation — turn ${state.continuations + 1}]\n${untrustedGoalBlock(state)}\n\nContinuation behavior:\n- Keep the full objective intact; do not redefine success around a smaller or easier task.\n- Use the current worktree and external state as authoritative; inspect current state before relying on memory.\n- If update_plan is available and the next work is meaningfully multi-step, keep the plan tied to the real objective.\n\nCompletion audit:\nBefore declaring the goal complete, treat completion as unproven and verify it against current authoritative evidence.\n- Derive concrete requirements from the objective, validation criteria, referenced files, plans, issues, user instructions, and relevant project state.\n- For every explicit requirement, named artifact, command, test, gate, invariant, and deliverable, identify the evidence that would prove it.\n- Inspect the current evidence directly: files, command output, test results, rendered artifacts, runtime behavior, PR/check state, or other authoritative sources.\n- Decide for each requirement whether the evidence proves completion, contradicts it, shows incomplete work, is too weak or indirect, or is missing.\n- Match verification scope to requirement scope; do not use a narrow check to prove a broad claim.\n- Treat uncertain, stale, or indirect evidence as not complete; gather stronger evidence or keep working.\nOnly call \`goal_complete\` when current evidence proves every requirement is satisfied and no required work remains.\n\nBlocked audit:\n- Do not call \`goal_block\` the first time a blocker appears.\n- Call \`goal_block\` only when the same blocking condition has repeated for at least ${BLOCKED_AUDIT_THRESHOLD} consecutive goal turns and no meaningful progress is possible without user input or an external-state change.\n- Never use blocked merely because the work is hard, slow, uncertain, incomplete, or would benefit from clarification.\n- Do call \`goal_block\` once all codeable work is genuinely done and the remaining work requires a human decision, design discussion, trace collection, or out-of-session action — that is the correct terminal state, not a lazy block. Report the same blocker on each subsequent turn until the threshold trips, then stop; do not re-audit the same conclusion turn after turn.\n\nDo not just summarize — either make progress, complete the goal, or report a repeated blocker.`;
+	return `[Goal continuation — turn ${state.continuations + 1}]\n${untrustedGoalBlock(state)}\n\nContinuation behavior:\n- Keep the full objective intact; do not redefine success around a smaller or easier task.\n- Use the current worktree and external state as authoritative; inspect current state before relying on memory.\n- If update_plan is available and the next work is meaningfully multi-step, keep the plan tied to the real objective.\n\nCompletion audit:\nBefore declaring the goal complete, treat completion as unproven and verify it against current authoritative evidence.\n- Derive concrete requirements from the objective, validation criteria, referenced files, plans, issues, user instructions, and relevant project state.\n- For every explicit requirement, named artifact, command, test, gate, invariant, and deliverable, identify the evidence that would prove it.\n- Inspect the current evidence directly: files, command output, test results, rendered artifacts, runtime behavior, PR/check state, or other authoritative sources.\n- Decide for each requirement whether the evidence proves completion, contradicts it, shows incomplete work, is too weak or indirect, or is missing.\n- Match verification scope to requirement scope; do not use a narrow check to prove a broad claim.\n- Treat uncertain, stale, or indirect evidence as not complete; gather stronger evidence or keep working.\nOnly call \`goal_complete\` when current evidence proves every requirement is satisfied and no required work remains.\n\nBlocked audit:\n- Do not call \`goal_block\` the first time a blocker appears.\n- Call \`goal_block\` only when the same blocking condition has repeated for at least ${BLOCKED_AUDIT_THRESHOLD} consecutive settled goal runs and no meaningful progress is possible without user input or an external-state change.\n- Never use blocked merely because the work is hard, slow, uncertain, incomplete, or would benefit from clarification.\n- Do call \`goal_block\` once all codeable work is genuinely done and the remaining work requires a human decision, design discussion, trace collection, or out-of-session action — that is the correct terminal state, not a lazy block. Report the same blocker once in each subsequent goal run until the threshold trips, then stop; do not re-audit the same conclusion run after run.\n\nDo not just summarize — either make progress, complete the goal, or report a repeated blocker.`;
 }
 
 // ============================================================================
@@ -248,14 +248,7 @@ function goalTokenUsageLine(stats: GoalOverlayStats | undefined, theme: any): st
 	return `${theme.fg("muted", "Usage")}  ${theme.fg("text", groups.join(" · "))}`;
 }
 
-function goalOverlayStats(ctx: any, state: GoalState): GoalOverlayStats | undefined {
-	const entries = typeof ctx?.sessionManager?.getBranch === "function"
-		? ctx.sessionManager.getBranch()
-		: typeof ctx?.sessionManager?.getEntries === "function"
-			? ctx.sessionManager.getEntries()
-			: [];
-	if (!Array.isArray(entries)) return undefined;
-
+function calculateGoalOverlayStats(entries: readonly any[], state: GoalState): GoalOverlayStats | undefined {
 	let startIndex = -1;
 	for (let index = 0; index < entries.length; index++) {
 		const entry = entries[index];
@@ -300,12 +293,12 @@ export interface GoalCompletionStats {
  * reach the extension closure) and stashed in the tool result `details` so the
  * completion block can render the same numbers the overlay card was showing.
  */
-function completionStats(ctx: any, state: GoalState): GoalCompletionStats {
+function completionStats(state: GoalState, tokens?: GoalOverlayStats): GoalCompletionStats {
 	return {
 		activeTimeMs: elapsedMs(state),
 		continuations: state.continuations,
 		validationCount: state.validation.length,
-		tokens: goalOverlayStats(ctx, state),
+		tokens: tokens ? { ...tokens } : undefined,
 	};
 }
 
@@ -468,6 +461,7 @@ interface GoalToolResultDetails {
 	ignored?: boolean;
 	blocked?: boolean;
 	duplicateTurn?: boolean;
+	duplicateRun?: boolean;
 	count?: number;
 	threshold?: number;
 	reason?: string;
@@ -560,7 +554,7 @@ function renderGoalCompleteResult(
  * Render the `goal_block` tool block.
  *  - partial → `• Reporting blocker` (magenta) with the blocker preview.
  *  - blocked → `• Goal blocked` (red) + the blocker (and next input).
- *  - duplicateTurn → `• Blocker already recorded` (green) + a note.
+ *  - duplicateRun → `• Blocker already recorded` (green) + a note.
  *  - recorded (below threshold) → `• Blocker recorded` (green) + count/threshold.
  *  - ignored (no active goal) → invisible Container.
  */
@@ -594,10 +588,10 @@ function renderGoalBlockResult(
 				toolBranch(branch ? theme.fg("dim", branch) : ""),
 			];
 		}
-		if (details?.duplicateTurn) {
+		if (details?.duplicateRun || details?.duplicateTurn) {
 			return [
 				toolHeadline(false, false, "Blocker already recorded", ""),
-				toolBranch(theme.fg("dim", "already counted this goal turn")),
+				toolBranch(theme.fg("dim", details.duplicateRun ? "already counted this settled run" : "already counted this goal turn")),
 			];
 		}
 		const count = details?.count ?? 1;
@@ -661,13 +655,14 @@ function renderGoalSetResult(
 export default function (pi: ExtensionAPI) {
 	let state: GoalState | undefined;
 	let activeCtx: any;
+	let overlayStats: GoalOverlayStats | undefined;
+	let overlayStatsCacheKey: string | undefined;
 	let nextTurnIsContinuation = false;
 	let currentTurnIsContinuation = false;
 	let currentTurnHadToolCall = false;
-	let currentTurnCalledGoalBlock = false;
+	let currentRunBlockerFingerprint: string | undefined;
 	let lastTurnWasContinuation = false;
 	let lastTurnHadToolCall = false;
-	let lastTurnCalledGoalBlock = false;
 	let noToolContinuationStreak = 0;
 	let pendingContinuationPrompt: string | undefined;
 	let lastTerminalError: { errorMessage?: string } | undefined;
@@ -692,13 +687,40 @@ export default function (pi: ExtensionAPI) {
 			if (!state) return [];
 			// Keep the always-on card compact: it is a mission badge, not the
 			// full objective document. `/goal-status` remains the detailed view.
-			return renderGoalOverlayBody(displayState(state), width, maxHeight, theme, goalOverlayStats(activeCtx, state));
+			// Usage is refreshed by entry/session lifecycle handlers, never by repaint.
+			return renderGoalOverlayBody(displayState(state), width, maxHeight, theme, overlayStats);
 		},
 	});
 
 	const branchEntries = (ctx: any): readonly any[] => typeof ctx.sessionManager.getBranch === "function"
 		? ctx.sessionManager.getBranch()
 		: ctx.sessionManager.getEntries();
+	const usageCacheKey = (ctx: any): string | undefined => {
+		if (!state) return undefined;
+		const leafId = typeof ctx?.sessionManager?.getLeafId === "function"
+			? ctx.sessionManager.getLeafId()
+			: undefined;
+		return leafId == null ? undefined : `${state.createdAt}:${leafId}`;
+	};
+	const refreshOverlayStats = (ctx: any, force = false) => {
+		if (!state) {
+			overlayStats = undefined;
+			overlayStatsCacheKey = undefined;
+			return;
+		}
+		const key = usageCacheKey(ctx);
+		if (!force && key !== undefined && key === overlayStatsCacheKey) return;
+		overlayStats = calculateGoalOverlayStats(branchEntries(ctx), state);
+		overlayStatsCacheKey = key;
+	};
+	const addPendingUsage = (message: any) => {
+		if (!state || (message?.role !== "assistant" && message?.role !== "toolResult") || !message.usage) return;
+		overlayStats ??= { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+		overlayStats.inputTokens += Math.max(0, message.usage.input ?? 0);
+		overlayStats.outputTokens += Math.max(0, message.usage.output ?? 0);
+		overlayStats.cacheReadTokens += Math.max(0, message.usage.cacheRead ?? 0);
+		overlayStats.cacheWriteTokens += Math.max(0, message.usage.cacheWrite ?? 0);
+	};
 
 	const persist = () => pi.appendEntry(ENTRY_TYPE, state ? { state } satisfies PersistedGoalEntry : { cleared: true } satisfies PersistedGoalEntry);
 	const appendGoalContext = (snapshot: GoalState | undefined = state) => {
@@ -741,6 +763,7 @@ export default function (pi: ExtensionAPI) {
 
 	const emit = (ctx: any) => {
 		activeCtx = ctx;
+		refreshOverlayStats(ctx);
 		syncGoalToolAvailability();
 		goalCard.invalidate();
 		const displayed = state ? displayState(state) : undefined;
@@ -763,6 +786,7 @@ export default function (pi: ExtensionAPI) {
 			state.activeSince = now;
 			state.blockedAt = undefined;
 			state.blockedAudit = undefined;
+			currentRunBlockerFingerprint = undefined;
 			noToolContinuationStreak = 0;
 		}
 		if (next === "blocked" && !state.blockedAudit) {
@@ -863,16 +887,15 @@ export default function (pi: ExtensionAPI) {
 	 *  - anti-spin: repeated no-tool continuations mark the goal blocked
 	 *  - the previous turn must not have been aborted (interruption → pause)
 	 */
-	const maybeContinue = (ctx: any): boolean => {
+	const maybeContinue = (ctx: any, settledRunBlockerFingerprint?: string): boolean => {
 		if (!state || state.status !== "active") return false;
 		if (typeof ctx.isIdle === "function" && !ctx.isIdle()) return false;
 		if (typeof ctx.hasPendingMessages === "function" && ctx.hasPendingMessages()) return false;
 
-		// Interruption → pause is detected in message_end below.
-		// Any goal turn that does not report a blocker breaks the consecutive
-		// blocker audit. This keeps the threshold tied to repeated blocker reports,
-		// not merely repeated turns.
-		if (!lastTurnCalledGoalBlock && state.blockedAudit) state.blockedAudit = undefined;
+		// Interruption → pause is detected in message_end below. A blocker report
+		// belongs to the whole low-level run: goal_block can cause a final tool-less
+		// follow-up turn before agent_settled, and that turn must not erase it.
+		if (!settledRunBlockerFingerprint && state.blockedAudit) state.blockedAudit = undefined;
 
 		if (lastTurnHadToolCall) {
 			noToolContinuationStreak = 0;
@@ -947,7 +970,7 @@ export default function (pi: ExtensionAPI) {
 						// blocked audit.
 						lastTurnWasContinuation = false;
 						lastTurnHadToolCall = false;
-						lastTurnCalledGoalBlock = false;
+						currentRunBlockerFingerprint = undefined;
 						noToolContinuationStreak = 0;
 						maybeContinue(ctx);
 					}
@@ -961,7 +984,8 @@ export default function (pi: ExtensionAPI) {
 						ctx.ui.notify("No session goal to complete.", "warning");
 						return;
 					}
-					const stats = completionStats(ctx, state!);
+					refreshOverlayStats(ctx);
+					const stats = completionStats(state!, overlayStats);
 					ctx.ui.notify(
 						`Goal complete: ${state!.objective}\n${formatCompletionStats(stats, ctx.ui.theme)}`,
 						"info",
@@ -1058,17 +1082,17 @@ export default function (pi: ExtensionAPI) {
 		currentTurnIsContinuation = nextTurnIsContinuation;
 		nextTurnIsContinuation = false;
 		currentTurnHadToolCall = false;
-		currentTurnCalledGoalBlock = false;
 	});
 	pi.on("tool_execution_end", () => { currentTurnHadToolCall = true; });
 	pi.on("turn_end", (event: any) => {
 		lastTurnWasContinuation = currentTurnIsContinuation;
 		lastTurnHadToolCall = currentTurnHadToolCall || (Array.isArray(event.toolResults) && event.toolResults.length > 0);
-		lastTurnCalledGoalBlock = currentTurnCalledGoalBlock;
 	});
 
 	pi.on("message_end", (event, ctx) => {
 		const msg = event.message;
+		addPendingUsage(msg);
+		goalCard.invalidate();
 		if (!msg || msg.role !== "assistant") return;
 		if (msg.stopReason === "error") {
 			lastTerminalError = { errorMessage: typeof msg.errorMessage === "string" ? msg.errorMessage : undefined };
@@ -1090,13 +1114,16 @@ export default function (pi: ExtensionAPI) {
 	// The safe-boundary continuation point: agent fully settled, no retry,
 	// no compaction, no queued work will run.
 	pi.on("agent_settled", (_event, ctx) => {
+		const settledRunBlockerFingerprint = currentRunBlockerFingerprint;
+		currentRunBlockerFingerprint = undefined;
 		if (blockAfterTerminalError(ctx)) return;
-		maybeContinue(ctx);
+		maybeContinue(ctx, settledRunBlockerFingerprint);
 	});
 
 	// Re-anchor the canonical state after compaction without changing the
 	// cacheable system prompt prefix.
 	pi.on("session_compact", (_event, ctx) => {
+		refreshOverlayStats(ctx, true);
 		emit(ctx);
 		if (state) appendGoalContext();
 	});
@@ -1108,13 +1135,14 @@ export default function (pi: ExtensionAPI) {
 	const restoreState = (ctx: any) => {
 		activeCtx = ctx;
 		state = undefined;
+		overlayStats = undefined;
+		overlayStatsCacheKey = undefined;
 		nextTurnIsContinuation = false;
 		currentTurnIsContinuation = false;
 		currentTurnHadToolCall = false;
-		currentTurnCalledGoalBlock = false;
+		currentRunBlockerFingerprint = undefined;
 		lastTurnHadToolCall = false;
 		lastTurnWasContinuation = false;
-		lastTurnCalledGoalBlock = false;
 		noToolContinuationStreak = 0;
 		pendingContinuationPrompt = undefined;
 		lastTerminalError = undefined;
@@ -1153,6 +1181,7 @@ export default function (pi: ExtensionAPI) {
 				lastContinuationAt: typeof restored.lastContinuationAt === "number" ? restored.lastContinuationAt : undefined,
 			};
 		}
+		refreshOverlayStats(ctx, true);
 		emit(ctx);
 		if (state) appendGoalContext();
 	};
@@ -1199,7 +1228,8 @@ export default function (pi: ExtensionAPI) {
 			setStatus("complete", ctx);
 			// The completion block is the sole tool-path completion surface and
 			// persists these lifetime stats after the overlay hides.
-			const stats = completionStats(ctx, state);
+			refreshOverlayStats(ctx);
+			const stats = completionStats(state, overlayStats);
 			return {
 				content: [{ type: "text", text: `Goal marked complete.\nObjective: ${state.objective}${params.summary ? `\nSummary: ${params.summary}` : ""}` }],
 				details: { ok: true, completion: stats },
@@ -1211,7 +1241,7 @@ export default function (pi: ExtensionAPI) {
 		name: "goal_block",
 		label: "Report Goal Blocker",
 		description:
-			`Mark the active goal blocked. Only available while a /goal is active. Use after the same blocking condition has recurred for at least ${BLOCKED_AUDIT_THRESHOLD} consecutive goal turns and no meaningful progress is possible without user input or an external-state change. Do not call merely because work is hard, slow, uncertain, incomplete, or would benefit from clarification. Do call it once all codeable work is genuinely done and the remaining work requires a human decision, design discussion, trace collection, or out-of-session action — that is the correct terminal state, not a lazy block.`,
+			`Mark the active goal blocked. Only available while a /goal is active. Use after the same blocking condition has recurred for at least ${BLOCKED_AUDIT_THRESHOLD} consecutive settled goal runs and no meaningful progress is possible without user input or an external-state change. At most one blocker report counts per settled run. Do not call merely because work is hard, slow, uncertain, incomplete, or would benefit from clarification. Do call it once all codeable work is genuinely done and the remaining work requires a human decision, design discussion, trace collection, or out-of-session action — that is the correct terminal state, not a lazy block.`,
 		parameters: Type.Object({
 			blocker: Type.Optional(Type.String({ description: "Optional short description of the blocking condition." })),
 			attempted: Type.Optional(Type.String({ description: "Optional note about what was attempted." })),
@@ -1224,16 +1254,15 @@ export default function (pi: ExtensionAPI) {
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			if (!state) return inactiveGoalToolResult("no-goal");
 			if (state.status !== "active") return inactiveGoalToolResult(`goal-${state.status}`);
-			const alreadyReportedThisTurn = currentTurnCalledGoalBlock;
-			currentTurnCalledGoalBlock = true;
-			if (alreadyReportedThisTurn) {
-				return { content: [{ type: "text", text: "A blocker has already been recorded for this goal turn. Wait for the next goal turn before counting the same blocker again." }], details: { ok: true, blocked: false, duplicateTurn: true } };
-			}
 			const blocker = params.blocker?.trim() || "Unspecified repeated blocker";
 			const attempted = params.attempted?.trim() || undefined;
 			const evidence = params.evidence?.trim() || undefined;
 			const nextInput = params.next_input?.trim() || undefined;
 			const fingerprint = blockerFingerprint(blocker, nextInput);
+			if (currentRunBlockerFingerprint !== undefined) {
+				return { content: [{ type: "text", text: "A blocker has already been recorded for this settled agent run. Wait for the next goal continuation before reporting it again." }], details: { ok: true, blocked: false, duplicateRun: true } };
+			}
+			currentRunBlockerFingerprint = fingerprint;
 			const previous = state.blockedAudit;
 			const count = previous?.fingerprint === fingerprint ? previous.count + 1 : 1;
 			state.blockedAudit = {
@@ -1255,12 +1284,12 @@ export default function (pi: ExtensionAPI) {
 			if (count < BLOCKED_AUDIT_THRESHOLD) {
 				saveAndEmit(ctx);
 				return {
-					content: [{ type: "text", text: `Blocker recorded (${count}/${BLOCKED_AUDIT_THRESHOLD}); goal remains active. Continue if any meaningful progress is possible. If the same blocker recurs on later goal turns, call goal_block again.\n\n${details}` }],
+					content: [{ type: "text", text: `Blocker recorded (${count}/${BLOCKED_AUDIT_THRESHOLD}); goal remains active. Continue if any meaningful progress is possible. If the same blocker recurs in a later goal run, call goal_block again.\n\n${details}` }],
 					details: { ok: true, blocked: false, count, threshold: BLOCKED_AUDIT_THRESHOLD },
 				};
 			}
 
-			ctx.ui.notify("Goal blocked: blocker repeated across goal turns.", "warning");
+			ctx.ui.notify("Goal blocked: blocker repeated across settled goal runs.", "warning");
 			setStatus("blocked", ctx);
 			return {
 				content: [{ type: "text", text: `Goal marked blocked after ${count} consecutive reports of the same blocker.\n\n${details}\n\nResume with /goal resume once unblocked.` }],
