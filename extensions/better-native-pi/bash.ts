@@ -9,9 +9,10 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createBashTool, createBashToolDefinition, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { createBashToolDefinition, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Container, truncateToWidth } from "@earendil-works/pi-tui";
 import {
+	BASH_SESSION_ENV_GUIDELINE,
 	clearBetterNativeBashIntegration,
 	getBackgroundTerminalService,
 	setBetterNativeBashIntegration,
@@ -324,13 +325,13 @@ export default function bash(pi: ExtensionAPI) {
 					: bashTool.description,
 				promptSnippet: bashTool.promptSnippet,
 				parameters: terminalEnabled ? withTerminalParameters(bashTool.parameters) : withReasoning(bashTool.parameters),
-				promptGuidelines: bashTool.promptGuidelines,
+				promptGuidelines: bashTool.promptGuidelines ?? [BASH_SESSION_ENV_GUIDELINE],
 				renderShell: "self",
 				execute: async (id: string, params: any, signal: AbortSignal, onUpdate: any, ctx: any) => {
 					const terminal = getBackgroundTerminalService();
 					if (terminal) return terminal.execute(id, params, signal, onUpdate, ctx);
 					const { rest } = stripReasoning(params);
-					return createBashTool(ctx.cwd).execute(id, rest, signal, onUpdate);
+					return createBashToolDefinition(ctx.cwd).execute(id, rest, signal, onUpdate, ctx);
 				},
 				renderCall: (args: any, theme: any, context: any) => {
 					if (!context?.isPartial) return new Container();

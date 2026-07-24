@@ -23,6 +23,11 @@ The extension provides its own managed `bash` when loaded independently. When
 `bash` definition and refreshes it as soon as the managed terminal service is
 available. Both load orders expose the same schema and behavior.
 
+Every command receives Pi's current `PI_SESSION_ID`, `PI_SESSION_FILE`,
+`PI_PROVIDER`, `PI_MODEL`, and `PI_REASONING_LEVEL` values when available. The
+extension replaces inherited values when each process starts, so nested Pi
+sessions cannot leak stale parent metadata into managed terminals.
+
 For an interactive prompt, call `bash` with `tty: true`; if it yields, send the
 answer with `terminal_write`. `terminal_write` also accepts literal control
 characters, including `\u0003` for Ctrl+C. PTY mode uses the system `expect`

@@ -21,6 +21,7 @@ import {
 	LIVE_REFRESH_FALLBACK_MS,
 } from "./refresh.js";
 import {
+	BASH_SESSION_ENV_GUIDELINE,
 	clearBackgroundTerminalService,
 	hasBetterNativeBashIntegration,
 	setBackgroundTerminalService,
@@ -43,6 +44,31 @@ const PERSISTED_OUTPUT_BYTES = 8 * 1024;
 const VIEWER_OUTPUT_BYTES = 64 * 1024;
 const TERMINAL_TOOL_NAMES = ["job_output", "terminal_write", "job_kill"] as const;
 const TERMINAL_TOOL_NAME_SET = new Set<string>(TERMINAL_TOOL_NAMES);
+const PI_SESSION_ENV_KEYS = [
+	"PI_SESSION_ID",
+	"PI_SESSION_FILE",
+	"PI_PROVIDER",
+	"PI_MODEL",
+	"PI_REASONING_LEVEL",
+] as const;
+
+function bashSessionEnvironment(ctx: any, getThinkingLevel: () => unknown): NodeJS.ProcessEnv {
+	const env = { ...process.env };
+	for (const key of PI_SESSION_ENV_KEYS) delete env[key];
+
+	const sessionId = ctx.sessionManager?.getSessionId?.();
+	const sessionFile = ctx.sessionManager?.getSessionFile?.();
+	const provider = ctx.model?.provider;
+	const model = ctx.model?.id;
+	const thinkingLevel = ctx.thinkingLevel ?? getThinkingLevel();
+
+	if (typeof sessionId === "string" && sessionId) env.PI_SESSION_ID = sessionId;
+	if (typeof sessionFile === "string" && sessionFile) env.PI_SESSION_FILE = sessionFile;
+	if (typeof provider === "string" && provider) env.PI_PROVIDER = provider;
+	if (typeof model === "string" && model) env.PI_MODEL = model;
+	if (typeof thinkingLevel === "string" && thinkingLevel) env.PI_REASONING_LEVEL = thinkingLevel;
+	return env;
+}
 
 // ---------------------------------------------------------------------------
 // Last-resort reaper: prevent orphaned managed terminals on ungraceful exit.
@@ -758,6 +784,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 				command,
 				cwd,
 				tty: job.tty,
+				env: bashSessionEnvironment(ctx, () => pi.getThinkingLevel?.()),
 				onStdout: (chunk) => appendOutput(job, "stdout", chunk),
 				onStderr: (chunk) => appendOutput(job, "stderr", chunk),
 				onPtyPid: (pid) => {
@@ -1003,6 +1030,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			label: "bash",
 			description: "Run a shell command. Quick commands return normally; long-running commands yield a managed terminal ID. Set tty=true for prompts and REPLs.",
 			promptSnippet: "Run shell commands with automatic background yielding and optional PTY interaction",
+			promptGuidelines: [BASH_SESSION_ENV_GUIDELINE],
 			parameters: {
 				type: "object",
 				properties: {

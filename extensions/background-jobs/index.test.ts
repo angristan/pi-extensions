@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createBashToolDefinition } from "@earendil-works/pi-coding-agent";
 import registerBetterNativeBash from "../better-native-pi/bash";
 import registerBackgroundJobs, { BoundedOutput, CursorOutput, JobOutputViewer } from "./index";
 import { sanitizeTerminalOutput } from "./output";
@@ -64,12 +65,19 @@ function createHarness(options: HarnessOptions = {}): Harness {
 				return undefined;
 			},
 		},
-		sessionManager: { getEntries: () => [] },
+		model: { provider: "test-provider", id: "test-model" },
+		thinkingLevel: "high",
+		sessionManager: {
+			getEntries: () => [],
+			getSessionId: () => "test-session-id",
+			getSessionFile: () => "/tmp/test-session.jsonl",
+		},
 	};
 	const pi = {
 		registerTool(definition: any) { tools.set(definition.name, definition); activeTools.add(definition.name); },
 		registerCommand(name: string, definition: any) { commands.set(name, definition); },
 		getActiveTools() { return [...activeTools]; },
+		getThinkingLevel() { return ctx.thinkingLevel; },
 		setActiveTools(names: string[]) { activeTools.clear(); for (const name of names) activeTools.add(name); },
 		registerEntryRenderer(type: string) { entryRendererTypes.push(type); },
 		on(name: string, handler: (...args: any[]) => any) {
@@ -358,7 +366,9 @@ describe("terminal tools", () => {
 		expect(bash.parameters.properties["yield-time_ms"]).toMatchObject({ minimum: 250, maximum: 30_000 });
 		expect(bash.description).toContain("long-running commands yield a managed terminal ID");
 		expect(bash.description).toContain("prompts and REPLs");
-		expect(bash.promptGuidelines ?? []).toEqual([]);
+		expect(bash.promptGuidelines).toEqual([
+			"Inspect PI_* environment variables for current model and session details.",
+		]);
 		for (const name of ["job_output", "terminal_write"]) {
 			const tool = harness.tools.get(name);
 			expect(Object.keys(tool.parameters.properties)[0]).toBe("reasoning");
@@ -440,6 +450,54 @@ describe("terminal tools", () => {
 		}).render(120).join("\n");
 		expect(rendered).toContain("quick-output");
 		expect(rendered).not.toContain(result.details.id);
+	});
+
+	test("exposes current Pi session metadata and removes stale inherited values", async () => {
+		const keys = ["PI_SESSION_ID", "PI_SESSION_FILE", "PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL"] as const;
+		const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+		for (const key of keys) process.env[key] = `stale-${key}`;
+
+		try {
+			const harness = createHarness();
+			await startHarness(harness);
+			const tool = harness.tools.get("bash");
+			const command = "printf '%s|%s|%s|%s|%s' \"$PI_SESSION_ID\" \"$PI_SESSION_FILE\" \"$PI_PROVIDER\" \"$PI_MODEL\" \"$PI_REASONING_LEVEL\"";
+			const result = await tool.execute("session-env", {
+				command,
+				reasoning: "inspect current session metadata",
+			}, undefined, undefined, harness.ctx);
+			expect(result.content[0].text).toContain(
+				"test-session-id|/tmp/test-session.jsonl|test-provider|test-model|high",
+			);
+
+			harness.ctx.sessionManager.getSessionFile = () => undefined;
+			harness.ctx.model = undefined;
+			harness.ctx.thinkingLevel = undefined;
+			const cleared = await tool.execute("session-env-cleared", {
+				command,
+				reasoning: "verify stale metadata is absent",
+			}, undefined, undefined, harness.ctx);
+			expect(cleared.content[0].text.trim().split("\n").at(-1)).toBe("test-session-id||||");
+		} finally {
+			for (const key of keys) {
+				const value = previous[key];
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+		}
+	});
+
+	test("forwards extension context through the native foreground bash delegate", async () => {
+		const nativeGuidelines = createBashToolDefinition(process.cwd()).promptGuidelines ?? [];
+		if (!nativeGuidelines.includes("Inspect PI_* environment variables for current model and session details.")) return;
+
+		const harness = createHarness({ extensions: ["better-native-pi"] });
+		await startHarness(harness);
+		const result = await harness.tools.get("bash").execute("foreground-session-env", {
+			command: "printf '%s|%s|%s' \"$PI_SESSION_ID\" \"$PI_MODEL\" \"$PI_REASONING_LEVEL\"",
+			reasoning: "inspect foreground session metadata",
+		}, undefined, undefined, harness.ctx);
+		expect(result.content[0].text).toContain("test-session-id|test-model|high");
 	});
 
 	test("shows yielded commands in the overlay instead of the footer", async () => {

@@ -8,6 +8,7 @@ export interface TerminalSpawnOptions {
 	command: string;
 	cwd: string;
 	tty: boolean;
+	env?: NodeJS.ProcessEnv;
 	onStdout: (chunk: Buffer) => void;
 	onStderr: (chunk: Buffer) => void;
 	onPtyPid: (pid: number) => void;
@@ -69,7 +70,7 @@ export function isPtySupported(): boolean {
 
 export function spawnTerminal(options: TerminalSpawnOptions): ChildProcess {
 	const shell = getShellConfig();
-	const env = { ...process.env };
+	const env = { ...(options.env ?? process.env) };
 	let child: ChildProcess;
 	let markerFilter: PidMarkerFilter | undefined;
 

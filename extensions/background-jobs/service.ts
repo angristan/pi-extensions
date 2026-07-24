@@ -1,3 +1,5 @@
+export const BASH_SESSION_ENV_GUIDELINE = "Inspect PI_* environment variables for current model and session details.";
+
 export interface BackgroundTerminalView {
 	details: any;
 	output: string;
