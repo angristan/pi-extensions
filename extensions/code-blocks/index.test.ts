@@ -50,3 +50,55 @@ test("bounds tall blocks with a caller-provided omission row", () => {
 test("uses unframed code in panes too narrow for a useful box", () => {
 	expect(renderCodeBox("a\nb", "js", 7, theme)).toEqual(["a", "b"]);
 });
+
+const parentStyle = {
+	color: (text: string) => `\x1b[38;2;200;200;200m${text}\x1b[39m`,
+	italic: true,
+};
+const styledTheme = {
+	...theme,
+	italic: (text: string) => `\x1b[3m${text}\x1b[23m`,
+	bold: (text: string) => text,
+	strikethrough: (text: string) => text,
+	underline: (text: string) => text,
+};
+
+function styledCodeRow(highlighted: string): string {
+	const lines = renderCodeBlock("ignored", "ts", 80, {
+		...styledTheme,
+		highlightCode: () => [highlighted],
+	}, { defaultTextStyle: parentStyle });
+	return lines[1];
+}
+
+test("dims basic and bright ANSI foreground colors in styled code", () => {
+	expect(styledCodeRow("\x1b[31mred\x1b[94mblue")).toContain(
+		"\x1b[38;2;77;0;0mred\x1b[38;2;0;0;153mblue",
+	);
+});
+
+test("converts 256-color ANSI foregrounds to dimmed true color", () => {
+	expect(styledCodeRow("\x1b[38;5;196mred")).toContain("\x1b[38;2;153;0;0mred");
+});
+
+test("dims true-color ANSI foregrounds channel by channel", () => {
+	expect(styledCodeRow("\x1b[38;2;100;150;200mvalue")).toContain(
+		"\x1b[38;2;60;90;120mvalue",
+	);
+});
+
+test("reapplies the parent style after syntax-highlighter resets", () => {
+	const row = styledCodeRow("\x1b[31mred\x1b[0m gap");
+	const parentPrefix = "\x1b[3m\x1b[38;2;200;200;200m";
+
+	expect(row).toStartWith(parentPrefix);
+	expect(row).toContain(`\x1b[0m${parentPrefix} gap`);
+	expect(row).toEndWith("\x1b[39m\x1b[23m");
+});
+
+test("leaves incomplete extended-color sequences intact", () => {
+	const row = styledCodeRow("\x1b[38;2;255mvalue");
+
+	expect(row).toContain("\x1b[38;2;255mvalue");
+	expect(row).not.toContain("NaN");
+});
