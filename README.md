@@ -100,15 +100,25 @@ accept, `Esc` / `Ctrl+C` to cancel, and `Ctrl+U` to clear the query.
 
 ## Configuration
 
-A few extensions read optional config from `~/.pi/agent/<name>.json`:
+A few extensions read optional config from Pi's agent directory (`~/.pi/agent` by default, or `PI_CODING_AGENT_DIR` when set):
 
 - `auto-session-title.json` — `{"provider": "mistral", "model": "mistral-medium-3.5"}`
 - `accent-color.json` — `{"color": "#FF8205"}` (accepts `#RRGGBB` / `#RGB`)
 - `notifications.json` — `{"enabled": true}`
 - `openai-codex-fast.json` — `{"enabled": true}`
 - `telegram-notifications.json` — created with owner-only permissions by `/telegram setup`
+- `working-timer.json` — `{"spinner": "native" | "rail-3" | "rail-3-eased"}`
 
 All default to sensible values if the file is absent. Telegram notifications stay disabled until configured.
+
+## Development
+
+Install the pinned development dependencies and run the complete test suite with Bun:
+
+```sh
+bun install --frozen-lockfile
+bun test
+```
 
 ## License
 
@@ -117,7 +127,8 @@ MIT
 ## Dependencies
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent).
-- **npm packages:** None; extensions use Pi's bundled modules and Node/Bun APIs.
+- **Runtime npm packages:** None; extensions use Pi's bundled modules and Node/Bun APIs.
+- **Development npm packages:** Pi's extension APIs and `typebox`, pinned in `package.json` and `bun.lock` for reproducible tests.
 - **System/services:** Only where noted in each extension README.
 
 An arrow means the extension on the left directly imports the extension on the
