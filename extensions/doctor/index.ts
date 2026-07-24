@@ -44,7 +44,20 @@ interface DiagnosticIssue {
 	text: string;
 }
 
-interface DoctorSnapshot {
+type ReportStatus = "ok" | DiagnosticIssue["severity"];
+
+export interface DoctorReportItem {
+	status: ReportStatus;
+	label: string;
+	detail?: string;
+}
+
+export interface DoctorReport {
+	lines: string[];
+	items: DoctorReportItem[];
+}
+
+export interface DoctorSnapshot {
 	agentDir: string;
 	extensions: ExtensionEntry[];
 	runtimeLoadedFiles: string[];
@@ -486,34 +499,32 @@ function rendererStats(): Record<string, RendererStats> {
 	return root[RENDER_STATS_KEY] ?? {};
 }
 
-function statusIcon(status: "ok" | "warning" | "error" | "info", theme: any): string {
+function statusIcon(status: ReportStatus, theme: any): string {
 	if (status === "ok") return theme.fg("success", "✓");
 	if (status === "warning") return theme.fg("warning", "!");
 	if (status === "error") return theme.fg("error", "×");
 	return theme.fg("dim", "·");
 }
 
-// Total error/warning counts, shown in the report title line.
-// Kept in sync with the item() calls below: every error-severity item should
-// contribute to errors, every warning to warnings.
-function issueCounts(snapshot: DoctorSnapshot): { errors: number; warnings: number } {
-	const errors = Number(Boolean(snapshot.settingsError || snapshot.modelsError))
-		+ snapshot.startupIssues.length
-		+ snapshot.missingEnabledModels.length
-		+ snapshot.missingFeatureFiles.length;
-	const warnings = snapshot.duplicates.length + snapshot.foundryIssues.length
-		+ Number((snapshot.session.fileBytes ?? 0) > 25 * 1024 * 1024)
-		+ Number(snapshot.session.entries > 5_000);
+export function countReportIssues(items: readonly DoctorReportItem[]): { errors: number; warnings: number } {
+	let errors = 0;
+	let warnings = 0;
+	for (const item of items) {
+		if (item.status === "error") errors += 1;
+		else if (item.status === "warning") warnings += 1;
+	}
 	return { errors, warnings };
 }
 
-function reportLines(snapshot: DoctorSnapshot, tui: TUI, theme: any): string[] {
+export function buildDoctorReport(snapshot: DoctorSnapshot, tui: TUI, theme: any): DoctorReport {
 	const lines: string[] = [];
+	const items: DoctorReportItem[] = [];
 	const section = (title: string) => {
 		if (lines.length) lines.push("");
 		lines.push(theme.fg("accent", theme.bold(title)));
 	};
-	const item = (status: "ok" | "warning" | "error" | "info", label: string, detail?: string) => {
+	const item = (status: ReportStatus, label: string, detail?: string) => {
+		items.push({ status, label, detail });
 		lines.push(`${statusIcon(status, theme)} ${theme.bold(label)}${detail ? ` ${theme.fg("muted", detail)}` : ""}`);
 	};
 	const detail = (text: string) => lines.push(`  ${theme.fg("dim", text)}`);
@@ -608,7 +619,7 @@ function reportLines(snapshot: DoctorSnapshot, tui: TUI, theme: any): string[] {
 	for (const suggestion of suggestions) item(suggestion.severity === "warning" ? "warning" : suggestion.severity, suggestion.text);
 	lines.push("");
 	lines.push(theme.fg("dim", "Doctor never changes configuration, reloads extensions, or retries providers."));
-	return lines;
+	return { lines, items };
 }
 
 class DoctorPager {
@@ -620,6 +631,7 @@ class DoctorPager {
 	private readonly title: Text;
 	private readonly body: Text;
 	private readonly footer: Text;
+	private readonly report: DoctorReport;
 
 	constructor(
 		private readonly snapshot: DoctorSnapshot,
@@ -635,6 +647,7 @@ class DoctorPager {
 		this.title = new Text("", 1, 0);
 		this.body = new Text("", 1, 0);
 		this.footer = new Text(this.theme.fg("dim", "↑↓/PgUp/PgDn scroll · Home/End · q close"), 1, 0);
+		this.report = buildDoctorReport(this.snapshot, this.tui, this.theme);
 
 		this.container = new Container();
 		this.container.addChild(this.border);
@@ -643,8 +656,8 @@ class DoctorPager {
 		this.container.addChild(this.footer);
 		this.container.addChild(this.border);
 
-		// Title: status summary — same colors as before, now a Text line.
-		const { errors, warnings } = issueCounts(this.snapshot);
+		// The headline summarizes the exact item set rendered in the body.
+		const { errors, warnings } = countReportIssues(this.report.items);
 		const status = errors > 0 ? this.theme.fg("error", `${errors} error${errors === 1 ? "" : "s"}`)
 			: warnings > 0 ? this.theme.fg("warning", `${warnings} warning${warnings === 1 ? "" : "s"}`)
 			: this.theme.fg("success", "all green");
@@ -656,7 +669,7 @@ class DoctorPager {
 	private lines(width: number): string[] {
 		if (this.cachedWidth === width) return this.cachedLines;
 		const wrapped: string[] = [];
-		for (const line of reportLines(this.snapshot, this.tui, this.theme)) {
+		for (const line of this.report.lines) {
 			if (!line) { wrapped.push(""); continue; }
 			wrapped.push(...wrapTextWithAnsi(line, Math.max(1, width)));
 		}

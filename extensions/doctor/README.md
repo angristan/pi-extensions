@@ -33,7 +33,8 @@ item with a glyph:
 
 Checks include: settings.json/models.json validity, model auth availability,
 code-blocks + cached-line-resets patch status, renderer-cache hit rates, and
-recent `pi-debug.log` startup failures.
+recent `pi-debug.log` startup failures. The headline warning/error totals count
+the exact item rows shown in the report.
 
 ## Dependencies
 

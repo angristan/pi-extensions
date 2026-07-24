@@ -2,7 +2,13 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverExtensionEntries, extractRecentIssues, findDuplicateRegistrations } from "./index";
+import {
+	buildDoctorReport,
+	countReportIssues,
+	discoverExtensionEntries,
+	extractRecentIssues,
+	findDuplicateRegistrations,
+} from "./index";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -46,4 +52,53 @@ test("deduplicates and classifies recent startup and provider evidence", () => {
 	]);
 	expect(issues.startup).toEqual(["Failed to load extension foo"]);
 	expect(issues.foundry).toEqual(["Foundry OpenAI error: HTTP 429 rate limit"]);
+});
+
+test("headline issue counts match every rendered report item", () => {
+	const statsKey = Symbol.for("pi.renderer-cache.stats");
+	const root = globalThis as any;
+	const previousStats = root[statsKey];
+	root[statsKey] = { test: { renderCalls: 1 } };
+	try {
+		const snapshot = {
+			agentDir: "/tmp/pi-agent",
+			extensions: [],
+			runtimeLoadedFiles: [],
+			passiveOrUnverifiedFiles: [],
+			activeTools: [],
+			duplicates: [],
+			settings: {},
+			missingEnabledModels: [],
+			unauthenticatedEnabledModels: ["provider/model"],
+			defaultModelResolved: false,
+			defaultModelAuthenticated: false,
+			availableModels: 0,
+			totalModels: 0,
+			providers: [],
+			startupIssues: [],
+			foundryIssues: [],
+			missingFeatureFiles: [],
+			notificationsEnabled: false,
+			session: {
+				id: "session",
+				entries: 0,
+				branchEntries: 0,
+				contextEntries: 0,
+				messages: 0,
+			},
+		};
+		const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+		const report = buildDoctorReport(snapshot, {} as any, theme);
+		const counts = countReportIssues(report.items);
+
+		expect(counts.errors).toBe(5);
+		expect(counts.warnings).toBeGreaterThanOrEqual(3);
+		expect(report.lines.filter((line) => line.startsWith("× "))).toHaveLength(counts.errors);
+		expect(report.lines.filter((line) => line.startsWith("! "))).toHaveLength(counts.warnings);
+		expect(report.items).toContainEqual(expect.objectContaining({ status: "error", label: "0 discovered extension entries" }));
+		expect(report.items).toContainEqual(expect.objectContaining({ status: "warning", label: "Enabled model lacks configured auth provider/model" }));
+	} finally {
+		if (previousStats === undefined) delete root[statsKey];
+		else root[statsKey] = previousStats;
+	}
 });
