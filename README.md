@@ -1,3 +1,5 @@
+
+
 # pi-extensions
 
 A collection of [pi](https://github.com/earendil-works/pi-coding-agent) TUI
@@ -84,7 +86,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | [`cached-line-resets`](extensions/cached-line-resets/) | Caches pi's per-line ANSI reset application so rendering large transcript regions stays fast |
 | [`doctor`](extensions/doctor/) | Run diagnostics on your pi setup |
 | [`image-store`](extensions/image-store/) | Stores image payloads as deduplicated sidecars and renders transcript history lazily |
-| [`koliko`](extensions/koliko/) | Points to Koliko's separately maintained, privacy-preserving Pi usage collector |
+| [`koliko`](extensions/koliko/) | Points to Koliko's separately maintained, privacy-preserving Pi usage collector (documentation only; not loaded as an extension) |
 
 Each extension directory has its own `README.md` describing its behavior or, for external integrations, linking to the authoritative implementation.
 
