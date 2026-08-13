@@ -174,8 +174,9 @@ blocker) over a dim `└ summary` branch. Example settled blocks:
 
 Judge veto blocks keep the collapsed branch to one viewport-fitted line and show
 full denial details when expanded, matching native tool expansion behavior. Goal
-set/replaced/already-active blocks also expand to the full objective and
-validation text.
+set/replaced/already-active blocks use a head/tail objective preview plus criteria
+count and an expansion hint, then expand to the full objective and validation
+text.
 
 ## How it renders
 

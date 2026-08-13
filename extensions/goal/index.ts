@@ -681,6 +681,31 @@ function expandedResultLines(text: string, theme: any): string[] {
 	return cleaned.split("\n").map((line) => `    ${theme.fg("dim", line)}`);
 }
 
+function middlePreview(value: string | undefined, max = 180): string {
+	const collapsed = oneLinePreview(value);
+	if (!collapsed || visibleWidth(collapsed) <= max) return collapsed;
+	const tailChars = Math.max(32, Math.floor(max * 0.35));
+	const tail = collapsed.slice(-tailChars);
+	const head = truncateToWidth(collapsed, Math.max(1, max - visibleWidth(tail) - 1), "");
+	return `${head}…${tail}`;
+}
+
+function validationCountFromGoalSetText(text: string): number {
+	const validation = text.match(/^Validation:\n([\s\S]*)$/m)?.[1];
+	if (!validation) return 0;
+	return validation.split("\n").filter((line) => /^-\s+/.test(line)).length;
+}
+
+function goalSetBranch(objective: string | undefined, storedText: string, theme: any): string {
+	const count = validationCountFromGoalSetText(storedText);
+	const metadata = [
+		count > 0 ? `${count} ${pluralize(count, "criterion", "criteria")}` : undefined,
+		storedText.includes("\n") ? "expand for full details" : undefined,
+	].filter(Boolean).join(" · ");
+	const branch = [middlePreview(objective || storedText), metadata].filter(Boolean).join(" · ");
+	return theme.fg("dim", branch);
+}
+
 /** `Objective: <text>` line from a goal_complete result body. */
 function extractObjectiveLine(text: string | undefined): string | undefined {
 	const match = (text ?? "").match(/^Objective:\s*(.+)$/m);
@@ -850,7 +875,7 @@ function renderGoalSetResult(
 		if (details?.needsReplace) {
 			const lines = [
 				toolHeadline(false, false, "Goal already active", ""),
-				toolBranch(objective ? theme.fg("dim", objective) : ""),
+				toolBranch(goalSetBranch(objective, storedText, theme)),
 			];
 			if (expanded) lines.push(...expandedResultLines(storedText, theme));
 			return lines;
@@ -858,7 +883,7 @@ function renderGoalSetResult(
 		const verb = details?.replaced ? "Replaced goal" : "Set goal";
 		const lines = [
 			toolHeadline(false, false, verb, ""),
-			toolBranch(objective ? theme.fg("dim", objective) : ""),
+			toolBranch(goalSetBranch(objective, storedText, theme)),
 		];
 		if (expanded) lines.push(...expandedResultLines(storedText, theme));
 		return lines;
