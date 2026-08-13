@@ -166,11 +166,14 @@ blocker) over a dim `└ summary` branch. Example settled blocks:
   └ flaky CI on macOS · next: re-run after runner image bumped
 • Blocker recorded
   └ flaky CI on macOS · goal remains active · 1/3
-• Completion denied
+• Completion denied by judge
   └ tests were not run
-• Blocker rejected
+• Blocker rejected by judge
   └ inspect the available logs first
 ```
+
+Judge veto blocks keep the collapsed branch to one viewport-fitted line and show
+full denial details when expanded, matching native tool expansion behavior.
 
 ## How it renders
 

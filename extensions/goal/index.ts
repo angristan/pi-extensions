@@ -578,9 +578,9 @@ const TOOL_LEAD = "";
 const TOOL_BRANCH = `${TOOL_LEAD}  └ `;
 
 /** Compact one-line preview of a free-text field (blocker/summary/next input). */
-function oneLinePreview(value: string | undefined, max = 96): string {
+function oneLinePreview(value: string | undefined, max?: number): string {
 	const collapsed = (value ?? "").replace(/\s+/g, " ").trim();
-	return collapsed ? truncateToWidth(collapsed, max, "…") : "";
+	return collapsed && max !== undefined ? truncateToWidth(collapsed, max, "…") : collapsed;
 }
 
 /** `{bullet} {verb}{ detail}` headline row; bullet color encodes the outcome. */
@@ -615,9 +615,14 @@ class GoalToolLines implements Component {
 	render(width: number): string[] {
 		const max = Math.max(1, width);
 		if (this.cachedLines && this.cachedWidth === max) return this.cachedLines;
-		const lines = this.source().flatMap((line) =>
-			visibleWidth(line) <= max ? [line] : [fitToolLine(line, max)],
-		);
+		const lines = this.source().flatMap((line) => {
+			if (visibleWidth(line) <= max) return [line];
+			// Expanded detail rows should behave like native expanded tool output:
+			// show the content, wrapped to the viewport, instead of eagerly turning
+			// useful evidence into an ellipsis.
+			if (line.startsWith("    ")) return wrapTextWithAnsi(line, max);
+			return [fitToolLine(line, max)];
+		});
 		this.cachedLines = lines;
 		this.cachedWidth = max;
 		return lines;
@@ -670,6 +675,12 @@ function textFromResult(result: any): string {
 	return typeof result?.output === "string" ? result.output : "";
 }
 
+function expandedResultLines(text: string, theme: any): string[] {
+	const cleaned = text.replace(/\s+$/g, "");
+	if (!cleaned) return [];
+	return cleaned.split("\n").map((line) => `    ${theme.fg("dim", line)}`);
+}
+
 /** `Objective: <text>` line from a goal_complete result body. */
 function extractObjectiveLine(text: string | undefined): string | undefined {
 	const match = (text ?? "").match(/^Objective:\s*(.+)$/m);
@@ -711,7 +722,7 @@ function renderGoalCompleteCall(args: any, _theme: any, context: any): Component
 
 function renderGoalCompleteResult(
 	result: { details?: GoalToolResultDetails } | undefined,
-	{ isPartial }: GoalRenderOptions,
+	{ isPartial, expanded }: GoalRenderOptions,
 	theme: any,
 	context: any,
 ): Component {
@@ -724,10 +735,12 @@ function renderGoalCompleteResult(
 	component.update(() => {
 		if (result?.details?.judgeDenied || result?.details?.judgeError || result?.details?.ok === false) {
 			const judge = result?.details?.judge;
-			return [
-				toolHeadline(false, true, "Completion denied", ""),
-				toolBranch(theme.fg("dim", oneLinePreview(judge?.reason || textFromResult(result), 120))),
+			const lines = [
+				toolHeadline(false, true, "Completion denied by judge", ""),
+				toolBranch(theme.fg("dim", oneLinePreview(judge?.reason || storedText))),
 			];
+			if (expanded) lines.push(...expandedResultLines(storedText, theme));
+			return lines;
 		}
 		const lines = [
 			toolHeadline(false, false, "Completed goal", ""),
@@ -760,7 +773,7 @@ function renderGoalBlockCall(args: any, _theme: any, context: any): Component {
 
 function renderGoalBlockResult(
 	result: { details?: GoalToolResultDetails } | undefined,
-	{ isPartial }: GoalRenderOptions,
+	{ isPartial, expanded }: GoalRenderOptions,
 	theme: any,
 	context: any,
 ): Component {
@@ -775,10 +788,12 @@ function renderGoalBlockResult(
 	component.update(() => {
 		if (details?.judgeDenied) {
 			const judge = details.judge;
-			return [
-				toolHeadline(false, true, "Blocker rejected", ""),
-				toolBranch(theme.fg("dim", oneLinePreview(judge?.nextAction || judge?.reason || textFromResult(result), 120))),
+			const lines = [
+				toolHeadline(false, true, "Blocker rejected by judge", ""),
+				toolBranch(theme.fg("dim", oneLinePreview(judge?.nextAction || judge?.reason || storedText))),
 			];
+			if (expanded) lines.push(...expandedResultLines(storedText, theme));
+			return lines;
 		}
 		if (details?.blocked) {
 			const branch = [blockerText, nextInput ? `next: ${nextInput}` : ""].filter(Boolean).join(" · ");

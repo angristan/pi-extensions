@@ -505,7 +505,7 @@ test("goal_complete is vetoed when the judge says evidence is missing", async ()
 	expect(latestGoalState(h).status).toBe("active");
 	expect(judgeCalls).toHaveLength(1);
 	const block = h.tools.goal_complete.renderResult(result, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
-	expect(renderBlock(block)[0]).toContain("Completion denied");
+	expect(renderBlock(block)[0]).toContain("Completion denied by judge");
 });
 
 test("goal_block is vetoed at the threshold when the judge finds an action", async () => {
@@ -527,8 +527,32 @@ test("goal_block is vetoed at the threshold when the judge finds an action", asy
 	expect(latestGoalState(h).status).toBe("active");
 	expect(latestGoalState(h).blockedAudit).toBeUndefined();
 	const block = h.tools.goal_block.renderResult(result, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
-	expect(renderBlock(block)[0]).toContain("Blocker rejected");
+	expect(renderBlock(block)[0]).toContain("Blocker rejected by judge");
 	expect(renderBlock(block)[1]).toContain("Read the local log file");
+});
+
+test("judge veto rendering keeps useful text and expands full details", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("ship the feature", h.ctx);
+	const longReason = "The relevant validation output is missing even though the summary claimed success; inspect the exact command output before completing the goal.";
+	queueJudge("deny", {
+		reason: longReason,
+		missing_evidence: ["the exact validation command output", "the persisted artifact checksum"],
+		next_action: "Run the validation command and include its output.",
+	});
+
+	const result = await h.tools.goal_complete.execute("call", { summary: "done" }, undefined, undefined, h.ctx);
+	const collapsed = h.tools.goal_complete.renderResult(result, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
+	const collapsedLines = renderBlock(collapsed, 180);
+	expect(collapsedLines[0]).toContain("Completion denied by judge");
+	// No old 120-column hard cap: a wide viewport keeps the useful tail visible.
+	expect(collapsedLines[1]).toContain("before completing the goal");
+
+	const expanded = h.tools.goal_complete.renderResult(result, { isPartial: false, expanded: true }, h.ctx.ui.theme, { lastComponent: undefined });
+	const expandedText = renderBlock(expanded, 80).join("\n");
+	expect(expandedText).toContain("Missing evidence:");
+	expect(expandedText).toContain("the exact validation command output");
+	expect(expandedText).toContain("Next action: Run the validation command");
 });
 
 test("anti-spin uses judge guidance before blocking", async () => {
