@@ -837,7 +837,7 @@ function renderGoalSetCall(args: any, _theme: any, context: any): Component {
 
 function renderGoalSetResult(
 	result: { details?: GoalToolResultDetails } | undefined,
-	{ isPartial }: GoalRenderOptions,
+	{ isPartial, expanded }: GoalRenderOptions,
 	theme: any,
 	context: any,
 ): Component {
@@ -848,16 +848,20 @@ function renderGoalSetResult(
 	const objective = extractObjectiveLine(storedText);
 	component.update(() => {
 		if (details?.needsReplace) {
-			return [
+			const lines = [
 				toolHeadline(false, false, "Goal already active", ""),
 				toolBranch(objective ? theme.fg("dim", objective) : ""),
 			];
+			if (expanded) lines.push(...expandedResultLines(storedText, theme));
+			return lines;
 		}
 		const verb = details?.replaced ? "Replaced goal" : "Set goal";
-		return [
+		const lines = [
 			toolHeadline(false, false, verb, ""),
 			toolBranch(objective ? theme.fg("dim", objective) : ""),
 		];
+		if (expanded) lines.push(...expandedResultLines(storedText, theme));
+		return lines;
 	});
 	return component;
 }

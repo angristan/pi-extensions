@@ -785,3 +785,25 @@ test("goal_set renders set, replaced, and needsReplace blocks", async () => {
 	expect(lines[0]).toContain("Replaced goal");
 	expect(lines[1]).toContain("replacement");
 });
+
+test("goal_set replacement expands full objective and validation", async () => {
+	const h = makeHarness();
+	await h.tools.goal_set.execute("call", { objective: "initial goal" }, undefined, undefined, h.ctx);
+	const longObjective = "replace the current session goal with a deliberately long objective whose useful suffix should remain visible on wide terminals and available in expanded details";
+	const result = await h.tools.goal_set.execute("call", {
+		objective: longObjective,
+		validation: ["expanded validation criterion stays visible"],
+		replace: true,
+	}, undefined, undefined, h.ctx);
+
+	const collapsed = h.tools.goal_set.renderResult(result, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
+	const collapsedLines = renderBlock(collapsed, 220);
+	expect(collapsedLines[0]).toContain("Replaced goal");
+	expect(collapsedLines[1]).toContain("expanded details");
+
+	const expanded = h.tools.goal_set.renderResult(result, { isPartial: false, expanded: true }, h.ctx.ui.theme, { lastComponent: undefined });
+	const expandedText = renderBlock(expanded, 72).join("\n");
+	expect(expandedText).toContain("Objective:");
+	expect(expandedText).toContain("available in expanded details");
+	expect(expandedText).toContain("expanded validation criterion stays visible");
+});
