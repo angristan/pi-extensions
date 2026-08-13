@@ -275,7 +275,10 @@ function actionAgentName(action: unknown, args?: Record<string, unknown>, detail
 function actionVerb(action: unknown, partial: boolean, theme: any, args?: Record<string, unknown>, details?: ToolDetails): string {
 	const name = actionAgentName(action, args, details);
 	const identity = name ? theme.fg("mdHeading", name) : "";
-	if (action === "spawn") return `${partial ? "Spawning" : "Spawned"} agent${identity ? ` ${identity}` : ""}`;
+	if (action === "spawn") {
+		const contextMode = String(args?.context ?? details?.agents?.[0]?.contextMode ?? "fresh");
+		return `${partial ? "Spawning" : "Spawned"} agent${identity ? ` ${identity}` : ""} with ${theme.fg("muted", `${contextMode} context`)}`;
+	}
 	if (action === "send" || action === "followup") return `${partial ? "Sending" : "Sent"} follow-up${identity ? ` to ${identity}` : ""}`;
 	if (action === "message") return `${partial ? "Queueing" : "Queued"} message${identity ? ` for ${identity}` : ""}`;
 	if (action === "wait") {
@@ -324,10 +327,20 @@ function reasoningDetail(args: Record<string, unknown> | undefined, theme: any, 
 
 function agentSummary(agent: AgentSnapshot, theme: any, includeIdentity = true): string {
 	const mark = theme.fg(statusColor(agent.status), statusSymbol(agent.status));
-	const metadata = `${theme.fg("muted", `${agent.contextMode} context`)} · ${theme.fg(statusColor(agent.status), agent.status)}`;
-	if (!includeIdentity) return `${mark} ${metadata}`;
+	if (!includeIdentity) return mark;
 	const identity = theme.fg("text", theme.bold(agent.name ?? "unnamed agent"));
-	return `${mark} ${identity} · ${metadata}`;
+	return `${mark} ${identity}`;
+}
+
+function agentStatusSummary(agents: AgentSnapshot[]): string {
+	const counts = new Map<AgentSnapshot["status"], number>();
+	for (const agent of agents) counts.set(agent.status, (counts.get(agent.status) ?? 0) + 1);
+	return (["running", "starting", "completed", "paused", "failed", "interrupted"] as const)
+		.flatMap((status) => {
+			const count = counts.get(status) ?? 0;
+			return count > 0 ? [`${count} ${status}`] : [];
+		})
+		.join(" · ");
 }
 
 type DetailLabel = "prompt" | "message" | "result" | "usage" | "error";
@@ -338,15 +351,19 @@ function detailPrefix(label: DetailLabel, theme: any, indent = TOOL_INDENT, fail
 		: label === "message"
 			? "accent"
 			: label === "result"
-				? (failed ? "error" : "success")
+				? (failed ? "error" : "toolTitle")
 				: label === "error"
 					? "error"
 					: "muted";
-	return `${indent}${theme.fg(labelColor, label.padEnd(6))}  `;
+	const displayLabel = label === "prompt" ? "Task" : `${label[0]?.toUpperCase()}${label.slice(1)}`;
+	return `${indent}${theme.fg(labelColor, displayLabel.padEnd(6))}  `;
 }
 
 function detailContentColor(label: DetailLabel): string {
-	return label === "prompt" || label === "usage" ? "dim" : label === "error" ? "error" : "text";
+	if (label === "prompt") return "muted";
+	if (label === "usage") return "dim";
+	if (label === "error") return "error";
+	return "toolOutput";
 }
 
 function detailLine(
@@ -376,38 +393,27 @@ function expandedDetailLines(label: DetailLabel, content: string, width: number,
 	return rows.map((line, index) => `${index === 0 ? prefix : continuation}${theme.fg(detailContentColor(label), line)}`);
 }
 
-function collapsedResultLines(agent: AgentSnapshot, width: number, theme: any): string[] {
-	if (!agent.output) return [];
-	const prefix = detailPrefix("result", theme, TOOL_INDENT, agent.status === "failed");
-	const contentWidth = Math.max(1, width - visibleWidth(prefix));
-	const continuation = " ".repeat(visibleWidth(prefix));
-	const rows = sanitizeTerminal(agent.output)
-		.replace(/\r\n?/g, "\n")
-		.replace(/\s+$/, "")
-		.split("\n")
-		.flatMap((line) => {
-			const wrapped = wrapTextWithAnsi(line, contentWidth);
-			return wrapped.length > 0 ? wrapped : [""];
-		});
-	const overflow = rows.length > COLLAPSED_RESULT_ROWS;
-	const visibleRows = overflow ? rows.slice(-(COLLAPSED_RESULT_ROWS - 1)) : rows;
-	const outputRows = visibleRows.map((content) => ({ content, color: "text" as const }));
-	const rendered = overflow
-		? [{
-			content: `… +${rows.length - visibleRows.length} earlier lines (Ctrl+O for full output)`,
-			color: "dim" as const,
-		}, ...outputRows]
-		: outputRows;
-	return rendered.map((row, index) => `${index === 0 ? prefix : continuation}${theme.fg(row.color, row.content)}`);
+interface ResultBlock {
+	lines: string[];
+	hiddenRows: number;
 }
 
-function expandedResultLines(agent: AgentSnapshot, width: number, theme: any): string[] {
-	if (!agent.output) return [];
-	const prefix = detailPrefix("result", theme, TOOL_INDENT, agent.status === "failed");
-	const contentWidth = Math.max(1, width - visibleWidth(prefix));
-	const rendered = new Markdown(agent.output, 0, 0, getMarkdownTheme()).render(contentWidth);
-	const continuation = " ".repeat(visibleWidth(prefix));
-	return rendered.map((line, index) => `${index === 0 ? prefix : continuation}${line}`);
+function resultBlockLines(agent: AgentSnapshot, width: number, theme: any, expanded: boolean): ResultBlock {
+	if (!agent.output) return { lines: [], hiddenRows: 0 };
+	const contentWidth = Math.max(1, width - visibleWidth(TOOL_INDENT));
+	const output = sanitizeTerminal(agent.output).replace(/\r\n?/g, "\n").replace(/\s+$/, "");
+	const rendered = new Markdown(output, 0, 0, getMarkdownTheme())
+		.render(contentWidth)
+		.map((line) => line.replace(/[ \t]+((?:\x1b\[[0-9;]*m)*)$/, "$1"));
+	const hiddenRows = expanded ? 0 : Math.max(0, rendered.length - COLLAPSED_RESULT_ROWS);
+	const visibleRows = hiddenRows > 0 ? rendered.slice(-COLLAPSED_RESULT_ROWS) : rendered;
+	return {
+		lines: [
+			`${TOOL_INDENT}${theme.fg("toolTitle", theme.bold("Result"))}`,
+			...visibleRows.map((line) => `${TOOL_INDENT}${theme.fg("toolOutput", line)}`),
+		],
+		hiddenRows,
+	};
 }
 
 function isSettled(agent: AgentSnapshot): boolean {
@@ -418,23 +424,31 @@ function agentBodyLines(
 	agent: AgentSnapshot,
 	width: number,
 	theme: any,
-	options: { prompt?: string; promptLabel?: "prompt" | "message"; showResult?: boolean; showUsage?: boolean; expanded?: boolean; includeIdentity?: boolean } = {},
+	options: { prompt?: string; promptLabel?: "prompt" | "message"; showResult?: boolean; showUsage?: boolean; expanded?: boolean; showSummary?: boolean; includeIdentity?: boolean } = {},
 ): string[] {
-	const lines = [`${theme.fg("dim", TOOL_BRANCH)}${agentSummary(agent, theme, options.includeIdentity ?? true)}`];
+	const lines = options.showSummary === false ? [] : [`  ${agentSummary(agent, theme, options.includeIdentity ?? true)}`];
 	if (options.prompt) {
 		const label = options.promptLabel ?? "prompt";
 		lines.push(...(options.expanded
 			? expandedDetailLines(label, options.prompt, width, theme)
 			: [detailLine(label, compact(options.prompt, 240), width, theme)]));
 	}
+	let hiddenResultRows = 0;
 	if (options.showResult && agent.output) {
-		lines.push(...(options.expanded
-			? expandedResultLines(agent, width, theme)
-			: collapsedResultLines(agent, width, theme)));
+		const result = resultBlockLines(agent, width, theme, Boolean(options.expanded));
+		lines.push("", ...result.lines);
+		hiddenResultRows = result.hiddenRows;
 	}
-	if (options.showResult && agent.error) lines.push(detailLine("error", compact(agent.error, 240), width, theme));
+	if (options.showResult && agent.error) {
+		if (!agent.output) lines.push("");
+		lines.push(detailLine("error", compact(agent.error, 240), width, theme));
+	}
 	const usage = options.showUsage ? usageText(agent) : "";
-	if (usage) lines.push(detailLine("usage", usage, width, theme));
+	if (usage) lines.push("", `${TOOL_INDENT}${theme.fg("dim", usage)}`);
+	if (hiddenResultRows > 0) {
+		const noun = hiddenResultRows === 1 ? "line" : "lines";
+		lines.push(`${TOOL_INDENT}${theme.fg("dim", `Ctrl+O for full result · ${hiddenResultRows} earlier ${noun} hidden`)}`);
+	}
 	return lines;
 }
 
@@ -505,13 +519,14 @@ export function renderAgentResult(result: any, options: ToolRenderOptions, theme
 					? String(args?.message ?? "")
 					: agent.task;
 			const showsCompletion = (action === "wait" || action === "list" || action === "read") && completed;
+			if (showsCompletion || visibleAgents.length > 1) lines.push("");
 			lines.push(...agentBodyLines(agent, width, theme, {
 				prompt,
 				promptLabel: isMessageAction ? "message" : "prompt",
 				showResult: showsCompletion,
 				showUsage: showsCompletion,
 				expanded: Boolean(options?.expanded),
-				includeIdentity: !headlineIdentifiesAgent,
+				showSummary: !headlineIdentifiesAgent,
 			}));
 		}
 		return lines;
@@ -530,6 +545,7 @@ class CompletionComponent implements Component {
 				"",
 				agent.status === "paused",
 			),
+			"",
 			...agentBodyLines(agent, width, theme, {
 				prompt: agent.task,
 				showResult: true,
@@ -558,7 +574,9 @@ class MailboxBatchComponent implements Component {
 	private readonly component: AgentToolLines;
 	constructor(details: ToolDetails, expanded: boolean, theme: any) {
 		this.component = new AgentToolLines((width) => {
-			const lines = [toolHeadline(false, false, "Agent mailbox", "")];
+			const statusSummary = agentStatusSummary(details.agents);
+			const headlineDetail = statusSummary ? `· ${theme.fg("muted", statusSummary)}` : "";
+			const lines = [toolHeadline(false, false, "Agent mailbox", headlineDetail)];
 			for (const event of details.mailbox?.filter((candidate) => candidate.kind === "message") ?? []) {
 				lines.push(...mailboxEventLines(event, width, theme));
 			}
@@ -566,6 +584,7 @@ class MailboxBatchComponent implements Component {
 				lines.push(`${TOOL_BRANCH}${theme.fg("muted", `${event.agentName} · ${event.omittedBefore} earlier updates omitted`)}`);
 			}
 			for (const agent of details.agents) {
+				lines.push("");
 				lines.push(...agentBodyLines(agent, width, theme, {
 					prompt: agent.task,
 					showResult: true,
