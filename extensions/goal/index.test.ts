@@ -599,15 +599,19 @@ test("goal_complete allows a final response, renders one compact block, and hide
 	expect(result.details.completion.activeTimeMs).toBeGreaterThanOrEqual(0);
 	expect(result.details.completion.validationCount).toBe(0);
 	expect(result.details.completion.tokens).toEqual({ inputTokens: 41, outputTokens: 43, cacheReadTokens: 47, cacheWriteTokens: 53 });
-	const block = h.tools.goal_complete.renderResult(result, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
+	const colorTheme = { bold: (text: string) => text, fg: (color: string, text: string) => `<${color}>${text}</${color}>` };
+	const block = h.tools.goal_complete.renderResult(result, { isPartial: false }, colorTheme, { lastComponent: undefined });
 	const lines = renderBlock(block);
 	expect(lines[0]).toContain("Completed goal");
 	expect(lines[1]).toContain("└");
-	// The branch shows the summary (preferred) or the objective.
-	expect(lines[1]).toContain("shipped the fix");
-	// The completion block surfaces lifetime stats since the overlay card hid.
+	// The branch shows the summary (preferred) or the objective in normal text,
+	// not dimmed like low-priority metadata.
+	expect(lines[1]).toContain("<text>shipped the fix</text>");
+	// The completion block surfaces lifetime stats since the overlay card hid,
+	// but only the stats line is muted.
 	expect(lines.length).toBeGreaterThanOrEqual(3);
 	expect(lines[2]).toContain("└");
+	expect(lines[2]).toContain("<muted>");
 	expect(lines[2]).toMatch(/active.*cycle.*0 criteria/i);
 
 	// A stale call against no active goal renders nothing.

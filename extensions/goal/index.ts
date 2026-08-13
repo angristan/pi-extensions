@@ -494,7 +494,7 @@ function formatCompletionStats(stats: GoalCompletionStats, theme: any): string {
 	parts.push(`${stats.validationCount} ${pluralize(stats.validationCount, "criterion", "criteria")}`);
 	const usageGroups = goalUsageGroups(stats.tokens);
 	if (usageGroups.length > 0) parts.push(`Usage ${usageGroups.join(" · ")}`);
-	return theme.fg("dim", parts.join(" · "));
+	return theme.fg("muted", parts.join(" · "));
 }
 
 function fullGoalLines(state: GoalDisplayState, theme: any): string[] {
@@ -772,7 +772,7 @@ function renderGoalCompleteResult(
 		}
 		const lines = [
 			toolHeadline(false, false, "Completed goal", ""),
-			toolBranch(branch ? theme.fg("dim", branch) : ""),
+			toolBranch(branch ? theme.fg("text", branch) : ""),
 		];
 		// The overlay card hides on completion, so the completion block carries
 		// the final stats (active time, cycles, criteria, and usage) as the
