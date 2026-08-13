@@ -37,6 +37,18 @@ export interface TitleModelResponse {
 	title?: string;
 }
 
+function piClipboardImagePathPattern(): RegExp {
+	return /(?:file:\/\/)?[^\s"'`<>]*pi-clipboard-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:png|jpe?g|gif|webp|bmp)\b/gi;
+}
+
+export function containsEphemeralTitlePath(value: string): boolean {
+	return piClipboardImagePathPattern().test(value);
+}
+
+export function redactEphemeralTitlePaths(value: string): string {
+	return value.replace(piClipboardImagePathPattern(), "[clipboard image]");
+}
+
 function oneLine(value: string): string {
 	return value.replace(/\s+/g, " ").trim();
 }
@@ -53,14 +65,17 @@ function clip(value: string | undefined, maxChars: number): string | undefined {
 }
 
 export function messageText(message: any): string | undefined {
-	if (typeof message?.content === "string") return message.content.trim() || undefined;
+	if (typeof message?.content === "string") {
+		const text = message.content.trim();
+		return text ? redactEphemeralTitlePaths(text) : undefined;
+	}
 	if (!Array.isArray(message?.content)) return undefined;
 	const text = message.content
 		.filter((part: any) => part?.type === "text" && typeof part.text === "string")
 		.map((part: any) => part.text)
 		.join("\n")
 		.trim();
-	return text || undefined;
+	return text ? redactEphemeralTitlePaths(text) : undefined;
 }
 
 function stateFromEntry(entry: any): TitleState | undefined {
@@ -72,8 +87,8 @@ function stateFromEntry(entry: any): TitleState | undefined {
 		|| typeof data.focusSummary !== "string"
 		|| typeof data.title !== "string"
 	) return undefined;
-	const turnSummary = clip(data.turnSummary, MAX_TURN_SUMMARY_CHARS);
-	const focusSummary = clip(data.focusSummary, MAX_FOCUS_SUMMARY_CHARS);
+	const turnSummary = clip(redactEphemeralTitlePaths(data.turnSummary), MAX_TURN_SUMMARY_CHARS);
+	const focusSummary = clip(redactEphemeralTitlePaths(data.focusSummary), MAX_FOCUS_SUMMARY_CHARS);
 	const title = oneLine(data.title);
 	if (!turnSummary || !focusSummary || !title) return undefined;
 	return {
@@ -183,7 +198,7 @@ export function titleContextHasContent(context: TitleContext): boolean {
 export function buildTitlePrompt(project: string, previousTitle: string | undefined, context: TitleContext): string {
 	const prompt = JSON.stringify({
 		project: clip(project, 200),
-		previous_session_title: clip(previousTitle, 72) ?? null,
+		previous_session_title: previousTitle ? clip(redactEphemeralTitlePaths(previousTitle), 72) ?? null : null,
 		session_anchor: context.sessionAnchor ?? null,
 		previous_focus: context.previousFocus ?? null,
 		recent_turn_summaries: context.recentTurnSummaries,

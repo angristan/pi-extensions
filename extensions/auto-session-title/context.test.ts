@@ -13,6 +13,7 @@ import {
 	MAX_TITLE_CONTEXT_CHARS,
 	MAX_TURN_SUMMARY_CHARS,
 	parseTitleModelResponse,
+	redactEphemeralTitlePaths,
 	TITLE_STATE_TYPE,
 	titleStates,
 } from "./context";
@@ -89,6 +90,19 @@ describe("auto-session-title context", () => {
 		expect(context.currentAssistantOutcome).toBeUndefined();
 		expect(context.recentTurnSummaries).toEqual([]);
 		expect(context.bootstrapPriorTurns).toEqual([]);
+	});
+
+	test("redacts Pi clipboard temp paths from title context", () => {
+		const path = "/var/folders/sp/fywhcyx14lq17414yv54gyqh0000gn/T/pi-clipboard-1a6dda4b-2944-4d05-9635-7b7194354361.png";
+		expect(redactEphemeralTitlePaths(`inspect ${path}`)).toBe("inspect [clipboard image]");
+
+		const context = buildTitleContext([
+			{ type: "message", message: { role: "user", content: [{ type: "text", text: `what is this ${path}` }] } },
+			{ type: "message", message: { role: "assistant", content: `Read ${path} and explained the screenshot.` } },
+		]);
+		expect(context.currentUserRequest).toBe("what is this [clipboard image]");
+		expect(context.currentAssistantOutcome).toBe("Read [clipboard image] and explained the screenshot.");
+		expect(buildTitlePrompt("project", path, context)).not.toContain("pi-clipboard-");
 	});
 
 	test("bootstraps legacy sessions from the latest three completed turns", () => {

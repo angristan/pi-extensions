@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadTitleModelConfig, TITLE_SYSTEM_PROMPT, titleModelConfigPath } from "./index";
+import { loadTitleModelConfig, normalizeTitle, TITLE_SYSTEM_PROMPT, titleModelConfigPath } from "./index";
 import { requestTitleCompletion } from "./request";
 
 describe("auto-session-title model requests", () => {
@@ -11,6 +11,15 @@ describe("auto-session-title model requests", () => {
 		expect(TITLE_SYSTEM_PROMPT).toContain("title that complete durable focus at the same scope");
 		expect(TITLE_SYSTEM_PROMPT).toContain("Never preserve it when it names only a component of focus_summary");
 		expect(TITLE_SYSTEM_PROMPT).toContain('A session building Meridian Sync remains "Meridian Sync" while discussing its revision DAG, RPC layer, and notification WebSockets');
+	});
+
+	test("rejects generated filesystem path titles", () => {
+		const path = "/var/folders/sp/fywhcyx14lq17414yv54gyqh0000gn/T/pi-clipboard-1a6dda4b-2944-4d05-9635-7b7194354361.png";
+		expect(normalizeTitle(path)).toBeUndefined();
+		expect(normalizeTitle(`Screenshot ${path}`)).toBeUndefined();
+		expect(normalizeTitle("~/Desktop/screenshot.png")).toBeUndefined();
+		expect(normalizeTitle("src/session-title.ts")).toBeUndefined();
+		expect(normalizeTitle("Pi Tab Title")).toBe("Pi Tab Title");
 	});
 
 	test("reads model config from the configured Pi agent directory", () => {

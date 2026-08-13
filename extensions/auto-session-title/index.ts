@@ -5,6 +5,7 @@ import { basename, join } from "node:path";
 import {
 	buildTitleContext,
 	buildTitlePrompt,
+	containsEphemeralTitlePath,
 	createTitleState,
 	latestTitleState,
 	parseTitleModelResponse,
@@ -117,15 +118,31 @@ Examples:
 - A broad request that becomes sustained work on an independent Pi footer deliverable can become "Compact Pi Footer".
 - Previous "API Auth Refactor" plus one unrelated shell question remains "API Auth Refactor".`;
 
-function normalizeTitle(raw: string): string | undefined {
-	let title = raw
-		.split(/\r?\n/, 1)[0]
+function stripTitleControls(value: string): string {
+	return value
+		.replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, "")
+		.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+		.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]+/g, " ");
+}
+
+function looksLikeGeneratedPathTitle(title: string): boolean {
+	const trimmed = title.trim();
+	if (containsEphemeralTitlePath(trimmed)) return true;
+	if (/^(?:file:\/\/|~\/|\/|[A-Za-z]:[\\/]|\\\\)/.test(trimmed)) return true;
+	return !/\s/.test(trimmed)
+		&& /[\\/]/.test(trimmed)
+		&& /\.(?:png|jpe?g|gif|webp|bmp|pdf|txt|md|json|ya?ml|toml|ts|tsx|js|jsx|go|py|rs|java|kt|swift|c|cc|cpp|h|hpp|sh|zsh|fish|html|css|csv|parquet|warc|mcdx)$/i.test(trimmed);
+}
+
+export function normalizeTitle(raw: string): string | undefined {
+	let title = stripTitleControls(raw.split(/\r?\n/, 1)[0] ?? "")
 		.replace(/^\s*(?:session\s+)?title\s*:\s*/i, "")
 		.replace(/^[\s"'`*_#]+|[\s"'`*_#]+$/g, "")
 		.replace(/\s+/g, " ")
 		.trim()
 		.replace(/[.!?,;:]+$/g, "");
 	if (!title || /^(?:untitled|new session|session)$/i.test(title)) return undefined;
+	if (looksLikeGeneratedPathTitle(title)) return undefined;
 
 	const words = title.split(" ").filter(Boolean).slice(0, MAX_TITLE_WORDS);
 	title = words.join(" ");

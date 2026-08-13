@@ -17,7 +17,9 @@ after:   Compact Pi Footer
 ## Context and persistence
 
 The title request never receives reasoning, tool calls, tool results, logs, or
-raw diffs. Its 8,000-character context budget contains:
+raw diffs. Pi clipboard image temp paths are redacted before title generation,
+and generated filesystem-path titles are ignored. Its 8,000-character context
+budget contains:
 
 - current user request: up to 2,000 characters
 - final assistant outcome: up to 2,000 characters
