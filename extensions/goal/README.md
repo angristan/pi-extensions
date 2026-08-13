@@ -33,6 +33,12 @@ stored session history gets the small marker, not the full objective-bearing
 prompt. The continuation re-orients the agent around the objective and asks for
 a requirement-by-requirement completion audit before completion.
 
+A conservative read-only judge runs only at terminal boundaries: proposed
+`goal_complete`, the final repeated `goal_block` report, and anti-spin blocking
+after repeated no-tool continuations. It can veto premature completion or lazy
+blocking and feed a next action into the transient continuation prompt. It does
+not drive normal cycles.
+
 ```
 /goal set <objective>
         │
@@ -70,11 +76,13 @@ a requirement-by-requirement completion audit before completion.
   retry-looping. Usage/rate/quota errors get a specific resume hint.
 - **Completion status** — the model marks the goal complete by calling
   `goal_complete` when current evidence proves every requirement is satisfied
-  and no required work remains.
+  and no required work remains. A judge veto keeps the goal active and reports
+  missing evidence or a next action.
 - **Blocked audit** — `goal_block` records blockers while leaving the goal
   active until the same blocker has recurred across three settled agent runs.
   At most one report counts per run, including runs with a final tool-less turn.
-  Resuming a blocked goal starts a fresh audit.
+  At the terminal threshold, a judge can reject the block if actionable work
+  remains. Resuming a blocked goal starts a fresh audit.
 
 ## Commands
 
@@ -117,9 +125,10 @@ All sections except `# Goal` are optional.
   overwrite an active/paused/blocked goal and asks the caller to re-call with
   `replace: true`, so an in-progress goal cannot be silently redefined around
   an easier task.
-- **`goal_complete`** — introduced when a `/goal` first becomes active; marks the
-  goal complete and accepts an optional `summary`. It remains non-terminating so
-  Pi performs the follow-up model turn that delivers the final report. The
+- **`goal_complete`** — introduced when a `/goal` first becomes active; asks the
+  judge to audit current evidence, then marks the goal complete only if the
+  judge allows it. It accepts an optional `summary`. It remains non-terminating
+  so Pi performs the follow-up model turn that delivers the final report. The
   completion block also shows the goal's lifetime stats (active time, cycles,
   criteria, and token usage), since the overlay card hides once the goal is
   complete. Manual `/goal complete` surfaces the same stats once via a
@@ -128,8 +137,8 @@ All sections except `# Goal` are optional.
   blocker and terminates the current agent run so the next report belongs to a
   fresh settled run. Optional fields can describe the blocker, attempted work,
   supporting detail, and next input; marks the goal `blocked` only after the same
-  blocker repeats across three settled agent runs. Multiple reports in one run
-  count once.
+  blocker repeats across three settled agent runs and the judge accepts the
+  terminal block. Multiple reports in one run count once.
 
 `goal_set` is always registered. `goal_complete` and `goal_block` start inactive,
 are added when the first goal becomes active, and remain in the active loadout for
@@ -157,6 +166,10 @@ blocker) over a dim `└ summary` branch. Example settled blocks:
   └ flaky CI on macOS · next: re-run after runner image bumped
 • Blocker recorded
   └ flaky CI on macOS · goal remains active · 1/3
+• Completion denied
+  └ tests were not run
+• Blocker rejected
+  └ inspect the available logs first
 ```
 
 ## How it renders
@@ -186,6 +199,6 @@ Status colors: `● active` (green), `● paused` (yellow), `● blocked` (red),
 
 ## Dependencies
 
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API and bundled `@earendil-works/pi-ai` compatibility completion helper.
 - **Depends on extensions:** None.
 - **Used by extensions:** None.

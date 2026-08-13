@@ -47,9 +47,28 @@ mock.module("typebox", () => ({
 	},
 }));
 
+const judgeResponses: any[] = [];
+const judgeCalls: any[] = [];
+const mockedComplete = mock(async (...args: any[]) => {
+	judgeCalls.push(args);
+	const next = judgeResponses.length ? judgeResponses.shift() : undefined;
+	if (next instanceof Error) throw next;
+	return next ?? {
+		stopReason: "stop",
+		content: [{ type: "text", text: '{"verdict":"allow","reason":"evidence is sufficient","missing_evidence":[],"next_action":""}' }],
+		usage: { input: 5, output: 7 },
+	};
+});
+mock.module("@earendil-works/pi-ai/compat", () => ({
+	complete: mockedComplete,
+	completeSimple: mockedComplete,
+}));
+
 const { buildGoalContext, renderGoalOverlayBody, default: goalExtension } = await import("./index");
 
 function makeHarness() {
+	judgeResponses.length = 0;
+	judgeCalls.length = 0;
 	const handlers: Record<string, Array<(event: any, ctx: any) => any>> = {};
 	const commands: Record<string, any> = {};
 	const tools: Record<string, any> = {};
@@ -67,10 +86,16 @@ function makeHarness() {
 		hasUI: true,
 		isIdle: () => true,
 		hasPendingMessages: () => false,
+		model: { provider: "test", id: "judge-model", name: "Judge model", contextWindow: 128_000 },
+		modelRegistry: {
+			getApiKeyAndHeaders: () => Promise.resolve({ ok: true, apiKey: "test-key", headers: {}, env: {} }),
+		},
+		getSystemPrompt: () => "System prompt for tests.",
 		sessionManager: {
 			getBranch: () => { branchReadCount += 1; return entries; },
 			getEntries: () => entries,
 			getLeafId: () => entries.length ? String(entries.length) : null,
+			getSessionId: () => "test-session",
 		},
 		ui: {
 			notify(message: string, type?: string) { notifications.push({ message, type }); },
@@ -137,6 +162,14 @@ function isContinuation(message: any) {
 
 function sentMessages(harness: ReturnType<typeof makeHarness>, customType: string) {
 	return harness.sent.filter(({ message }) => message?.customType === customType);
+}
+
+function queueJudge(verdict: "allow" | "deny", fields: Record<string, unknown> = {}) {
+	judgeResponses.push({
+		stopReason: "stop",
+		content: [{ type: "text", text: JSON.stringify({ verdict, reason: verdict === "allow" ? "ok" : "not proven", missing_evidence: [], next_action: "", ...fields }) }],
+		usage: { input: 11, output: 13 },
+	});
 }
 
 test("reserves goal_set for long-running autonomous work", () => {
@@ -453,6 +486,72 @@ test("terminal provider errors block the active goal instead of continuing", asy
 	expect(state.blockedAudit.evidence).toBe("429 too many requests");
 	expect(sentMessages(h, "goal-context")).toHaveLength(contextsBeforeError);
 	expect(sentMessages(h, "goal-continuation")).toHaveLength(continuationsBeforeError);
+});
+
+test("goal_complete is vetoed when the judge says evidence is missing", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("ship the feature", h.ctx);
+	queueJudge("deny", {
+		reason: "Tests were not run.",
+		missing_evidence: ["test output"],
+		next_action: "Run the relevant test suite.",
+	});
+
+	const result = await h.tools.goal_complete.execute("call", { summary: "done" }, undefined, undefined, h.ctx);
+
+	expect(result.details).toMatchObject({ ok: false, judgeDenied: true });
+	expect(result.content[0].text).toContain("Tests were not run");
+	expect(result.content[0].text).toContain("Run the relevant test suite");
+	expect(latestGoalState(h).status).toBe("active");
+	expect(judgeCalls).toHaveLength(1);
+	const block = h.tools.goal_complete.renderResult(result, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
+	expect(renderBlock(block)[0]).toContain("Completion denied");
+});
+
+test("goal_block is vetoed at the threshold when the judge finds an action", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("reduce p95 latency below 120ms", h.ctx);
+
+	for (let run = 1; run <= 2; run++) {
+		await emit(h, "turn_start", { turnIndex: 0, timestamp: 0 });
+		await h.tools.goal_block.execute(`call-${run}`, { blocker: "needs logs" }, undefined, undefined, h.ctx);
+		await emit(h, "turn_end", { turnIndex: 0, toolResults: [{ toolName: "goal_block" }] });
+		await emit(h, "agent_settled");
+	}
+	queueJudge("deny", { reason: "Logs can still be inspected.", next_action: "Read the local log file." });
+	await emit(h, "turn_start", { turnIndex: 0, timestamp: 0 });
+	const result = await h.tools.goal_block.execute("call-3", { blocker: "needs logs" }, undefined, undefined, h.ctx);
+
+	expect(result.terminate).toBeUndefined();
+	expect(result.details).toMatchObject({ ok: false, blocked: false, judgeDenied: true });
+	expect(latestGoalState(h).status).toBe("active");
+	expect(latestGoalState(h).blockedAudit).toBeUndefined();
+	const block = h.tools.goal_block.renderResult(result, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
+	expect(renderBlock(block)[0]).toContain("Blocker rejected");
+	expect(renderBlock(block)[1]).toContain("Read the local log file");
+});
+
+test("anti-spin uses judge guidance before blocking", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("ship the feature", h.ctx);
+	queueJudge("deny", { reason: "A file inspection is still available.", next_action: "Read package.json." });
+
+	for (let run = 0; run < 3; run++) {
+		await emit(h, "turn_start", { turnIndex: run, timestamp: 0 });
+		await emit(h, "turn_end", { turnIndex: run, toolResults: [] });
+		await emit(h, "agent_settled");
+	}
+
+	const state = latestGoalState(h);
+	expect(state.status).toBe("active");
+	expect(state.blockedAudit).toBeUndefined();
+	expect(h.notifications.at(-1)!.message).toContain("actionable next step");
+	const continuation = sentMessages(h, "goal-continuation").at(-1)!;
+	expect(continuation.message.content).toBe("Goal continuation requested.");
+	await emit(h, "turn_start", { turnIndex: 99, timestamp: 0 });
+	const result = await context(h, [continuation.message]);
+	expect(result.messages[0].content).toContain("Goal judge guidance after a no-tool loop");
+	expect(result.messages[0].content).toContain("Read package.json");
 });
 
 // Render the lines a tool block component produces. The harness mocks the
