@@ -698,10 +698,13 @@ function validationCountFromGoalSetText(text: string): number {
 
 function goalSetBranch(objective: string | undefined, storedText: string, theme: any): string {
 	const count = validationCountFromGoalSetText(storedText);
+	// Keep this as one final metadata group. fitToolLine preserves text after the
+	// last ` · ` separator, so multiple separators here would let viewport fitting
+	// drop the criteria count or expansion hint from narrow terminals.
 	const metadata = [
 		count > 0 ? `${count} ${pluralize(count, "criterion", "criteria")}` : undefined,
-		storedText.includes("\n") ? "expand for full details" : undefined,
-	].filter(Boolean).join(" · ");
+		storedText.includes("\n") ? "Ctrl+O for full details" : undefined,
+	].filter(Boolean).join(", ");
 	const branch = [middlePreview(objective || storedText), metadata].filter(Boolean).join(" · ");
 	return theme.fg("dim", branch);
 }

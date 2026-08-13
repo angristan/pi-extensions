@@ -801,7 +801,7 @@ test("goal_set replacement expands full objective and validation", async () => {
 	expect(collapsedLines[0]).toContain("Replaced goal");
 	expect(collapsedLines[1]).toContain("expanded details");
 	expect(collapsedLines[1]).toContain("1 criterion");
-	expect(collapsedLines[1]).toContain("expand for full details");
+	expect(collapsedLines[1]).toContain("Ctrl+O for full details");
 
 	const expanded = h.tools.goal_set.renderResult(result, { isPartial: false, expanded: true }, h.ctx.ui.theme, { lastComponent: undefined });
 	const expandedText = renderBlock(expanded, 72).join("\n");
