@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
-import { join } from "node:path";
+import { accessSync, constants as fsConstants, mkdirSync, readFileSync, renameSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
@@ -32,7 +32,17 @@ export function appleHelperBinaryPath(source: Uint8Array, agentDir = getAgentDir
 	return join(agentDir, "cache", "auto-session-title", `apple-model-${digest}`);
 }
 
-let helperBuild: Promise<string> | undefined;
+const helperBuilds = new Map<string, Promise<string>>();
+
+function appleHelperIsUsable(path: string): boolean {
+	try {
+		if (!statSync(path).isFile()) return false;
+		accessSync(path, fsConstants.X_OK);
+		return true;
+	} catch {
+		return false;
+	}
+}
 
 function compileAppleTitleHelper(): Promise<string> {
 	if (process.platform !== "darwin") {
@@ -40,11 +50,12 @@ function compileAppleTitleHelper(): Promise<string> {
 	}
 	const source = readFileSync(HELPER_SOURCE_PATH);
 	const binaryPath = appleHelperBinaryPath(source);
-	if (existsSync(binaryPath)) return Promise.resolve(binaryPath);
-	if (helperBuild) return helperBuild;
+	if (appleHelperIsUsable(binaryPath)) return Promise.resolve(binaryPath);
+	const activeBuild = helperBuilds.get(binaryPath);
+	if (activeBuild) return activeBuild;
 
-	helperBuild = new Promise((resolve, reject) => {
-		mkdirSync(join(getAgentDir(), "cache", "auto-session-title"), { recursive: true });
+	const build = new Promise<string>((resolve, reject) => {
+		mkdirSync(dirname(binaryPath), { recursive: true });
 		const temporaryPath = `${binaryPath}.building-${process.pid}`;
 		const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
 		const child = spawn("/usr/bin/xcrun", [
@@ -84,15 +95,17 @@ function compileAppleTitleHelper(): Promise<string> {
 				finish();
 			} catch (error) {
 				// Another Pi process may have won the same content-addressed build.
-				if (existsSync(binaryPath)) finish();
+				if (appleHelperIsUsable(binaryPath)) finish();
 				else finish(error instanceof Error ? error : new Error(String(error)));
 			}
 		});
-	}).catch((error) => {
-		helperBuild = undefined;
-		throw error;
 	});
-	return helperBuild;
+	let trackedBuild: Promise<string>;
+	trackedBuild = build.finally(() => {
+		if (helperBuilds.get(binaryPath) === trackedBuild) helperBuilds.delete(binaryPath);
+	});
+	helperBuilds.set(binaryPath, trackedBuild);
+	return trackedBuild;
 }
 
 async function runAppleTitleHelper(request: AppleTitleRequest, signal: AbortSignal): Promise<string> {

@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appleHelperBinaryPath, isAppleTitleModel, requestAppleTitleCompletion } from "./apple";
-import { loadTitleModelConfig, normalizeTitle, TITLE_SYSTEM_PROMPT, titleModelConfigPath } from "./index";
+import autoSessionTitle, { loadTitleModelConfig, normalizeTitle, sessionTitleIsManual, TITLE_SYSTEM_PROMPT, titleModelConfigPath } from "./index";
 import { requestTitleCompletion } from "./request";
 
 describe("auto-session-title model requests", () => {
@@ -43,6 +44,54 @@ describe("auto-session-title model requests", () => {
 		}
 	});
 
+	test("restores manual-title locks from persisted generated state", () => {
+		expect(sessionTitleIsManual(undefined, undefined)).toBe(false);
+		expect(sessionTitleIsManual("Meridian Sync", "meridian   sync")).toBe(false);
+		expect(sessionTitleIsManual("My Preferred Name", "Meridian Sync")).toBe(true);
+		expect(sessionTitleIsManual("My Preferred Name", undefined)).toBe(true);
+	});
+
+	test("keeps a restored manual title locked after settlement", async () => {
+		const handlers = new Map<string, (...args: any[]) => any>();
+		const commands = new Map<string, any>();
+		const notifications: string[] = [];
+		const entries = [{
+			type: "custom",
+			customType: "auto-session-title-state-v2",
+			data: {
+				version: 2,
+				turnSummary: "Implemented durable session titles.",
+				focusSummary: "Maintain descriptive session titles.",
+				title: "Generated Title",
+				createdAt: "2026-08-15T00:00:00.000Z",
+			},
+		}];
+		const pi = {
+			on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
+			registerCommand(name: string, command: any) { commands.set(name, command); },
+			getSessionName() { return "My Preferred Name"; },
+			setSessionName() { throw new Error("manual title must not be replaced"); },
+			appendEntry() { throw new Error("manual title must not append state"); },
+		};
+		const ctx = {
+			sessionManager: {
+				getBranch: () => entries,
+				getEntries: () => entries,
+				getSessionId: () => "session-1",
+				getLeafId: () => "leaf-1",
+			},
+			ui: { notify: (message: string) => notifications.push(message) },
+		};
+
+		autoSessionTitle(pi as any);
+		handlers.get("session_start")?.({ reason: "resume" }, ctx);
+		handlers.get("agent_settled")?.({}, ctx);
+		await commands.get("title-status").handler("", ctx);
+
+		expect(notifications.at(-1)).toContain("manual lock: yes");
+		expect(notifications.at(-1)).toContain("last skip: manual title lock");
+	});
+
 	test("recognizes only the Apple system model backend", () => {
 		expect(isAppleTitleModel("apple-foundation-models", "system")).toBe(true);
 		expect(isAppleTitleModel("apple-foundation-models", "other")).toBe(false);
@@ -54,9 +103,11 @@ describe("auto-session-title model requests", () => {
 		const first = appleHelperBinaryPath(Buffer.from("first"), agentDir);
 		const repeated = appleHelperBinaryPath(Buffer.from("first"), agentDir);
 		const changed = appleHelperBinaryPath(Buffer.from("changed"), agentDir);
+		const otherAgentDir = appleHelperBinaryPath(Buffer.from("first"), "/tmp/other-pi-agent-test");
 
 		expect(first).toBe(repeated);
 		expect(changed).not.toBe(first);
+		expect(otherAgentDir).not.toBe(first);
 		expect(first.startsWith(join(agentDir, "cache", "auto-session-title", "apple-model-"))).toBe(true);
 	});
 
@@ -66,6 +117,25 @@ describe("auto-session-title model requests", () => {
 		expect(source).toContain("maximumResponseTokens: 256");
 		expect(source).toContain("Repeat(0...2)");
 		expect(source).toContain("SystemLanguageModel.default");
+	});
+
+	test("reports malformed native input without trapping", () => {
+		if (process.platform !== "darwin") return;
+		const directory = mkdtempSync(join(tmpdir(), "pi-apple-title-helper-test-"));
+		const binary = join(directory, "apple-title-helper");
+		try {
+			const source = join(import.meta.dir, "apple-model.swift");
+			const compilation = spawnSync("/usr/bin/xcrun", ["swiftc", "-parse-as-library", source, "-o", binary], { encoding: "utf8" });
+			expect(compilation.status).toBe(0);
+			expect(compilation.stderr).toBe("");
+
+			const execution = spawnSync(binary, [], { input: "not-json", encoding: "utf8" });
+			expect(execution.status).toBe(1);
+			expect(execution.signal).toBeNull();
+			expect(execution.stderr).toContain("Apple Foundation Model helper failed:");
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
 	});
 
 	test("routes Apple titles through the local helper", async () => {

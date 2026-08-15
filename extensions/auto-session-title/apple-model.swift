@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import FoundationModels
 import RegexBuilder
@@ -27,7 +28,20 @@ struct TitleResponse {
 
 @main
 struct AppleTitleHelper {
-    static func main() async throws {
+    static func main() async {
+        do {
+            try await generateTitle()
+        } catch {
+            let description = String(describing: error)
+                .components(separatedBy: .controlCharacters)
+                .joined(separator: " ")
+            let message = "Apple Foundation Model helper failed: \(description.prefix(2_000))\n"
+            FileHandle.standardError.write(Data(message.utf8))
+            Darwin.exit(EXIT_FAILURE)
+        }
+    }
+
+    private static func generateTitle() async throws {
         let input = FileHandle.standardInput.readDataToEndOfFile()
         let request = try JSONDecoder().decode(TitleRequest.self, from: input)
         let model = SystemLanguageModel.default

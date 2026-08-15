@@ -162,6 +162,10 @@ function titlesEquivalent(left: string | undefined, right: string | undefined): 
 	return normalize(left) === normalize(right);
 }
 
+export function sessionTitleIsManual(currentTitle: string | undefined, latestGeneratedTitle: string | undefined): boolean {
+	return Boolean(currentTitle) && !titlesEquivalent(currentTitle, latestGeneratedTitle);
+}
+
 export default function (pi: ExtensionAPI) {
 	let requestGeneration = 0;
 	let activeRequest: AbortController | undefined;
@@ -383,9 +387,9 @@ export default function (pi: ExtensionAPI) {
 		lastTitledLeafId = undefined;
 		managedTitle = pi.getSessionName();
 		programmaticTitle = undefined;
-		manualTitleLocked = false;
 		restoreSummaryState(ctx);
-		debug("session start", { title: managedTitle, focusSummary: lastFocusSummary, entries: ctx.sessionManager.getEntries().length });
+		manualTitleLocked = sessionTitleIsManual(managedTitle, latestSummaryState?.title);
+		debug("session start", { title: managedTitle, manualTitleLocked, focusSummary: lastFocusSummary, entries: ctx.sessionManager.getEntries().length });
 
 		// `/reload` is the common way to pick up extension fixes while staying in the
 		// same conversation. Retitle once after reload so stale titles like the first
@@ -410,7 +414,10 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_tree", (_event, ctx) => {
 		cancelRequest();
 		lastTitledLeafId = undefined;
+		managedTitle = pi.getSessionName();
+		programmaticTitle = undefined;
 		restoreSummaryState(ctx);
+		manualTitleLocked = sessionTitleIsManual(managedTitle, latestSummaryState?.title);
 	});
 
 	pi.on("session_info_changed", (event) => {
