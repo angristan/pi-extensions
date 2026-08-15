@@ -1,75 +1,64 @@
 # auto-session-title
 
-Generates and maintains short, descriptive titles for your pi sessions.
+Automatically gives Pi sessions short, descriptive titles.
 
-As soon as the first prompt is accepted, it asks a cheap model for a provisional
-3-word title while the main agent turn runs. After each completed turn, one
-bounded request summarizes the user intent and final assistant outcome, updates
-a durable session-level focus summary, and refreshes the title. Component-level
-discussions stay under the main project title, even across several turns. The
-title changes only when the session establishes a different primary objective.
+The extension creates a provisional title from the first prompt, then refreshes
+it after each completed turn. A rolling focus summary keeps the title aligned
+with the session's main objective instead of the latest implementation detail.
+Titles contain one to three words.
 
-```
-before:  untitled
-after:   Compact Pi Footer
-```
+Manual renames pause automatic updates. Run `/title-refresh` to resume them.
 
-## Context and persistence
+## Privacy and persistence
 
-The title request never receives reasoning, tool calls, tool results, logs, or
-raw diffs. Pi clipboard image temp paths are redacted before title generation,
-and generated filesystem-path titles are ignored. Its 8,000-character context
-budget contains:
+Title generation receives a bounded view of the conversation: the current
+request and outcome, the durable focus, and recent turn summaries. It never
+receives reasoning, tool calls, tool output, logs, or diffs. Clipboard image
+paths are redacted, and generated filesystem-path titles are rejected.
 
-- current user request: up to 2,000 characters
-- final assistant outcome: up to 2,000 characters
-- original session focus anchor: up to 600 characters
-- latest durable focus summary: up to 600 characters
-- latest 8 turn summaries: up to 300 characters each
-- legacy bootstrap only: 2 prior turn pairs, up to 700 characters per message
+Focus and turn summaries are stored as hidden session metadata. They stay out of
+the agent context and follow the active branch across reloads, resumes, forks,
+and tree navigation.
 
-The same model call returns the turn summary, focus summary, and title. Completed
-summary state is stored as hidden session metadata, stays out of agent context,
-and is restored from the active branch after reloads, resumes, forks, and tree
-navigation. The first completed focus is retained as an anchor so later questions
-about protocols, tools, or architecture components do not replace the session's
-main subject. Existing sessions without compatible summary state bootstrap from
-their latest 3 completed turns: the latest turn uses the normal current-turn
-budget, while the prior 2 are bounded migration context.
+## Configuration
 
-## Config
-
-Defaults to Mistral Medium 3.5 with minimal thinking. Override the
-title-generation model and thinking level via
-`$PI_CODING_AGENT_DIR/auto-session-title.json` (defaults to
-`~/.pi/agent/auto-session-title.json`). Any model available through Pi works,
-including OAuth-backed providers such as OpenAI Codex:
+The default backend is Mistral Medium 3.5 with minimal thinking. Configure a
+different Pi model in `~/.pi/agent/auto-session-title.json`, or under
+`$PI_CODING_AGENT_DIR` when set:
 
 ```json
-{ "provider": "openai-codex", "model": "gpt-5.6-luna", "thinkingLevel": "xhigh" }
+{
+  "provider": "openai-codex",
+  "model": "gpt-5.6-luna",
+  "thinkingLevel": "xhigh"
+}
 ```
 
 `thinkingLevel` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or
 `max`. The legacy `reasoning` key is also accepted.
 
-On Apple Silicon Macs running macOS 26 or later, the extension can use Apple's
-on-device system language model:
+### Apple on-device model
+
+On Apple Silicon with macOS 26 or later, titles can use the system model that
+powers Apple Intelligence:
 
 ```json
-{ "provider": "apple-foundation-models", "model": "system", "thinkingLevel": "off" }
+{
+  "provider": "apple-foundation-models",
+  "model": "system",
+  "thinkingLevel": "off"
+}
 ```
 
-This backend requires Apple Intelligence to be enabled. It invokes the native
-Foundation Models framework locally, sends no title context to a remote model,
-and ignores `thinkingLevel`. Generation uses greedy sampling, a 256-token output
-cap, and a schema constraint that guarantees one-to-three-word titles. The first
-request compiles the native helper into Pi's content-addressed cache; later
-requests reuse that binary.
+This backend requires Apple Intelligence and a local Swift toolchain. All title
+context stays on-device. It uses deterministic generation with a strict
+one-to-three-word schema. The native helper is compiled once and reused from
+Pi's content-addressed cache. `thinkingLevel` does not apply to this backend.
 
 ## Commands
 
-- `/title-refresh` — regenerate the title now
-- `/title-status` — show current title, summaries, last attempt, and skip reason
+- `/title-refresh` — regenerate the title and resume automatic updates
+- `/title-status` — show the current title, summaries, and last request status
 
 ## Dependencies
 
