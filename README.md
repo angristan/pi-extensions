@@ -103,7 +103,7 @@ accept, `Esc` / `Ctrl+C` to cancel, and `Ctrl+U` to clear the query.
 
 A few extensions read optional config from Pi's agent directory (`~/.pi/agent` by default, or `PI_CODING_AGENT_DIR` when set):
 
-- `auto-session-title.json` — `{"provider": "mistral", "model": "mistral-medium-3.5"}`
+- `auto-session-title.json` — `{"provider": "mistral", "model": "mistral-medium-3.5"}` (or `{"provider": "apple-foundation-models", "model": "system", "thinkingLevel": "off"}` for Apple's on-device model)
 - `accent-color.json` — `{"color": "#FF8205"}` (accepts `#RRGGBB` / `#RGB`)
 - `notifications.json` — `{"enabled": true}`
 - `openai-codex-fast.json` — `{"enabled": true}`

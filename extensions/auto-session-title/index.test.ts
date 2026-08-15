@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isAppleTitleModel, requestAppleTitleCompletion } from "./apple";
 import { loadTitleModelConfig, normalizeTitle, TITLE_SYSTEM_PROMPT, titleModelConfigPath } from "./index";
 import { requestTitleCompletion } from "./request";
 
@@ -40,6 +41,31 @@ describe("auto-session-title model requests", () => {
 			else process.env.PI_CODING_AGENT_DIR = previous;
 			rmSync(directory, { recursive: true, force: true });
 		}
+	});
+
+	test("recognizes only the Apple system model backend", () => {
+		expect(isAppleTitleModel("apple-foundation-models", "system")).toBe(true);
+		expect(isAppleTitleModel("apple-foundation-models", "other")).toBe(false);
+		expect(isAppleTitleModel("mistral", "system")).toBe(false);
+	});
+
+	test("routes Apple titles through the local helper", async () => {
+		let invocation: any;
+		const response = await requestAppleTitleCompletion(
+			"title system prompt",
+			"title context",
+			new AbortController().signal,
+			async (request, signal) => {
+				invocation = { request, aborted: signal.aborted };
+				return '{"title":"Local Apple Titles"}';
+			},
+		);
+
+		expect(response).toBe('{"title":"Local Apple Titles"}');
+		expect(invocation).toEqual({
+			request: { systemPrompt: "title system prompt", prompt: "title context" },
+			aborted: false,
+		});
 	});
 
 	test("routes Codex Luna through Pi's provider-aware completion API", async () => {

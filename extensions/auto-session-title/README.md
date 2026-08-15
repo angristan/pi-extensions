@@ -52,6 +52,18 @@ including OAuth-backed providers such as OpenAI Codex:
 `thinkingLevel` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or
 `max`. The legacy `reasoning` key is also accepted.
 
+On Apple Silicon Macs running macOS 26 or later, the extension can use Apple's
+on-device system language model:
+
+```json
+{ "provider": "apple-foundation-models", "model": "system", "thinkingLevel": "off" }
+```
+
+This backend requires Apple Intelligence to be enabled. It invokes the native
+Foundation Models framework locally, sends no title context to a remote model,
+and ignores `thinkingLevel`. The first request may include Swift compilation
+startup time.
+
 ## Commands
 
 - `/title-refresh` — regenerate the title now

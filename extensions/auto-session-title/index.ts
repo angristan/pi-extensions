@@ -2,6 +2,7 @@ import { complete } from "@earendil-works/pi-ai/compat";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { isAppleTitleModel, requestAppleTitleCompletion } from "./apple";
 import {
 	buildTitleContext,
 	buildTitlePrompt,
@@ -37,8 +38,9 @@ export interface TitleModelConfig {
  *   { "provider": "mistral", "model": "mistral-medium-3.5", "thinkingLevel": "minimal" }
  *
  * Any model available through Pi works; the extension uses Pi's provider-aware
- * completion API with your existing authentication. Defaults to Mistral Medium
- * 3.5 with minimal thinking.
+ * completion API with your existing authentication. Apple's on-device system
+ * model is also available as apple-foundation-models/system on supported Macs.
+ * Defaults to Mistral Medium 3.5 with minimal thinking.
  */
 const DEFAULT_TITLE_MODEL: TitleModelConfig = {
 	provider: "mistral",
@@ -201,33 +203,38 @@ export default function (pi: ExtensionAPI) {
 		signal: AbortSignal,
 	): Promise<string | undefined> => {
 		const { provider: PROVIDER, model: MODEL_ID, thinkingLevel } = loadTitleModelConfig();
-		const configuredModel = ctx.modelRegistry.find(PROVIDER, MODEL_ID);
-		if (!configuredModel) {
-			lastSkipReason = `${PROVIDER}/${MODEL_ID} unavailable`;
-			debug("model unavailable");
-			return;
-		}
-		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(configuredModel);
-		if (!auth.ok || signal.aborted) {
-			lastSkipReason = signal.aborted ? "request cancelled" : `authentication unavailable: ${auth.error}`;
-			debug("authentication or request unavailable", signal.aborted ? "cancelled" : auth.error);
-			return;
-		}
-		debug("requesting title", { sessionId, previousTitle, currentUser: context.currentUserRequest?.slice(0, 80) });
+		debug("requesting title", { provider: PROVIDER, model: MODEL_ID, sessionId, previousTitle, currentUser: context.currentUserRequest?.slice(0, 80) });
 
 		// One bounded, tool-free request updates the completed-turn summary, rolling
 		// focus, and title without placing any of them in the agent context.
 		const prompt = buildTitlePrompt(basename(ctx.cwd), previousTitle, context);
-		const result = await requestTitleCompletion(
-			complete,
-			configuredModel,
-			auth,
-			TITLE_SYSTEM_PROMPT,
-			prompt,
-			sessionId,
-			signal,
-			thinkingLevel,
-		);
+		let result: string;
+		if (isAppleTitleModel(PROVIDER, MODEL_ID)) {
+			result = await requestAppleTitleCompletion(TITLE_SYSTEM_PROMPT, prompt, signal);
+		} else {
+			const configuredModel = ctx.modelRegistry.find(PROVIDER, MODEL_ID);
+			if (!configuredModel) {
+				lastSkipReason = `${PROVIDER}/${MODEL_ID} unavailable`;
+				debug("model unavailable");
+				return;
+			}
+			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(configuredModel);
+			if (!auth.ok || signal.aborted) {
+				lastSkipReason = signal.aborted ? "request cancelled" : `authentication unavailable: ${auth.error}`;
+				debug("authentication or request unavailable", signal.aborted ? "cancelled" : auth.error);
+				return;
+			}
+			result = await requestTitleCompletion(
+				complete,
+				configuredModel,
+				auth,
+				TITLE_SYSTEM_PROMPT,
+				prompt,
+				sessionId,
+				signal,
+				thinkingLevel,
+			);
+		}
 		if (signal.aborted) return;
 		const generated = parseTitleModelResponse(result);
 		const title = normalizeTitle(generated.title ?? "");
