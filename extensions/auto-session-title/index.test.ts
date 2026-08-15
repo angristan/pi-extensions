@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isAppleTitleModel, requestAppleTitleCompletion } from "./apple";
+import { appleHelperBinaryPath, isAppleTitleModel, requestAppleTitleCompletion } from "./apple";
 import { loadTitleModelConfig, normalizeTitle, TITLE_SYSTEM_PROMPT, titleModelConfigPath } from "./index";
 import { requestTitleCompletion } from "./request";
 
@@ -47,6 +47,25 @@ describe("auto-session-title model requests", () => {
 		expect(isAppleTitleModel("apple-foundation-models", "system")).toBe(true);
 		expect(isAppleTitleModel("apple-foundation-models", "other")).toBe(false);
 		expect(isAppleTitleModel("mistral", "system")).toBe(false);
+	});
+
+	test("content-addresses the compiled Apple helper cache", () => {
+		const agentDir = "/tmp/pi-agent-test";
+		const first = appleHelperBinaryPath(Buffer.from("first"), agentDir);
+		const repeated = appleHelperBinaryPath(Buffer.from("first"), agentDir);
+		const changed = appleHelperBinaryPath(Buffer.from("changed"), agentDir);
+
+		expect(first).toBe(repeated);
+		expect(changed).not.toBe(first);
+		expect(first.startsWith(join(agentDir, "cache", "auto-session-title", "apple-model-"))).toBe(true);
+	});
+
+	test("constrains Apple titles with deterministic bounded generation", () => {
+		const source = readFileSync(join(import.meta.dir, "apple-model.swift"), "utf8");
+		expect(source).toContain("sampling: .greedy");
+		expect(source).toContain("maximumResponseTokens: 256");
+		expect(source).toContain("Repeat(0...2)");
+		expect(source).toContain("SystemLanguageModel.default");
 	});
 
 	test("routes Apple titles through the local helper", async () => {

@@ -61,8 +61,10 @@ on-device system language model:
 
 This backend requires Apple Intelligence to be enabled. It invokes the native
 Foundation Models framework locally, sends no title context to a remote model,
-and ignores `thinkingLevel`. The first request may include Swift compilation
-startup time.
+and ignores `thinkingLevel`. Generation uses greedy sampling, a 256-token output
+cap, and a schema constraint that guarantees one-to-three-word titles. The first
+request compiles the native helper into Pi's content-addressed cache; later
+requests reuse that binary.
 
 ## Commands
 
