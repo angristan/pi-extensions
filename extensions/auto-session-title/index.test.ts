@@ -69,6 +69,8 @@ describe("auto-session-title model requests", () => {
 		const pi = {
 			on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
 			registerCommand(name: string, command: any) { commands.set(name, command); },
+			registerFlag() {},
+			getFlag() { return false; },
 			getSessionName() { return "My Preferred Name"; },
 			setSessionName() { throw new Error("manual title must not be replaced"); },
 			appendEntry() { throw new Error("manual title must not append state"); },
@@ -90,6 +92,44 @@ describe("auto-session-title model requests", () => {
 
 		expect(notifications.at(-1)).toContain("manual lock: yes");
 		expect(notifications.at(-1)).toContain("last skip: manual title lock");
+	});
+
+	test("disables automatic title generation for one Pi run", async () => {
+		const handlers = new Map<string, (...args: any[]) => any>();
+		const commands = new Map<string, any>();
+		const flags = new Map<string, any>();
+		const notifications: string[] = [];
+		const pi = {
+			on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
+			registerCommand(name: string, command: any) { commands.set(name, command); },
+			registerFlag(name: string, options: any) { flags.set(name, options); },
+			getFlag(name: string) { return name === "no-auto-title"; },
+			getSessionName() { return undefined; },
+			setSessionName() { throw new Error("disabled auto-title must not rename the session"); },
+			appendEntry() { throw new Error("disabled auto-title must not append state"); },
+		};
+		const ctx = {
+			sessionManager: {
+				getBranch: () => [],
+				getEntries: () => [],
+				getSessionId: () => "session-1",
+				getLeafId: () => "leaf-1",
+			},
+			ui: { notify: (message: string) => notifications.push(message) },
+		};
+
+		autoSessionTitle(pi as any);
+		handlers.get("session_start")?.({ reason: "resume" }, ctx);
+		handlers.get("agent_settled")?.({}, ctx);
+		await commands.get("title-status").handler("", ctx);
+
+		expect(flags.get("no-auto-title")).toEqual({
+			description: "Disable automatic session title generation for this run",
+			type: "boolean",
+			default: false,
+		});
+		expect(notifications.at(-1)).toContain("automatic updates: disabled (--no-auto-title)");
+		expect(notifications.at(-1)).toContain("last skip: disabled by --no-auto-title");
 	});
 
 	test("recognizes only the Apple system model backend", () => {

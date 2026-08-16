@@ -79,6 +79,7 @@ export function loadTitleModelConfig(): TitleModelConfig {
 
 const MAX_TITLE_WORDS = 3;
 const MAX_TITLE_CHARS = 72;
+const DISABLE_AUTO_TITLE_FLAG = "no-auto-title";
 
 function debug(...values: unknown[]) {
 	if (process.env.PI_AUTO_SESSION_TITLE_DEBUG === "1") {
@@ -167,6 +168,12 @@ export function sessionTitleIsManual(currentTitle: string | undefined, latestGen
 }
 
 export default function (pi: ExtensionAPI) {
+	pi.registerFlag(DISABLE_AUTO_TITLE_FLAG, {
+		description: "Disable automatic session title generation for this run",
+		type: "boolean",
+		default: false,
+	});
+
 	let requestGeneration = 0;
 	let activeRequest: AbortController | undefined;
 	let lastTitledLeafId: string | undefined;
@@ -182,6 +189,8 @@ export default function (pi: ExtensionAPI) {
 	let latestSummaryState: TitleState | undefined;
 	let lastSkipReason: string | undefined;
 	let lastError: string | undefined;
+
+	const automaticUpdatesDisabled = () => pi.getFlag(DISABLE_AUTO_TITLE_FLAG) === true;
 
 	const cancelRequest = () => {
 		requestGeneration += 1;
@@ -291,6 +300,11 @@ export default function (pi: ExtensionAPI) {
 		options: { force?: boolean; notify?: boolean; provisionalUser?: string } = {},
 	) => {
 		lastQueueReason = options.force ? "forced" : "automatic";
+		if (!options.force && automaticUpdatesDisabled()) {
+			lastSkipReason = `disabled by --${DISABLE_AUTO_TITLE_FLAG}`;
+			if (options.notify) ctx.ui.notify("Automatic session titles are disabled for this run.", "info");
+			return false;
+		}
 		if (manualTitleLocked && !options.force) {
 			lastSkipReason = "manual title lock";
 			if (options.notify) ctx.ui.notify("Auto-title is locked because this session appears to have been manually renamed.", "warning");
@@ -366,6 +380,7 @@ export default function (pi: ExtensionAPI) {
 				`managed: ${managedTitle ?? "(none)"}`,
 				`programmatic: ${programmaticTitle ?? "(none)"}`,
 				`manual lock: ${manualTitleLocked ? "yes" : "no"}`,
+				`automatic updates: ${automaticUpdatesDisabled() ? `disabled (--${DISABLE_AUTO_TITLE_FLAG})` : "enabled"}`,
 				`request active: ${activeRequest ? "yes" : "no"}`,
 				`leaf: ${ctx.sessionManager.getLeafId?.() ?? "(unknown)"}`,
 				`last titled leaf: ${lastTitledLeafId ?? "(none)"}`,

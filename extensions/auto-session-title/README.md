@@ -22,6 +22,9 @@ and tree navigation.
 
 ## Configuration
 
+Start Pi with `--no-auto-title` to disable automatic title generation for that
+process only. `/title-refresh` remains available for a manual one-off refresh.
+
 The default backend is Mistral Medium 3.5 with minimal thinking. Configure a
 different Pi model in `~/.pi/agent/auto-session-title.json`, or under
 `$PI_CODING_AGENT_DIR` when set:
