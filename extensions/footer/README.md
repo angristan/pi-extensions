@@ -24,6 +24,7 @@ priority over the spinner.
 - Window-title spinner (OSC 0) while the agent is running
 - Softened Catppuccin-Mocha-derived palette that adapts to the active theme
 - Purple `fast` status beside the model when the bundled OpenAI Codex Fast mode is enabled
+- Model-adjacent badges from other extensions through the `footer:model-badge` event
 - Responsive layout that removes cache details, git, cost, output, input,
   directory, model, and context in that order; the session title remains
 
@@ -31,4 +32,4 @@ priority over the spinner.
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
 - **Depends on extensions:** None; automatically includes durable usage records from `subagents` and attention-title overrides from `questions` when present.
-- **Used by extensions:** `questions` optionally uses its terminal-title ownership support.
+- **Used by extensions:** `questions` optionally uses its terminal-title ownership support. Other extensions can place a short badge beside the model with `pi.events.emit("footer:model-badge", { source: "my-extension", text: "priority" })`; omit `text` to clear it.

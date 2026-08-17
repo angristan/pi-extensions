@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import footer, {
 	contextRemainingPercent,
 	FOOTER_GROUP_PRIORITY,
+	FOOTER_MODEL_BADGE_EVENT,
 	formatCostCents,
 	formatTokensCompact,
 	renderAdaptiveRow,
@@ -126,6 +127,56 @@ test("merges persisted subagent tokens and cost into session totals", () => {
 	expect(totals).toMatchObject({ input: 40, output: 12, cacheRead: 60, cacheWrite: 3, cost: 0.4 });
 	expect(totals.sessionCacheHit).toBeCloseTo(58.252, 2);
 	expect(resolved).toEqual(["test-provider/child-model"]);
+});
+
+test("renders extension badges beside the model", () => {
+	const handlers = new Map<string, (event: any, ctx: any) => void>();
+	const eventHandlers = new Map<string, (event: unknown) => void>();
+	let footerFactory: any;
+	let renders = 0;
+	footer({
+		on: (name: string, handler: (event: any, ctx: any) => void) => { handlers.set(name, handler); },
+		events: { on: (name: string, handler: (event: unknown) => void) => { eventHandlers.set(name, handler); } },
+		getThinkingLevel: () => "high",
+		exec: async () => ({ code: 1, stdout: "", stderr: "" }),
+	} as any);
+	const ctx = {
+		mode: "tui",
+		cwd: "/tmp/project",
+		model: { provider: "test", id: "model", name: "Test Model", reasoning: true, contextWindow: 100_000 },
+		getContextUsage: () => ({ tokens: 12_000, contextWindow: 100_000 }),
+		modelRegistry: { find: () => undefined },
+		sessionManager: {
+			getSessionName: () => "Current session",
+			getSessionId: () => "session-id",
+			getEntries: () => [],
+		},
+		ui: {
+			setTitle: () => {},
+			setFooter: (factory: any) => { footerFactory = factory; },
+		},
+	};
+
+	handlers.get("session_start")?.({}, ctx);
+	const component = footerFactory(
+		{ requestRender: () => { renders += 1; } },
+		{ fg: (_token: string, text: string) => text },
+		{
+			onBranchChange: () => () => {},
+			getGitBranch: () => undefined,
+			getExtensionStatuses: () => new Map(),
+		},
+	);
+	const plain = () => component.render(160)[0].replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
+
+	eventHandlers.get(FOOTER_MODEL_BADGE_EVENT)?.({ source: "routing", text: "priority\nbadge" });
+	expect(plain()).toContain("Test Model high priority badge");
+	expect(renders).toBeGreaterThan(0);
+
+	eventHandlers.get(FOOTER_MODEL_BADGE_EVENT)?.({ source: "routing" });
+	expect(plain()).not.toContain("priority badge");
+
+	handlers.get("session_shutdown")?.({}, ctx);
 });
 
 test("keeps an attention title until its owner clears it", () => {

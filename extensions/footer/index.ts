@@ -11,6 +11,12 @@ const COMMAND_TIMEOUT_MS = 2_500;
 const TITLE_SPINNER_INTERVAL_MS = 200;
 const TITLE_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+export const FOOTER_MODEL_BADGE_EVENT = "footer:model-badge";
+
+interface FooterModelBadgeEvent {
+	source: string;
+	text?: string;
+}
 
 // The default palette is Catppuccin Mocha, used as a fallback when no theme is
 // available. When a theme is present, segments resolve to theme color tokens
@@ -329,6 +335,7 @@ export default function (pi: ExtensionAPI) {
 	let titleFrame = 0;
 	let titleTimer: ReturnType<typeof setInterval> | undefined;
 	const terminalTitleOverrides = new Map<string, string>();
+	const modelBadges = new Map<string, string>();
 	let cachedUsageSessionId: string | undefined;
 	let cachedUsageTotals: UsageTotals | undefined;
 
@@ -542,6 +549,13 @@ export default function (pi: ExtensionAPI) {
 						{ accent: "model", text: modelWithReasoning(current, thinkingLevel) },
 					];
 					if (fastStatus) modelSegments.push({ accent: "cost", text: fastStatus });
+					const badgeTexts = [...modelBadges.entries()]
+						.sort(([left], [right]) => left.localeCompare(right))
+						.map(([, text]) => text);
+					for (const text of badgeTexts) {
+						const sanitized = sanitizeStatusText(text);
+						if (sanitized) modelSegments.push({ accent: "cost", text: sanitized });
+					}
 
 					const groups: FooterGroup[] = [
 						{ segments: [{ accent: "thread", text: threadTitle(current) }], priority: FOOTER_GROUP_PRIORITY.thread, required: true },
@@ -618,6 +632,14 @@ export default function (pi: ExtensionAPI) {
 		invalidateUsageTotals();
 		requestRender?.();
 	});
+	pi.events.on(FOOTER_MODEL_BADGE_EVENT, (event: unknown) => {
+		if (!event || typeof event !== "object") return;
+		const { source, text } = event as Partial<FooterModelBadgeEvent>;
+		if (typeof source !== "string" || !source || (text !== undefined && typeof text !== "string")) return;
+		modelBadges.delete(source);
+		if (text) modelBadges.set(source, text);
+		requestRender?.();
+	});
 	pi.events.on("terminal-title:override", (event: unknown) => {
 		if (!event || typeof event !== "object") return;
 		const { source, title } = event as { source?: unknown; title?: unknown };
@@ -641,6 +663,7 @@ export default function (pi: ExtensionAPI) {
 		agentActive = false;
 		titleFrame = 0;
 		terminalTitleOverrides.clear();
+		modelBadges.clear();
 		requestRender = undefined;
 		activeCtx = undefined;
 		invalidateUsageTotals();
