@@ -98,8 +98,9 @@ details. Search headlines show only the query; filters, the actual provider
 route, credits, and elapsed time stay in the summary row. Each result shows its
 title followed by a clickable full URL, while snippets remain agent-facing.
 Collapsed result lists end with a configured expand-key hint instead of a second
-numeric count. Expanded results add rank, website, search engine, date, and up to
-three bounded source highlights. Sanitized failure messages wrap to the
+numeric count. Expanded results add a per-result provider only when it differs
+from the summary, the date, and up to three bounded source highlights. Sanitized
+failure messages wrap to the
 transcript width instead of being ellipsized, so the bounded provider reason
 remains visible in full.
 Fallbacks render explicitly:

@@ -221,7 +221,7 @@ describe("web search renderer", () => {
 		const output = render(webSearch, toolResult, { query: "static sites" }).join("\n");
 		expect(output).toContain("<dim>“</dim><accent>static sites</accent><dim>”</dim>");
 		expect(output).toContain("<text>Result 1</text>");
-		expect(output).toContain("<link:https://www.example1.com/article><muted>https://www.example1.com/article</muted></link>");
+		expect(output).toContain("<link:https://www.example1.com/article><mdLink>https://www.example1.com/article</mdLink></link>");
 		expect(output).toContain("<muted>2026-04-21</muted>");
 		expect(output).not.toContain("Evidence 1");
 	});
@@ -261,6 +261,22 @@ describe("web search renderer", () => {
 		const lines = render(webSearch, toolResult, { query: "fallback" });
 		expect(lines[1]).toContain("via Exa → Firecrawl");
 		expect(lines[1]).toContain("2 credits");
+	});
+
+	test("expanded shared-engine results avoid repeated source metadata", () => {
+		const toolResult = createSearchToolResult({
+			provider: "exa",
+			tool: "web_search",
+			query: "one engine",
+			limit: 1,
+			elapsedMs: 500,
+			results: [result(1, "exa")],
+		});
+		const output = render(webSearch, toolResult, { query: "one engine" }, { expanded: true }).join("\n");
+		expect(output.match(/via Exa/g)).toHaveLength(1);
+		expect(output).not.toContain("rank 1");
+		expect(output).not.toContain("example1.com ·");
+		expect(output).toContain("<accent>↳ </accent><toolOutput>Evidence 1</toolOutput>");
 	});
 
 	test("expanded mixed-engine results retain per-result attribution", () => {
