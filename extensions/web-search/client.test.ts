@@ -165,7 +165,7 @@ describe("search tool persistence", () => {
 		expect(text).not.toContain("Description that should remain UI-only.");
 		expect(parsed.results[0]?.snippets).toEqual(["Same claim", "Different claim"]);
 		expect(toolResult.details.results[0]?.description).toBe("Description that should remain UI-only.");
-		expect(toolResult.details.results[0]?.snippets).toEqual(["Same claim"]);
+		expect(toolResult.details.results[0]?.snippets).toEqual(["Same claim", "Different claim"]);
 	});
 
 	test("removes terminal controls and rejects unsafe result URLs", () => {

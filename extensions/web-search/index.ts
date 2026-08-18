@@ -292,7 +292,7 @@ function renderSearchResult(
 	const detail = searchDetail(args, theme, details);
 	const searchEngine = sharedSearchEngine(details);
 	const max = expanded ? 10 : 5;
-	component.update(() => {
+	component.update((width) => {
 		const lines = [headlineRow(false, false, "Searched", detail), `${BRANCH}${searchSummary(details, searchEngine, theme)}`];
 		const shownResults = results.slice(0, max);
 		for (const [index, item] of shownResults.entries()) {
@@ -304,12 +304,30 @@ function renderSearchResult(
 			const itemSearchEngine = resultSearchEngine(item);
 			const itemDate = formatDisplayDate(item.date);
 			const via = !searchEngine && itemSearchEngine && itemSearchEngine.toLowerCase() !== website?.toLowerCase() ? `via ${itemSearchEngine}` : undefined;
-			const meta = [
+			const collapsedMeta = expanded ? "" : [
 				via ? theme.fg("muted", via) : undefined,
 				itemDate ? theme.fg("muted", itemDate) : undefined,
 			].filter(Boolean).join(theme.fg("dim", " · "));
-			lines.push(`${INDENT}${theme.fg("syntaxNumber", `${index + 1}.`)} ${theme.fg("text", title)}${meta ? ` ${theme.fg("dim", "·")} ${meta}` : ""}`);
+			lines.push(`${INDENT}${theme.fg("syntaxNumber", `${index + 1}.`)} ${theme.fg("text", title)}${collapsedMeta ? ` ${theme.fg("dim", "·")} ${collapsedMeta}` : ""}`);
 			lines.push(`${INDENT}   ${renderedUrl}`);
+			if (expanded) {
+				const metadata = [
+					`rank ${item.rank ?? index + 1}`,
+					website,
+					itemSearchEngine ? `via ${itemSearchEngine}` : undefined,
+					itemDate,
+				].filter(Boolean).join(" · ");
+				if (metadata) lines.push(`${INDENT}   ${theme.fg("muted", metadata)}`);
+				const prefix = `${INDENT}   `;
+				const markerWidth = 2;
+				const available = Math.max(1, width - visibleWidth(prefix) - markerWidth);
+				for (const snippet of item.snippets.slice(0, 3)) {
+					const rows = wrapTextWithAnsi(theme.fg("dim", sanitizeSearchText(snippet, 900)), available);
+					for (const [rowIndex, row] of rows.entries()) {
+						lines.push(`${prefix}${theme.fg("muted", rowIndex === 0 ? "↳ " : "  ")}${row}`);
+					}
+				}
+			}
 		}
 		const shown = shownResults.length;
 		const remaining = Math.max(0, details.resultCount - shown);

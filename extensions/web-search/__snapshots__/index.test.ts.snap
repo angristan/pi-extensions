@@ -22,10 +22,14 @@ exports[`web search renderer expanded mixed-engine results retain per-result att
 [
   "<green>•</> <bold>Searched</> <dim>“</dim><accent>mixed sources</accent><dim>”</dim>",
   "  └ <green>2 results</><dim> · </dim><muted>via Mistral</muted><dim> · </dim><1s",
-  "    <syntaxNumber>1.</syntaxNumber> <text>Result 1</text> <dim>·</dim> <muted>via Brave</muted><dim> · </dim><muted>2026-04-21</muted>",
+  "    <syntaxNumber>1.</syntaxNumber> <text>Result 1</text>",
   "       <link:https://www.example1.com/article><muted>https://www.example1.com/article</muted></link>",
-  "    <syntaxNumber>2.</syntaxNumber> <text>Result 2</text> <dim>·</dim> <muted>via Bing</muted><dim> · </dim><muted>2026-04-21</muted>",
+  "       <muted>rank 1 · example1.com · via Brave · 2026-04-21</muted>",
+  "       <muted>↳ </muted><dim>Evidence 1</dim>",
+  "    <syntaxNumber>2.</syntaxNumber> <text>Result 2</text>",
   "       <link:https://www.example2.com/article><muted>https://www.example2.com/article</muted></link>",
+  "       <muted>rank 2 · example2.com · via Bing · 2026-04-21</muted>",
+  "       <muted>↳ </muted><dim>Evidence 2</dim>",
 ]
 `;
 

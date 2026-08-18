@@ -485,7 +485,7 @@ function createSearchDisplayDetails(result: WebSearchResult): SearchDisplayDetai
 		rank: item.rank,
 		date: formatDisplayDate(item.date),
 		description: item.description ? sanitizeSearchText(item.description, 600) : undefined,
-		snippets: uniqueSanitizedSnippets(item.snippets, 1),
+		snippets: uniqueSanitizedSnippets(item.snippets, MAX_SNIPPETS_PER_RESULT),
 		canOpen: item.canOpen ? undefined : false,
 	}));
 	const searchEngines = new Set(results.map((item) => item.searchEngine).filter((value): value is string => Boolean(value)));
