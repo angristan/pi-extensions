@@ -299,7 +299,7 @@ function renderSearchResult(
 			const url = resultUrl(item);
 			const label = sourceUrl(item);
 			const title = sanitizeSearchText(item.title ?? resultWebsite(item) ?? "Untitled result", 600);
-			const renderedUrl = url ? hyperlink(theme.fg("mdLink", label), url) : theme.fg("toolOutput", label);
+			const renderedUrl = url ? hyperlink(theme.fg("mdLink", label), url) : theme.fg("text", label);
 			const website = resultWebsite(item);
 			const itemSearchEngine = resultSearchEngine(item);
 			const itemDate = formatDisplayDate(item.date);
@@ -308,21 +308,21 @@ function renderSearchResult(
 				via ? theme.fg("muted", via) : undefined,
 				itemDate ? theme.fg("muted", itemDate) : undefined,
 			].filter(Boolean).join(theme.fg("dim", " · "));
-			lines.push(`${INDENT}${theme.fg("syntaxNumber", `${index + 1}.`)} ${theme.fg("text", title)}${collapsedMeta ? ` ${theme.fg("dim", "·")} ${collapsedMeta}` : ""}`);
+			lines.push(`${INDENT}${theme.fg("muted", `${index + 1}.`)} ${theme.fg("text", title)}${collapsedMeta ? ` ${theme.fg("dim", "·")} ${collapsedMeta}` : ""}`);
 			lines.push(`${INDENT}   ${renderedUrl}`);
 			if (expanded) {
 				const metadata = [
 					via,
 					itemDate,
 				].filter(Boolean).join(theme.fg("dim", " · "));
-				if (metadata) lines.push(`${INDENT}   ${theme.fg("muted", metadata)}`);
+				if (metadata) lines.push(`${INDENT}   ${theme.fg("dim", metadata)}`);
 				const prefix = `${INDENT}   `;
 				const markerWidth = 2;
 				const available = Math.max(1, width - visibleWidth(prefix) - markerWidth);
 				for (const snippet of item.snippets.slice(0, 3)) {
-					const rows = wrapTextWithAnsi(theme.fg("toolOutput", sanitizeSearchText(snippet, 900)), available);
+					const rows = wrapTextWithAnsi(theme.fg("dim", sanitizeSearchText(snippet, 900)), available);
 					for (const [rowIndex, row] of rows.entries()) {
-						lines.push(`${prefix}${theme.fg("accent", rowIndex === 0 ? "↳ " : "  ")}${row}`);
+						lines.push(`${prefix}${theme.fg("dim", rowIndex === 0 ? "↳ " : "  ")}${row}`);
 					}
 				}
 			}

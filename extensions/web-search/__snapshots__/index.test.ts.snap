@@ -4,15 +4,15 @@ exports[`web search renderer collapsed results use shared engine attribution and
 [
   "<green>•</> <bold>Searched</> <dim>“</dim><accent>Kimi pricing</accent><dim>”</dim>",
   "  └ <green>6 results</><dim> · </dim><muted>2026-04-01 → 2026-04-30</muted><dim> · </dim><muted>via Mistral/Brave</muted><dim> · </dim>1.2s",
-  "    <syntaxNumber>1.</syntaxNumber> <text>Result 1</text> <dim>·</dim> <muted>2026-04-21</muted>",
+  "    <muted>1.</muted> <text>Result 1</text> <dim>·</dim> <muted>2026-04-21</muted>",
   "       <link:https://www.example1.com/article><mdLink>https://www.example1.com/article</mdLink></link>",
-  "    <syntaxNumber>2.</syntaxNumber> <text>Result 2</text> <dim>·</dim> <muted>2026-04-21</muted>",
+  "    <muted>2.</muted> <text>Result 2</text> <dim>·</dim> <muted>2026-04-21</muted>",
   "       <link:https://www.example2.com/article><mdLink>https://www.example2.com/article</mdLink></link>",
-  "    <syntaxNumber>3.</syntaxNumber> <text>Result 3</text> <dim>·</dim> <muted>2026-04-21</muted>",
+  "    <muted>3.</muted> <text>Result 3</text> <dim>·</dim> <muted>2026-04-21</muted>",
   "       <link:https://www.example3.com/article><mdLink>https://www.example3.com/article</mdLink></link>",
-  "    <syntaxNumber>4.</syntaxNumber> <text>Result 4</text> <dim>·</dim> <muted>2026-04-21</muted>",
+  "    <muted>4.</muted> <text>Result 4</text> <dim>·</dim> <muted>2026-04-21</muted>",
   "       <link:https://www.example4.com/article><mdLink>https://www.example4.com/article</mdLink></link>",
-  "    <syntaxNumber>5.</syntaxNumber> <text>Result 5</text> <dim>·</dim> <muted>2026-04-21</muted>",
+  "    <muted>5.</muted> <text>Result 5</text> <dim>·</dim> <muted>2026-04-21</muted>",
   "       <link:https://www.example5.com/article><mdLink>https://www.example5.com/article</mdLink></link>",
   "    <muted>… 1 more · Ctrl+O to expand</muted>",
 ]
@@ -22,14 +22,14 @@ exports[`web search renderer expanded mixed-engine results retain per-result att
 [
   "<green>•</> <bold>Searched</> <dim>“</dim><accent>mixed sources</accent><dim>”</dim>",
   "  └ <green>2 results</><dim> · </dim><muted>via Mistral</muted><dim> · </dim><1s",
-  "    <syntaxNumber>1.</syntaxNumber> <text>Result 1</text>",
+  "    <muted>1.</muted> <text>Result 1</text>",
   "       <link:https://www.example1.com/article><mdLink>https://www.example1.com/article</mdLink></link>",
-  "       <muted>via Brave<dim> · </dim>2026-04-21</muted>",
-  "       <accent>↳ </accent><toolOutput>Evidence 1</toolOutput>",
-  "    <syntaxNumber>2.</syntaxNumber> <text>Result 2</text>",
+  "       <dim>via Brave<dim> · </dim>2026-04-21</dim>",
+  "       <dim>↳ </dim><dim>Evidence 1</dim>",
+  "    <muted>2.</muted> <text>Result 2</text>",
   "       <link:https://www.example2.com/article><mdLink>https://www.example2.com/article</mdLink></link>",
-  "       <muted>via Bing<dim> · </dim>2026-04-21</muted>",
-  "       <accent>↳ </accent><toolOutput>Evidence 2</toolOutput>",
+  "       <dim>via Bing<dim> · </dim>2026-04-21</dim>",
+  "       <dim>↳ </dim><dim>Evidence 2</dim>",
 ]
 `;
 

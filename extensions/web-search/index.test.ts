@@ -276,7 +276,7 @@ describe("web search renderer", () => {
 		expect(output.match(/via Exa/g)).toHaveLength(1);
 		expect(output).not.toContain("rank 1");
 		expect(output).not.toContain("example1.com ·");
-		expect(output).toContain("<accent>↳ </accent><toolOutput>Evidence 1</toolOutput>");
+		expect(output).toContain("<dim>↳ </dim><dim>Evidence 1</dim>");
 	});
 
 	test("expanded mixed-engine results retain per-result attribution", () => {
