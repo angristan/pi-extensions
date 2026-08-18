@@ -28,6 +28,13 @@ function requestHeaders(): Record<string, string> {
 	return headers;
 }
 
+function endpoint(tool: string): string {
+	if (tool !== "web_search_advanced_exa") return EXA_MCP_URL;
+	const url = new URL(EXA_MCP_URL);
+	url.searchParams.set("tools", tool);
+	return url.toString();
+}
+
 function parseMaybeSse(text: string): any {
 	if (!text.startsWith("event:") && !text.startsWith("data:")) return JSON.parse(text);
 	const data = text.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n").trim();
@@ -78,7 +85,7 @@ async function callExa(tool: string, args: Record<string, unknown>, options: Pro
 		const requestTimeoutMs = Math.max(1, Math.min(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, Math.floor(remainingBudgetMs)));
 		let response: Response;
 		try {
-			response = await fetch(EXA_MCP_URL, {
+			response = await fetch(endpoint(tool), {
 				method: "POST",
 				headers: requestHeaders(),
 				body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method: "tools/call", params: { name: tool, arguments: args } }),
@@ -163,41 +170,106 @@ export function parseExaSearchText(text: string): RagResult[] {
 	return results;
 }
 
+export function parseExaAdvancedSearchText(text: string): RagResult[] {
+	let payload: any;
+	try {
+		payload = JSON.parse(text);
+	} catch (error) {
+		throw new WebProviderError("Exa advanced search returned invalid JSON", { cause: error });
+	}
+	const seen = new Set<string>();
+	const results: RagResult[] = [];
+	for (const item of Array.isArray(payload?.results) ? payload.results : []) {
+		const url = canonicalResultUrl(String(item?.url ?? item?.id ?? ""));
+		if (!url || seen.has(url)) continue;
+		seen.add(url);
+		const snippets = Array.isArray(item?.highlights)
+			? item.highlights.filter((value: unknown): value is string => typeof value === "string" && Boolean(value.trim()))
+			: [];
+		results.push({
+			id: String(item?.id ?? url),
+			url,
+			title: typeof item?.title === "string" && item.title.trim() ? item.title.trim() : url,
+			description: snippets.join("\n\n") || null,
+			snippets,
+			date: typeof item?.publishedDate === "string" && item.publishedDate.trim() ? item.publishedDate.trim() : null,
+			rank: results.length + 1,
+			source: "exa",
+			metadata: null,
+			canOpen: true,
+		});
+	}
+	return results;
+}
+
 function boundedLimit(limit: number | undefined): number {
 	return Math.max(1, Math.min(20, Math.trunc(limit ?? 10)));
 }
 
-function datePhrase(startDate?: string, endDate?: string): string {
-	if (startDate && endDate) return ` published from ${startDate} through ${endDate}`;
-	if (startDate) return ` published on or after ${startDate}`;
-	if (endDate) return ` published on or before ${endDate}`;
-	return "";
+function cleanedDomains(values: string[] | undefined): string[] | undefined {
+	const domains = values?.map((value) => value.trim()).filter(Boolean);
+	return domains?.length ? domains : undefined;
 }
 
-function filterKnownDates(results: RagResult[], startDate?: string, endDate?: string): RagResult[] {
-	const start = startDate ? Date.parse(`${startDate}T00:00:00Z`) : undefined;
-	const end = endDate ? Date.parse(`${endDate}T23:59:59Z`) : undefined;
-	return results.filter((result) => {
-		if (!result.date || result.date === "N/A") return true;
-		const timestamp = Date.parse(result.date);
-		if (!Number.isFinite(timestamp)) return true;
-		return (start === undefined || timestamp >= start) && (end === undefined || timestamp <= end);
-	}).map((result, index) => ({ ...result, rank: index + 1 }));
+function usesAdvancedSearch(args: WebSearchArgs): boolean {
+	return Boolean(
+		args.startDate
+		|| args.endDate
+		|| args.category
+		|| cleanedDomains(args.includeDomains)
+		|| cleanedDomains(args.excludeDomains)
+		|| args.maxAgeHours !== undefined,
+	);
+}
+
+function publicationBoundary(date: string, endExclusive: boolean): string {
+	const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+	if (!match) return date;
+	const timestamp = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + (endExclusive ? 1 : 0));
+	return new Date(timestamp).toISOString();
+}
+
+function advancedSearchArgs(args: WebSearchArgs, query: string, limit: number): Record<string, unknown> {
+	const includeDomains = cleanedDomains(args.includeDomains);
+	const excludeDomains = cleanedDomains(args.excludeDomains);
+	const restrictedCategory = args.category === "company" || args.category === "people";
+	return {
+		query,
+		numResults: limit,
+		type: "auto",
+		...(args.category ? { category: args.category } : {}),
+		...(includeDomains ? { includeDomains } : {}),
+		...(!restrictedCategory && excludeDomains ? { excludeDomains } : {}),
+		...(!restrictedCategory && args.startDate ? { startPublishedDate: publicationBoundary(args.startDate, false) } : {}),
+		...(!restrictedCategory && args.endDate ? { endPublishedDate: publicationBoundary(args.endDate, true) } : {}),
+		...(args.maxAgeHours !== undefined ? { maxAgeHours: args.maxAgeHours } : {}),
+		// The hosted advanced MCP wrapper always requests text. Keep that side
+		// channel bounded, then expose only source-grounded highlights to the model.
+		textMaxCharacters: 2_000,
+		enableHighlights: true,
+		highlightsQuery: query,
+	};
 }
 
 export async function searchExaWeb(args: WebSearchArgs, options: ProviderOptions = {}): Promise<WebSearchResult> {
 	const query = args.query.trim();
 	const limit = boundedLimit(args.limit);
-	const enriched = `${query}${datePhrase(args.startDate, args.endDate)}`;
-	const response = await callExa("web_search_exa", { query: enriched, numResults: limit }, options);
+	const advanced = usesAdvancedSearch(args);
+	const response = advanced
+		? await callExa("web_search_advanced_exa", advancedSearchArgs(args, query, limit), options)
+		: await callExa("web_search_exa", { query, numResults: limit }, options);
 	return {
 		provider: "exa",
 		tool: "web_search",
 		query,
 		startDate: args.startDate,
 		endDate: args.endDate,
+		category: args.category,
+		includeDomains: cleanedDomains(args.includeDomains),
+		excludeDomains: cleanedDomains(args.excludeDomains),
+		maxAgeHours: args.maxAgeHours,
 		limit,
-		results: filterKnownDates(parseExaSearchText(response.text), args.startDate, args.endDate).slice(0, limit),
+		results: (advanced ? parseExaAdvancedSearchText(response.text) : parseExaSearchText(response.text)).slice(0, limit),
 		elapsedMs: response.elapsedMs,
 	};
 }

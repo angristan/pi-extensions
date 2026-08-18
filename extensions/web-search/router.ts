@@ -45,6 +45,77 @@ function failureMessage(label: string, attempts: ProviderAttempt[]): string {
 	return `${label} failed: ${failures.map((attempt) => `${attempt.provider}: ${attempt.error}`).join("; ") || "no provider available"}`;
 }
 
+interface DomainRule {
+	host: string;
+	path: string;
+	wildcard: boolean;
+}
+
+function domainRule(value: string): DomainRule | undefined {
+	let raw = value.trim().toLowerCase();
+	if (!raw) return undefined;
+	const wildcard = raw.startsWith("*.");
+	if (wildcard) raw = raw.slice(2);
+	try {
+		const parsed = new URL(raw.includes("://") ? raw : `https://${raw}`);
+		const path = parsed.pathname.replace(/\/$/, "");
+		return { host: parsed.hostname, path: path === "/" ? "" : path, wildcard };
+	} catch {
+		return undefined;
+	}
+}
+
+function matchesDomain(url: string | null, rule: DomainRule): boolean {
+	if (!url) return false;
+	try {
+		const parsed = new URL(url);
+		const host = parsed.hostname.toLowerCase();
+		const hostMatches = rule.wildcard ? host.endsWith(`.${rule.host}`) : host === rule.host || host.endsWith(`.${rule.host}`);
+		if (!hostMatches || !rule.path) return hostMatches;
+		return parsed.pathname === rule.path || parsed.pathname.startsWith(`${rule.path}/`);
+	} catch {
+		return false;
+	}
+}
+
+function knownDateInRange(date: string | null, startDate?: string, endDate?: string): boolean {
+	if (!date || /^(?:n\/?a|none|null|unknown)$/i.test(date.trim())) return true;
+	const timestamp = Date.parse(date);
+	if (!Number.isFinite(timestamp)) return true;
+	const start = startDate ? Date.parse(`${startDate}T00:00:00Z`) : undefined;
+	const end = endDate ? Date.parse(`${endDate}T23:59:59.999Z`) : undefined;
+	return (start === undefined || timestamp >= start) && (end === undefined || timestamp <= end);
+}
+
+function cleanedDomains(values: string[] | undefined): string[] | undefined {
+	const domains = values?.map((value) => value.trim()).filter(Boolean);
+	return domains?.length ? domains : undefined;
+}
+
+export function applySearchFilters(result: WebSearchResult, args: WebSearchArgs): WebSearchResult {
+	const includeDomains = cleanedDomains(args.includeDomains);
+	const excludeDomains = cleanedDomains(args.excludeDomains);
+	const includeRules = includeDomains?.map(domainRule).filter((rule): rule is DomainRule => Boolean(rule)) ?? [];
+	const excludeRules = excludeDomains?.map(domainRule).filter((rule): rule is DomainRule => Boolean(rule)) ?? [];
+	const hasIncludeConstraint = Boolean(includeDomains?.length);
+	const results = result.results
+		.filter((item) => !hasIncludeConstraint || includeRules.some((rule) => matchesDomain(item.url, rule)))
+		.filter((item) => !excludeRules.some((rule) => matchesDomain(item.url, rule)))
+		.filter((item) => knownDateInRange(item.date, args.startDate, args.endDate))
+		.map((item, index) => ({ ...item, rank: index + 1 }));
+	return {
+		...result,
+		query: args.query.trim(),
+		startDate: args.startDate,
+		endDate: args.endDate,
+		category: args.category,
+		includeDomains,
+		excludeDomains,
+		maxAgeHours: args.maxAgeHours,
+		results,
+	};
+}
+
 export async function routeSearch<T extends WebSearchResult>(
 	providers: WebProvider[],
 	call: (provider: WebProvider) => Promise<T>,
@@ -96,10 +167,13 @@ export function openProviderOrder(url: string, preferredProvider?: string): WebP
 }
 
 export async function searchWeb(args: WebSearchArgs, options: ProviderOptions = {}): Promise<WebSearchResult> {
-	return routeSearch(webProviderOrder(args.provider), (provider) => {
-		if (provider === "exa") return searchExaWeb(args, options);
-		if (provider === "firecrawl") return searchFirecrawlWeb(args, options);
-		return searchMistralWeb(args, options);
+	return routeSearch(webProviderOrder(args.provider), async (provider) => {
+		const result = provider === "exa"
+			? await searchExaWeb(args, options)
+			: provider === "firecrawl"
+				? await searchFirecrawlWeb(args, options)
+				: await searchMistralWeb(args, options);
+		return applySearchFilters(result, args);
 	});
 }
 

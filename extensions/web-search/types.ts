@@ -1,4 +1,5 @@
 export type WebProvider = "exa" | "firecrawl" | "mistral";
+export type WebSearchCategory = "news" | "pdf" | "publication" | "company" | "people" | "personal site" | "financial report";
 export type AttemptStatus = "success" | "empty" | "failed" | "skipped";
 
 export interface ProviderAttempt {
@@ -28,6 +29,10 @@ interface SearchResultBase {
 	query: string;
 	startDate?: string;
 	endDate?: string;
+	category?: WebSearchCategory;
+	includeDomains?: string[];
+	excludeDomains?: string[];
+	maxAgeHours?: number;
 	limit: number;
 	results: RagResult[];
 	elapsedMs: number;
@@ -70,6 +75,10 @@ export interface SearchDisplayDetails {
 	query?: string;
 	startDate?: string;
 	endDate?: string;
+	category?: WebSearchCategory;
+	includeDomains?: string[];
+	excludeDomains?: string[];
+	maxAgeHours?: number;
 	provider?: WebProvider;
 	attempts?: ProviderAttempt[];
 	creditsUsed?: number;
@@ -95,6 +104,10 @@ export interface WebSearchArgs {
 	query: string;
 	startDate?: string;
 	endDate?: string;
+	category?: WebSearchCategory;
+	includeDomains?: string[];
+	excludeDomains?: string[];
+	maxAgeHours?: number;
 	limit?: number;
 	/** Optional provider to try first before continuing through the normal fallback route. */
 	provider?: string;

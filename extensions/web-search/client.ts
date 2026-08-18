@@ -445,6 +445,10 @@ export function formatSearchResults(result: WebSearchResult): string {
 	if (result.creditsUsed) lines.push(`credits_used: ${result.creditsUsed}`);
 	if (result.startDate) lines.push(`start_date: ${shorten(result.startDate, MAX_DATE_CHARS)}`);
 	if (result.endDate) lines.push(`end_date: ${shorten(result.endDate, MAX_DATE_CHARS)}`);
+	if (result.category) lines.push(`category: ${shorten(result.category, MAX_SOURCE_CHARS)}`);
+	if (result.includeDomains?.length) lines.push(`include_domains: ${JSON.stringify(result.includeDomains.map((value) => shorten(value, MAX_URL_CHARS)))}`);
+	if (result.excludeDomains?.length) lines.push(`exclude_domains: ${JSON.stringify(result.excludeDomains.map((value) => shorten(value, MAX_URL_CHARS)))}`);
+	if (result.maxAgeHours !== undefined) lines.push(`max_age_hours: ${result.maxAgeHours}`);
 	lines.push("", "results:");
 	if (result.results.length === 0) {
 		lines.push("No results returned.");
@@ -489,6 +493,10 @@ function createSearchDisplayDetails(result: WebSearchResult): SearchDisplayDetai
 		query: sanitizeSearchText(result.query, MAX_QUERY_CHARS),
 		startDate: result.startDate ? sanitizeSearchText(result.startDate, MAX_DATE_CHARS) : undefined,
 		endDate: result.endDate ? sanitizeSearchText(result.endDate, MAX_DATE_CHARS) : undefined,
+		category: result.category,
+		includeDomains: result.includeDomains?.map((value) => sanitizeSearchText(value, MAX_URL_CHARS)),
+		excludeDomains: result.excludeDomains?.map((value) => sanitizeSearchText(value, MAX_URL_CHARS)),
+		maxAgeHours: result.maxAgeHours,
 		provider: result.provider,
 		attempts: result.attempts?.map((attempt) => ({
 			...attempt,

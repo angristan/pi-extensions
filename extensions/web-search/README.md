@@ -19,8 +19,22 @@ open_url    Exa → Firecrawl (when configured) → Mistral (when configured)
 ```
 
 The same default provider order is used for web search and URL opening.
-Mistral article IDs are still opened with Mistral directly when
-configured.
+Mistral article IDs are still opened with Mistral directly when configured.
+
+Unfiltered queries use Exa's basic search. Supplying publication dates, a
+category, domain filters, or `maxAgeHours` automatically selects Exa advanced
+search. The public `web_search` schema supports:
+
+- inclusive `startDate` and `endDate` bounds
+- `news`, `pdf`, `publication`, `company`, `people`, `personal site`, and
+  `financial report` categories
+- `includeDomains` and `excludeDomains`, including domain/path prefixes
+- `maxAgeHours` (`0` for live crawl, `-1` for cache only)
+
+GitHub is intentionally not a category: use the authenticated `gh` CLI for
+anything on GitHub. Exa applies supported filters natively. Domain and known-date
+constraints are enforced again after every provider response, including
+fallbacks; category and freshness controls are best effort outside Exa.
 
 Fallbacks happen after timeouts, rate limits, server failures, blocked pages,
 empty content, or empty search results. Exa has up to six HTTP 429 retry slots,
@@ -53,12 +67,12 @@ Each tool also accepts an optional `provider` argument (`exa`, `firecrawl`, or
 win over environment overrides, but unavailable providers are skipped and the
 normal fallback route continues.
 
-Use `/web-status` to inspect effective routes, keyed availability, and providers
-temporarily paused after rate limiting. Credential values are never shown.
+Use `/web-status` to inspect effective routes and keyed availability.
+Credential values are never shown.
 
 ## Fetch policy
 
-Stop when search snippets provide enough evidence. Open only sources needed to
+Stop when search highlights provide enough evidence. Open only sources needed to
 close a specific evidence gap. For HTML, use targeted local `ax` extraction for
 specific facts or bounded Markdown for broad reading. Use `curl` for
 protocol-level HTTP diagnostics such as
@@ -70,9 +84,12 @@ batch `open_url` as the initial HTML fetch.
 ## Results
 
 Agent-facing content and human-facing display details are bounded separately.
-Search output truncates only between complete records. Page output is capped at
-50KB and 2,000 lines. Remote text is stripped of terminal controls, unsafe URLs
-are rejected, and result URLs are normalized and deduplicated.
+Basic and advanced Exa searches return source highlights. Advanced full text is
+bounded in transit and discarded before model context; summaries and subpages
+are not requested. Search output truncates only between complete records. Page
+output is capped at 50KB and 2,000 lines. Remote text is stripped of terminal
+controls, unsafe URLs are rejected, and result URLs are normalized and
+deduplicated.
 
 Provider attempts and reported credit usage are retained in bounded result
 details. Search headlines accent the query inside dim quotation marks. Result

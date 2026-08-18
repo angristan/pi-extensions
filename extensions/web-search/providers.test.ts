@@ -1,6 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { WebProviderError } from "./provider-error";
-import { parseExaSearchText, searchExaWeb } from "./providers/exa";
+import { parseExaAdvancedSearchText, parseExaSearchText, searchExaWeb } from "./providers/exa";
 import { dateFilter, parseFirecrawlItems } from "./providers/firecrawl";
 
 describe("provider normalization", () => {
@@ -23,6 +23,106 @@ describe("provider normalization", () => {
 			rank: 1,
 		});
 		expect(results[1]?.rank).toBe(2);
+	});
+
+	test("parses advanced highlights without retaining full page text", () => {
+		const results = parseExaAdvancedSearchText(JSON.stringify({
+			results: [{
+				id: "https://example.com/docs",
+				url: "https://example.com/docs",
+				title: "Docs",
+				publishedDate: "2026-08-18T00:00:00.000Z",
+				text: "full page text must not enter context",
+				highlights: ["Grounded source evidence."],
+			}],
+		}));
+		expect(results[0]).toMatchObject({
+			url: "https://example.com/docs",
+			title: "Docs",
+			date: "2026-08-18T00:00:00.000Z",
+			snippets: ["Grounded source evidence."],
+		});
+		expect(JSON.stringify(results)).not.toContain("full page text");
+	});
+
+	test("uses advanced Exa search for native filters with unbounded highlights", async () => {
+		const previousFetch = globalThis.fetch;
+		let requestUrl = "";
+		let requestBody: any;
+		globalThis.fetch = (async (input, init) => {
+			requestUrl = String(input);
+			requestBody = JSON.parse(String(init?.body));
+			return new Response(JSON.stringify({
+				jsonrpc: "2.0",
+				result: { content: [{ type: "text", text: JSON.stringify({ results: [{
+					url: "https://reuters.com/article",
+					title: "Article",
+					publishedDate: "2026-08-18",
+					text: "discarded full text",
+					highlights: ["Source highlight."],
+				}] }) }] },
+			}), { headers: { "Content-Type": "application/json" } });
+		}) as typeof fetch;
+		try {
+			const result = await searchExaWeb({
+				query: "AI policy announcement",
+				startDate: "2026-08-01",
+				endDate: "2026-08-18",
+				category: "news",
+				includeDomains: [" reuters.com "],
+				excludeDomains: ["example.com"],
+				maxAgeHours: 0,
+				limit: 5,
+			});
+			expect(new URL(requestUrl).searchParams.get("tools")).toBe("web_search_advanced_exa");
+			expect(requestUrl).not.toContain("exaApiKey");
+			expect(requestBody.params.name).toBe("web_search_advanced_exa");
+			expect(requestBody.params.arguments).toMatchObject({
+				query: "AI policy announcement",
+				numResults: 5,
+				type: "auto",
+				category: "news",
+				includeDomains: ["reuters.com"],
+				excludeDomains: ["example.com"],
+				startPublishedDate: "2026-08-01T00:00:00.000Z",
+				endPublishedDate: "2026-08-19T00:00:00.000Z",
+				maxAgeHours: 0,
+				textMaxCharacters: 2_000,
+				enableHighlights: true,
+				highlightsQuery: "AI policy announcement",
+			});
+			expect(requestBody.params.arguments).not.toHaveProperty("enableSummary");
+			expect(requestBody.params.arguments).not.toHaveProperty("highlightsMaxCharacters");
+			expect(result.results[0]?.snippets).toEqual(["Source highlight."]);
+			expect(JSON.stringify(result)).not.toContain("discarded full text");
+		} finally {
+			globalThis.fetch = previousFetch;
+		}
+	});
+
+	test("defers unsupported company filters to local enforcement", async () => {
+		const previousFetch = globalThis.fetch;
+		let requestArguments: Record<string, unknown> = {};
+		globalThis.fetch = (async (_input, init) => {
+			requestArguments = JSON.parse(String(init?.body)).params.arguments;
+			return new Response(JSON.stringify({
+				jsonrpc: "2.0",
+				result: { content: [{ type: "text", text: JSON.stringify({ results: [] }) }] },
+			}), { headers: { "Content-Type": "application/json" } });
+		}) as typeof fetch;
+		try {
+			await searchExaWeb({
+				query: "European AI companies",
+				category: "company",
+				startDate: "2026-01-01",
+				excludeDomains: ["linkedin.com"],
+			});
+			expect(requestArguments.category).toBe("company");
+			expect(requestArguments).not.toHaveProperty("startPublishedDate");
+			expect(requestArguments).not.toHaveProperty("excludeDomains");
+		} finally {
+			globalThis.fetch = previousFetch;
+		}
 	});
 
 	test("sends configured Exa credentials only in the request header", async () => {

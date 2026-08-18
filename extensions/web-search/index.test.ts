@@ -12,10 +12,12 @@ class Container {
 
 mock.module("typebox", () => ({
 	Type: {
+		Array: (items: unknown, options: Record<string, unknown>) => ({ ...options, items }),
 		Integer: (options: unknown) => options,
 		Object: (shape: unknown) => shape,
 		Optional: (value: unknown) => value,
 		String: (options: unknown) => options,
+		Unsafe: (schema: unknown) => schema,
 	},
 }));
 const testVisibleWidth = (text: string) => text
@@ -138,6 +140,20 @@ describe("web tool prompt guidance", () => {
 		expect(text).not.toContain("ax or open_url");
 		expect(text).not.toContain("provider unset");
 		expect(openUrl.parameters.url.description).not.toContain("returned by web_search");
+		expect(Object.keys(webSearch.parameters)).toEqual([
+			"query",
+			"startDate",
+			"endDate",
+			"category",
+			"includeDomains",
+			"excludeDomains",
+			"maxAgeHours",
+			"limit",
+			"provider",
+		]);
+		expect(webSearch.parameters.category.enum).toContain("news");
+		expect(webSearch.parameters.category.enum).not.toContain("github");
+		expect(webSearch.parameters.maxAgeHours.minimum).toBe(-1);
 		for (const tool of [webSearch, openUrl]) {
 			expect(tool.parameters.provider.description).toContain("Leave unset unless a provider-specific retry is needed");
 		}

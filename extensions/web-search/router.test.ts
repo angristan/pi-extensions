@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { WebProviderError } from "./provider-error";
 import {
+	applySearchFilters,
 	openProviderOrder,
 	routeSearch,
 	webProviderOrder,
@@ -53,6 +54,34 @@ function result(provider: WebProvider, count = 1): WebSearchResult {
 }
 
 describe("provider router", () => {
+	test("enforces domain paths and known dates after provider search", () => {
+		const unfiltered = result("firecrawl", 0);
+		unfiltered.results = [
+			{ ...result("firecrawl").results[0]!, url: "https://docs.example.com/api/guide", date: "2026-08-12", rank: 8 },
+			{ ...result("firecrawl").results[0]!, url: "https://example.com/blog", date: "2026-08-12", rank: 9 },
+			{ ...result("firecrawl").results[0]!, url: "https://blocked.example.com/api/guide", date: "2026-08-12", rank: 10 },
+			{ ...result("firecrawl").results[0]!, url: "https://example.com/api/old", date: "2025-01-01", rank: 11 },
+		];
+		const filtered = applySearchFilters(unfiltered, {
+			query: "API guide",
+			startDate: "2026-08-01",
+			endDate: "2026-08-18",
+			category: "publication",
+			includeDomains: ["example.com/api"],
+			excludeDomains: ["blocked.example.com"],
+			maxAgeHours: 24,
+		});
+		expect(filtered.results.map((item) => item.url)).toEqual(["https://docs.example.com/api/guide"]);
+		expect(filtered.results[0]?.rank).toBe(1);
+		expect(filtered).toMatchObject({
+			query: "API guide",
+			category: "publication",
+			includeDomains: ["example.com/api"],
+			excludeDomains: ["blocked.example.com"],
+			maxAgeHours: 24,
+		});
+	});
+
 	test("falls back sequentially and records each attempt", async () => {
 		const calls: WebProvider[] = [];
 		const routed = await routeSearch(["exa", "firecrawl"], async (provider) => {

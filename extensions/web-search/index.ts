@@ -1,3 +1,4 @@
+import { StringEnum } from "@earendil-works/pi-ai";
 import { type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Container, hyperlink, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
@@ -25,10 +26,24 @@ const providerPreferenceSchema = Type.Optional(Type.String({
 const webSearchSchema = Type.Object({
 	query: Type.String({
 		minLength: 1,
-		description: "Keyword web-search query. Include concrete dates for relative terms like latest, today, or this week.",
+		description: "Natural-language description of the ideal page. Include concrete dates for relative terms like latest, today, or this week.",
 	}),
-	startDate: Type.Optional(Type.String({ description: "Optional lower date bound in YYYY-MM-DD format." })),
-	endDate: Type.Optional(Type.String({ description: "Optional upper date bound in YYYY-MM-DD format." })),
+	startDate: Type.Optional(Type.String({ description: "Optional inclusive lower publication-date bound in YYYY-MM-DD format." })),
+	endDate: Type.Optional(Type.String({ description: "Optional inclusive upper publication-date bound in YYYY-MM-DD format." })),
+	category: Type.Optional(StringEnum(["news", "pdf", "publication", "company", "people", "personal site", "financial report"] as const, {
+		description: "Optional result category. For anything on GitHub, use the gh CLI instead.",
+	})),
+	includeDomains: Type.Optional(Type.Array(Type.String(), {
+		minItems: 1,
+		maxItems: 20,
+		description: "Optional domains or domain/path prefixes to include, for example ['arxiv.org', 'docs.example.com/api'].",
+	})),
+	excludeDomains: Type.Optional(Type.Array(Type.String(), {
+		minItems: 1,
+		maxItems: 20,
+		description: "Optional domains or domain/path prefixes to exclude.",
+	})),
+	maxAgeHours: Type.Optional(Type.Integer({ minimum: -1, description: "Maximum cached-content age in hours. Use 0 for live crawl or -1 for cache only." })),
 	limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20, default: 10, description: "Number of search results to return. Defaults to 10." })),
 	provider: providerPreferenceSchema,
 });
@@ -91,9 +106,14 @@ function providerPreference(value: unknown): string | undefined {
 function searchDetail(args: WebSearchArgs | undefined, theme: Theme, details?: SearchDisplayDetails): string {
 	const query = compactQuery(args?.query ?? details?.query);
 	const dates = [compactFilter(args?.startDate ?? details?.startDate), compactFilter(args?.endDate ?? details?.endDate)].filter(Boolean).join(" → ");
+	const category = compactFilter(args?.category ?? details?.category);
+	const included = (args?.includeDomains ?? details?.includeDomains)?.map(compactFilter).filter(Boolean).join(", ");
+	const excluded = (args?.excludeDomains ?? details?.excludeDomains)?.map(compactFilter).filter(Boolean).join(", ");
+	const maxAgeHours = args?.maxAgeHours ?? details?.maxAgeHours;
+	const freshness = maxAgeHours === 0 ? "live" : maxAgeHours === -1 ? "cache only" : maxAgeHours !== undefined ? `≤${maxAgeHours}h old` : undefined;
 	const provider = providerPreference(args?.provider);
 	const quotedQuery = query ? `${theme.fg("dim", "“")}${theme.fg("accent", query)}${theme.fg("dim", "”")}` : undefined;
-	return [quotedQuery, dates || undefined, provider].filter(Boolean).join(" · ");
+	return [quotedQuery, dates || undefined, category, included ? `in ${included}` : undefined, excluded ? `not ${excluded}` : undefined, freshness, provider].filter(Boolean).join(" · ");
 }
 
 function sanitizedError(text: string, fallback: string): string {
@@ -361,7 +381,7 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 		name: "web_search",
 		label: "Web Search",
 		description:
-			"Search the web through a quality-routed provider chain. Returns bounded structured results with URLs, titles, unique snippets, ranks, websites, provider attempts, and source metadata; it does not generate a final answer.",
+			"Search the web through a quality-routed provider chain. Supports publication dates, categories, domain filters, and freshness controls. Returns bounded source highlights with URLs, titles, ranks, websites, provider attempts, and source metadata; it does not generate a final answer.",
 		promptSnippet: "Search the web through quality-routed providers and return structured results",
 		promptGuidelines: [
 			"Use web_search for current external information and prefer official or primary sources.",
