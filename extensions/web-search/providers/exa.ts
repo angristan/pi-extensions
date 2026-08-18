@@ -18,12 +18,14 @@ const RATE_LIMIT_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 32_000] 
 const RATE_LIMIT_RETRY_BUDGET_MS = 30_000;
 const RATE_LIMIT_JITTER_MS = 500;
 
-function endpoint(): string {
+function requestHeaders(): Record<string, string> {
+	const headers: Record<string, string> = {
+		Accept: "application/json, text/event-stream",
+		"Content-Type": "application/json",
+	};
 	const key = process.env.EXA_API_KEY?.trim();
-	if (!key) return EXA_MCP_URL;
-	const url = new URL(EXA_MCP_URL);
-	url.searchParams.set("exaApiKey", key);
-	return url.toString();
+	if (key) headers["x-api-key"] = key;
+	return headers;
 }
 
 function parseMaybeSse(text: string): any {
@@ -31,6 +33,16 @@ function parseMaybeSse(text: string): any {
 	const data = text.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n").trim();
 	if (!data) throw new WebProviderError("Exa returned an empty SSE payload");
 	return JSON.parse(data);
+}
+
+function mcpToolError(text: string): WebProviderError {
+	const detail = text.slice(0, 500) || "Unknown tool failure";
+	const status = Number(/\b([45]\d{2})\b/.exec(detail)?.[1]);
+	const knownStatus = Number.isInteger(status) ? status : undefined;
+	return new WebProviderError(`Exa MCP tool error: ${detail}`, {
+		status: knownStatus,
+		retriable: knownStatus === undefined || knownStatus === 408 || knownStatus === 429 || knownStatus >= 500,
+	});
 }
 
 function retryAfterMs(response: Response): number | undefined {
@@ -66,9 +78,9 @@ async function callExa(tool: string, args: Record<string, unknown>, options: Pro
 		const requestTimeoutMs = Math.max(1, Math.min(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, Math.floor(remainingBudgetMs)));
 		let response: Response;
 		try {
-			response = await fetch(endpoint(), {
+			response = await fetch(EXA_MCP_URL, {
 				method: "POST",
-				headers: { Accept: "application/json, text/event-stream", "Content-Type": "application/json" },
+				headers: requestHeaders(),
 				body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method: "tools/call", params: { name: tool, arguments: args } }),
 				signal: combineSignals(options.signal, requestTimeoutMs),
 			});
@@ -105,6 +117,7 @@ async function callExa(tool: string, args: Record<string, unknown>, options: Pro
 			.map((part: any) => part.text)
 			.join("\n")
 			.trim();
+		if (payload?.result?.isError === true) throw mcpToolError(text);
 		return { text, elapsedMs: performance.now() - started };
 	}
 }

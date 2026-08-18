@@ -171,7 +171,7 @@ function reuseOrCreate(context: ToolRenderContext): SearchLines {
 	return existing instanceof SearchLines ? existing : new SearchLines();
 }
 
-// Headline row shared by the three tools:
+// Headline row shared by both tools:
 //   {LEAD}{• magenta|green|red} {BOLD}{verb}{RESET} {detail}
 // `verb` is present/progressive while partial ("Searching"), past once done.
 function headlineRow(partial: boolean, isError: boolean, verb: string, detail: string): string {

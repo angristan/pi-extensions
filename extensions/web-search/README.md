@@ -32,8 +32,9 @@ Future calls try Exa again without a cross-request cooldown.
 ## Access
 
 Exa supports anonymous access, with `EXA_API_KEY` available for higher service
-limits. Anonymous retries are independent in each process, so jitter reduces
-collisions between concurrent sessions without requiring shared state.
+limits. When configured, the key is sent in the `x-api-key` request header and
+never placed in the MCP URL. Anonymous retries are independent in each process,
+so jitter reduces collisions between concurrent sessions without shared state.
 Firecrawl is credential-gated to avoid flaky shared-IP keyless limits;
 set `FIRECRAWL_API_KEY` before it appears in routes.
 

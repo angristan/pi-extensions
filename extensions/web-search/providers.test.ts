@@ -1,4 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
+import { WebProviderError } from "./provider-error";
 import { parseExaSearchText, searchExaWeb } from "./providers/exa";
 import { dateFilter, parseFirecrawlItems } from "./providers/firecrawl";
 
@@ -22,6 +23,56 @@ describe("provider normalization", () => {
 			rank: 1,
 		});
 		expect(results[1]?.rank).toBe(2);
+	});
+
+	test("sends configured Exa credentials only in the request header", async () => {
+		const previousFetch = globalThis.fetch;
+		const previousApiKey = process.env.EXA_API_KEY;
+		let requestUrl = "";
+		let requestApiKey: string | null = null;
+		globalThis.fetch = (async (input, init) => {
+			requestUrl = String(input);
+			requestApiKey = new Headers(init?.headers).get("x-api-key");
+			return new Response(JSON.stringify({
+				jsonrpc: "2.0",
+				result: { content: [{ type: "text", text: "Title: Docs\nURL: https://example.com/docs\nHighlights:\nOfficial docs." }] },
+			}), { headers: { "Content-Type": "application/json" } });
+		}) as typeof fetch;
+		try {
+			process.env.EXA_API_KEY = "test-exa-key";
+			await searchExaWeb({ query: "credential transport" });
+			expect(requestUrl).toBe("https://mcp.exa.ai/mcp");
+			expect(requestUrl).not.toContain("test-exa-key");
+			expect(requestApiKey).toBe("test-exa-key");
+		} finally {
+			globalThis.fetch = previousFetch;
+			if (previousApiKey === undefined) delete process.env.EXA_API_KEY;
+			else process.env.EXA_API_KEY = previousApiKey;
+		}
+	});
+
+	test("throws MCP tool error results instead of treating them as empty success", async () => {
+		const previousFetch = globalThis.fetch;
+		globalThis.fetch = (async () => new Response(JSON.stringify({
+			jsonrpc: "2.0",
+			result: {
+				content: [{ type: "text", text: "web_search_exa error (400): invalid filter" }],
+				isError: true,
+			},
+		}), { headers: { "Content-Type": "application/json" } })) as typeof fetch;
+		try {
+			let caught: unknown;
+			try {
+				await searchExaWeb({ query: "invalid request" });
+			} catch (error) {
+				caught = error;
+			}
+			expect(caught).toBeInstanceOf(WebProviderError);
+			expect(caught).toMatchObject({ status: 400, retriable: false });
+			expect((caught as Error).message).toContain("invalid filter");
+		} finally {
+			globalThis.fetch = previousFetch;
+		}
 	});
 
 	test("retries Exa rate limits six times before succeeding", async () => {
