@@ -1,5 +1,5 @@
 import { StringEnum } from "@earendil-works/pi-ai";
-import { type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { keyHint, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Container, hyperlink, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 // Reuse better-native-pi's palette and helpers so the search rows are
@@ -105,15 +105,7 @@ function providerPreference(value: unknown): string | undefined {
 
 function searchDetail(args: WebSearchArgs | undefined, theme: Theme, details?: SearchDisplayDetails): string {
 	const query = compactQuery(args?.query ?? details?.query);
-	const dates = [compactFilter(args?.startDate ?? details?.startDate), compactFilter(args?.endDate ?? details?.endDate)].filter(Boolean).join(" → ");
-	const category = compactFilter(args?.category ?? details?.category);
-	const included = (args?.includeDomains ?? details?.includeDomains)?.map(compactFilter).filter(Boolean).join(", ");
-	const excluded = (args?.excludeDomains ?? details?.excludeDomains)?.map(compactFilter).filter(Boolean).join(", ");
-	const maxAgeHours = args?.maxAgeHours ?? details?.maxAgeHours;
-	const freshness = maxAgeHours === 0 ? "live" : maxAgeHours === -1 ? "cache only" : maxAgeHours !== undefined ? `≤${maxAgeHours}h old` : undefined;
-	const provider = providerPreference(args?.provider);
-	const quotedQuery = query ? `${theme.fg("dim", "“")}${theme.fg("accent", query)}${theme.fg("dim", "”")}` : undefined;
-	return [quotedQuery, dates || undefined, category, included ? `in ${included}` : undefined, excluded ? `not ${excluded}` : undefined, freshness, provider].filter(Boolean).join(" · ");
+	return query ? `${theme.fg("dim", "“")}${theme.fg("accent", query)}${theme.fg("dim", "”")}` : "";
 }
 
 function sanitizedError(text: string, fallback: string): string {
@@ -229,10 +221,19 @@ function formatBytes(bytes: number): string {
 function searchSummary(details: SearchDisplayDetails, searchEngine: string | undefined, theme: Theme): string {
 	const count = details.resultCount === 0 ? "No results" : `${details.resultCount} ${details.resultCount === 1 ? "result" : "results"}`;
 	const elapsed = typeof details.elapsedMs === "number" ? formatElapsed(details.elapsedMs) : "done";
+	const dates = [compactFilter(details.startDate), compactFilter(details.endDate)].filter(Boolean).join(" → ");
+	const included = details.includeDomains?.map(compactFilter).filter(Boolean).join(" + ");
+	const excluded = details.excludeDomains?.map(compactFilter).filter(Boolean).join(" + ");
+	const freshness = details.maxAgeHours === 0 ? "live" : details.maxAgeHours === -1 ? "cache only" : details.maxAgeHours !== undefined ? `≤${details.maxAgeHours}h old` : undefined;
 	const route = routeLabel(details.provider, details.attempts, searchEngine);
 	const credits = details.creditsUsed ? `${details.creditsUsed} credit${details.creditsUsed === 1 ? "" : "s"}` : undefined;
 	return [
 		`${GREEN}${count}${RESET}`,
+		dates ? theme.fg("muted", dates) : undefined,
+		details.category ? theme.fg("muted", details.category) : undefined,
+		included ? theme.fg("muted", included) : undefined,
+		excluded ? theme.fg("muted", `not ${excluded}`) : undefined,
+		freshness ? theme.fg("muted", freshness) : undefined,
 		route ? theme.fg("muted", `via ${route}`) : undefined,
 		credits ? theme.fg("muted", credits) : undefined,
 		elapsed,
@@ -297,7 +298,8 @@ function renderSearchResult(
 		for (const [index, item] of shownResults.entries()) {
 			const url = resultUrl(item);
 			const label = sourceUrl(item);
-			const rendered = url ? hyperlink(theme.fg("text", label), url) : theme.fg("muted", label);
+			const title = sanitizeSearchText(item.title ?? resultWebsite(item) ?? "Untitled result", 600);
+			const renderedUrl = url ? hyperlink(theme.fg("muted", label), url) : theme.fg("muted", label);
 			const website = resultWebsite(item);
 			const itemSearchEngine = resultSearchEngine(item);
 			const itemDate = formatDisplayDate(item.date);
@@ -306,12 +308,13 @@ function renderSearchResult(
 				via ? theme.fg("muted", via) : undefined,
 				itemDate ? theme.fg("muted", itemDate) : undefined,
 			].filter(Boolean).join(theme.fg("dim", " · "));
-			lines.push(`${INDENT}${theme.fg("syntaxNumber", `${index + 1}.`)} ${rendered}${meta ? ` ${theme.fg("dim", "·")} ${meta}` : ""}`);
+			lines.push(`${INDENT}${theme.fg("syntaxNumber", `${index + 1}.`)} ${theme.fg("text", title)}${meta ? ` ${theme.fg("dim", "·")} ${meta}` : ""}`);
+			lines.push(`${INDENT}   ${renderedUrl}`);
 		}
 		const shown = shownResults.length;
 		const remaining = Math.max(0, details.resultCount - shown);
 		if (remaining > 0) {
-			lines.push(`${INDENT}${theme.fg("syntaxNumber", String(shown))}${theme.fg("muted", " shown · ")}${theme.fg("syntaxNumber", String(remaining))}${theme.fg("muted", " more")}`);
+			lines.push(`${INDENT}${theme.fg("muted", `… ${remaining} more · ${keyHint("app.tools.expand", "to expand")}`)}`);
 		}
 		return lines;
 	});

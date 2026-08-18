@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import * as codingAgent from "@earendil-works/pi-coding-agent";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +10,11 @@ class Container {
 		return [];
 	}
 }
+
+mock.module("@earendil-works/pi-coding-agent", () => ({
+	...codingAgent,
+	keyHint: (_binding: string, description: string) => `Ctrl+O ${description}`,
+}));
 
 mock.module("typebox", () => ({
 	Type: {
@@ -175,7 +181,35 @@ describe("web search renderer", () => {
 		expect(render(webSearch, toolResult, { query: "Kimi pricing", startDate: "2026-04-01", endDate: "2026-04-30" })).toMatchSnapshot();
 	});
 
-	test("shows clickable full URLs without titles, domains, or snippets", () => {
+	test("moves filters to the summary and omits provider preference noise", () => {
+		const toolResult = createSearchToolResult({
+			provider: "exa",
+			tool: "web_search",
+			query: "Common Crawl criticism",
+			category: "publication",
+			includeDomains: ["arxiv.org", "aclanthology.org"],
+			maxAgeHours: 24,
+			limit: 1,
+			elapsedMs: 3_000,
+			results: [result(1, "exa")],
+		});
+		const lines = render(webSearch, toolResult, {
+			query: "Common Crawl criticism",
+			category: "publication",
+			includeDomains: ["arxiv.org", "aclanthology.org"],
+			maxAgeHours: 24,
+			provider: "exa",
+		});
+		expect(lines[0]).toContain("Common Crawl criticism");
+		expect(lines[0]).not.toContain("publication");
+		expect(lines[0]).not.toContain("try Exa first");
+		expect(lines[1]).toContain("publication");
+		expect(lines[1]).toContain("arxiv.org + aclanthology.org");
+		expect(lines[1]).toContain("≤24h old");
+		expect(lines[1]).toContain("via Exa");
+	});
+
+	test("shows titles and clickable full URLs without snippets", () => {
 		const toolResult = createSearchToolResult({
 			provider: "exa",
 			tool: "web_search",
@@ -186,10 +220,9 @@ describe("web search renderer", () => {
 		});
 		const output = render(webSearch, toolResult, { query: "static sites" }).join("\n");
 		expect(output).toContain("<dim>“</dim><accent>static sites</accent><dim>”</dim>");
-		expect(output).toContain("<link:https://www.example1.com/article><text>https://www.example1.com/article</text></link>");
+		expect(output).toContain("<text>Result 1</text>");
+		expect(output).toContain("<link:https://www.example1.com/article><muted>https://www.example1.com/article</muted></link>");
 		expect(output).toContain("<muted>2026-04-21</muted>");
-		expect(output).not.toContain("Result 1");
-		expect(output).not.toContain("<accent>example1.com</accent>");
 		expect(output).not.toContain("Evidence 1");
 	});
 

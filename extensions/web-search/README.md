@@ -94,17 +94,20 @@ controls, unsafe URLs are rejected, and result URLs are normalized and
 deduplicated.
 
 Provider attempts and reported credit usage are retained in bounded result
-details. Search headlines accent the query inside dim quotation marks. Result
-rows show clickable full URLs in normal text plus muted source and date metadata;
-titles and snippets remain agent-facing without adding visual noise to the
-transcript. Sanitized failure messages wrap to the transcript width instead of
-being ellipsized, so the bounded provider reason remains visible in full.
+details. Search headlines show only the query; filters, the actual provider
+route, credits, and elapsed time stay in the summary row. Each result shows its
+title followed by a clickable full URL, while snippets remain agent-facing.
+Collapsed result lists end with a configured expand-key hint instead of a second
+numeric count. Sanitized failure messages wrap to the transcript width instead
+of being ellipsized, so the bounded provider reason remains visible in full.
 Fallbacks render explicitly:
 
 ```text
-• Searched “auth middleware docs”
-  └ 10 results · via Exa · <1s
-    1. https://example.com/docs · 2026-04-21
+• Searched “Common Crawl criticism”
+  └ 10 results · publication · arxiv.org + aclanthology.org · ≤24h old · via Exa · 3s
+    1. Documenting Large Webtext Corpora · 2021-11-01
+       https://aclanthology.org/2021.emnlp-main.98/
+    … 5 more · Ctrl+O to expand
 
 • Opened https://example.com/docs
   └ 420 lines · 31KB · via Exa → Firecrawl · 1 credit · 1.2s
