@@ -31,16 +31,34 @@ export interface TitleModelConfig {
 	thinkingLevel: TitleThinkingLevel;
 }
 
+export type TitleModelFailureCode = "unavailable" | "authentication" | "request" | "invalid-response";
+
+export interface TitleModelFailure {
+	config: TitleModelConfig;
+	code: TitleModelFailureCode;
+	reason: string;
+}
+
+export interface TitleModelResult {
+	response: string;
+	config: TitleModelConfig;
+	index: number;
+	failures: TitleModelFailure[];
+}
+
 /**
- * Resolve the provider/model used to generate titles. Override via
+ * Resolve the ordered providers/models used to generate titles. Override via
  * `auto-session-title.json` in Pi's agent directory:
  *
- *   { "provider": "mistral", "model": "mistral-medium-3.5", "thinkingLevel": "minimal" }
+ *   { "models": [
+ *     { "provider": "mistral", "model": "mistral-medium-3.5", "thinkingLevel": "minimal" },
+ *     { "provider": "apple-foundation-models", "model": "system", "thinkingLevel": "off" }
+ *   ] }
  *
- * Any model available through Pi works; the extension uses Pi's provider-aware
- * completion API with your existing authentication. Apple's on-device system
- * model is also available as apple-foundation-models/system on supported Macs.
- * Defaults to Mistral Medium 3.5 with minimal thinking.
+ * The legacy single-model object remains supported. Any model available through
+ * Pi works; the extension uses Pi's provider-aware completion API with existing
+ * authentication. Apple's on-device system model is also available as
+ * apple-foundation-models/system on supported Macs.
  */
 const DEFAULT_TITLE_MODEL: TitleModelConfig = {
 	provider: "mistral",
@@ -48,12 +66,23 @@ const DEFAULT_TITLE_MODEL: TitleModelConfig = {
 	thinkingLevel: "minimal",
 };
 
-let cachedConfig: TitleModelConfig | undefined;
+let cachedConfig: TitleModelConfig[] | undefined;
 let cachedConfigPath: string | undefined;
 let configReadAt = 0;
 const CONFIG_TTL_MS = 5_000;
 
-export function loadTitleModelConfig(): TitleModelConfig {
+function parseTitleModelConfig(value: any): TitleModelConfig | undefined {
+	const provider = typeof value?.provider === "string" ? value.provider.trim() : "";
+	const model = typeof value?.model === "string" ? value.model.trim() : "";
+	if (!provider || !model) return;
+	const configuredThinking = typeof value?.thinkingLevel === "string" ? value.thinkingLevel : value?.reasoning;
+	const thinkingLevel = TITLE_THINKING_LEVELS.has(configuredThinking)
+		? configuredThinking as TitleThinkingLevel
+		: DEFAULT_TITLE_MODEL.thinkingLevel;
+	return { provider, model, thinkingLevel };
+}
+
+export function loadTitleModelConfigs(): TitleModelConfig[] {
 	// Cache briefly so a burst of title requests within one session doesn't
 	// re-read the file on every call, while still picking up edits + /reload
 	// within a few seconds.
@@ -63,18 +92,19 @@ export function loadTitleModelConfig(): TitleModelConfig {
 	configReadAt = Date.now();
 	try {
 		const parsed = JSON.parse(readFileSync(path, "utf8"));
-		const provider = typeof parsed?.provider === "string" ? parsed.provider : DEFAULT_TITLE_MODEL.provider;
-		const model = typeof parsed?.model === "string" ? parsed.model : DEFAULT_TITLE_MODEL.model;
-		const configuredThinking = typeof parsed?.thinkingLevel === "string" ? parsed.thinkingLevel : parsed?.reasoning;
-		const thinkingLevel = TITLE_THINKING_LEVELS.has(configuredThinking)
-			? configuredThinking as TitleThinkingLevel
-			: DEFAULT_TITLE_MODEL.thinkingLevel;
-		cachedConfig = { provider, model, thinkingLevel };
+		const values = Array.isArray(parsed?.models) ? parsed.models : [parsed];
+		const models = values.map(parseTitleModelConfig).filter((model): model is TitleModelConfig => Boolean(model));
+		cachedConfig = models.length > 0 ? models : [DEFAULT_TITLE_MODEL];
 	} catch {
 		// Missing, unreadable, or malformed config all fall back to the default.
-		cachedConfig = DEFAULT_TITLE_MODEL;
+		cachedConfig = [DEFAULT_TITLE_MODEL];
 	}
 	return cachedConfig;
+}
+
+/** Return the first configured model for callers using the legacy API. */
+export function loadTitleModelConfig(): TitleModelConfig {
+	return loadTitleModelConfigs()[0];
 }
 
 const MAX_TITLE_WORDS = 3;
@@ -155,6 +185,96 @@ export function normalizeTitle(raw: string): string | undefined {
 	return title || undefined;
 }
 
+function titleModelName(config: TitleModelConfig): string {
+	return `${config.provider}/${config.model}`;
+}
+
+function failureReason(value: unknown): string {
+	const raw = value instanceof Error ? value.message : String(value);
+	return raw.replace(/\s+/g, " ").trim().slice(0, 180) || "unknown error";
+}
+
+export interface TitleRequestDependencies {
+	completeRequest?: any;
+	requestCompletion?: typeof requestTitleCompletion;
+	requestAppleCompletion?: typeof requestAppleTitleCompletion;
+}
+
+export async function requestTitleWithFallback(
+	ctx: any,
+	models: readonly TitleModelConfig[],
+	systemPrompt: string,
+	prompt: string,
+	sessionId: string,
+	signal: AbortSignal,
+	dependencies: TitleRequestDependencies = {},
+): Promise<TitleModelResult | undefined> {
+	const failures: TitleModelFailure[] = [];
+	const requestCompletion = dependencies.requestCompletion ?? requestTitleCompletion;
+	const requestAppleCompletion = dependencies.requestAppleCompletion ?? requestAppleTitleCompletion;
+
+	for (const [index, config] of models.entries()) {
+		if (signal.aborted) return;
+		try {
+			let response: string;
+			if (isAppleTitleModel(config.provider, config.model)) {
+				response = await requestAppleCompletion(systemPrompt, prompt, signal);
+			} else {
+				const model = ctx.modelRegistry.find(config.provider, config.model);
+				if (!model) {
+					failures.push({ config, code: "unavailable", reason: "model unavailable" });
+					continue;
+				}
+				const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+				if (signal.aborted) return;
+				if (!auth.ok) {
+					failures.push({ config, code: "authentication", reason: `authentication unavailable: ${failureReason(auth.error)}` });
+					continue;
+				}
+				response = await requestCompletion(
+					dependencies.completeRequest ?? complete,
+					model,
+					auth,
+					systemPrompt,
+					prompt,
+					sessionId,
+					signal,
+					config.thinkingLevel,
+				);
+			}
+			if (signal.aborted) return;
+			const trimmedResponse = response.trim();
+			if (trimmedResponse.startsWith("{")) {
+				try {
+					JSON.parse(trimmedResponse);
+				} catch {
+					failures.push({ config, code: "invalid-response", reason: "malformed JSON response" });
+					continue;
+				}
+			}
+			const parsed = parseTitleModelResponse(response);
+			if (!normalizeTitle(parsed.title ?? "")) {
+				failures.push({ config, code: "invalid-response", reason: "empty or invalid title response" });
+				continue;
+			}
+			return { response, config, index, failures };
+		} catch (error) {
+			if (signal.aborted) return;
+			failures.push({ config, code: "request", reason: failureReason(error) });
+		}
+	}
+
+	const summary = failures.map(({ config, reason }) => `${titleModelName(config)}: ${reason}`).join("; ");
+	throw new Error(`All configured title models failed${summary ? ` (${summary})` : ""}.`);
+}
+
+function fallbackWarning(result: TitleModelResult): string {
+	const failed = result.failures.length === 1
+		? `${titleModelName(result.failures[0].config)} failed (${result.failures[0].reason})`
+		: `${result.failures.length} preferred models failed`;
+	return `Auto-title fallback: ${failed}; using ${titleModelName(result.config)}.`;
+}
+
 function titlesEquivalent(left: string | undefined, right: string | undefined): boolean {
 	const normalize = (value: string | undefined) => value
 		?.replace(/\s+/g, " ")
@@ -167,7 +287,7 @@ export function sessionTitleIsManual(currentTitle: string | undefined, latestGen
 	return Boolean(currentTitle) && !titlesEquivalent(currentTitle, latestGeneratedTitle);
 }
 
-export default function (pi: ExtensionAPI) {
+export default function (pi: ExtensionAPI, requestDependencies: TitleRequestDependencies = {}) {
 	pi.registerFlag(DISABLE_AUTO_TITLE_FLAG, {
 		description: "Disable automatic session title generation for this run",
 		type: "boolean",
@@ -187,6 +307,9 @@ export default function (pi: ExtensionAPI) {
 	let lastTurnSummary: string | undefined;
 	let lastFocusSummary: string | undefined;
 	let latestSummaryState: TitleState | undefined;
+	let lastUsedModel: string | undefined;
+	let lastFallback: string | undefined;
+	let fallbackWarningKey: string | undefined;
 	let lastSkipReason: string | undefined;
 	let lastError: string | undefined;
 
@@ -215,41 +338,15 @@ export default function (pi: ExtensionAPI) {
 		generation: number,
 		signal: AbortSignal,
 	): Promise<string | undefined> => {
-		const { provider: PROVIDER, model: MODEL_ID, thinkingLevel } = loadTitleModelConfig();
-		debug("requesting title", { provider: PROVIDER, model: MODEL_ID, sessionId, previousTitle, currentUser: context.currentUserRequest?.slice(0, 80) });
+		const models = loadTitleModelConfigs();
+		debug("requesting title", { models: models.map(titleModelName), sessionId, previousTitle, currentUser: context.currentUserRequest?.slice(0, 80) });
 
-		// One bounded, tool-free request updates the completed-turn summary, rolling
-		// focus, and title without placing any of them in the agent context.
+		// Each candidate receives the same bounded, tool-free request. Availability,
+		// auth, request, and invalid-response failures advance to the next model.
 		const prompt = buildTitlePrompt(basename(ctx.cwd), previousTitle, context);
-		let result: string;
-		if (isAppleTitleModel(PROVIDER, MODEL_ID)) {
-			result = await requestAppleTitleCompletion(TITLE_SYSTEM_PROMPT, prompt, signal);
-		} else {
-			const configuredModel = ctx.modelRegistry.find(PROVIDER, MODEL_ID);
-			if (!configuredModel) {
-				lastSkipReason = `${PROVIDER}/${MODEL_ID} unavailable`;
-				debug("model unavailable");
-				return;
-			}
-			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(configuredModel);
-			if (!auth.ok || signal.aborted) {
-				lastSkipReason = signal.aborted ? "request cancelled" : `authentication unavailable: ${auth.error}`;
-				debug("authentication or request unavailable", signal.aborted ? "cancelled" : auth.error);
-				return;
-			}
-			result = await requestTitleCompletion(
-				complete,
-				configuredModel,
-				auth,
-				TITLE_SYSTEM_PROMPT,
-				prompt,
-				sessionId,
-				signal,
-				thinkingLevel,
-			);
-		}
-		if (signal.aborted) return;
-		const generated = parseTitleModelResponse(result);
+		const request = await requestTitleWithFallback(ctx, models, TITLE_SYSTEM_PROMPT, prompt, sessionId, signal, requestDependencies);
+		if (!request || signal.aborted) return;
+		const generated = parseTitleModelResponse(request.response);
 		const title = normalizeTitle(generated.title ?? "");
 		if (!title) {
 			lastSkipReason = "empty title response";
@@ -269,6 +366,20 @@ export default function (pi: ExtensionAPI) {
 					: "session changed before apply";
 			debug("kept existing title", lastSkipReason);
 			return;
+		}
+
+		lastUsedModel = titleModelName(request.config);
+		if (request.index > 0) {
+			lastFallback = fallbackWarning(request);
+			const configKey = models.map((config) => `${titleModelName(config)}:${config.thinkingLevel}`).join(",");
+			const failureKey = request.failures.map(({ config, code }) => `${titleModelName(config)}:${code}`).join(",");
+			const warningKey = `${configKey}|${failureKey}->${lastUsedModel}`;
+			if (warningKey !== fallbackWarningKey && ctx.hasUI !== false) ctx.ui.notify(lastFallback, "warning");
+			fallbackWarningKey = warningKey;
+			debug("title fallback", lastFallback);
+		} else {
+			lastFallback = undefined;
+			fallbackWarningKey = undefined;
 		}
 
 		if (persistState && generated.turnSummary && generated.focusSummary) {
@@ -386,6 +497,9 @@ export default function (pi: ExtensionAPI) {
 				`last titled leaf: ${lastTitledLeafId ?? "(none)"}`,
 				`last queue: ${lastQueueReason ?? "(none)"}`,
 				`last attempt: ${lastAttemptAt ?? "(none)"}`,
+				`configured models: ${loadTitleModelConfigs().map(titleModelName).join(" -> ")}`,
+				`last model: ${lastUsedModel ?? "(none)"}`,
+				`last fallback: ${lastFallback ?? "(none)"}`,
 				`last generated: ${lastGeneratedTitle ?? "(none)"}`,
 				`last applied: ${lastAppliedTitle ?? "(none)"}`,
 				`turn summary: ${lastTurnSummary ?? "(none)"}`,
@@ -465,6 +579,9 @@ export default function (pi: ExtensionAPI) {
 		lastTurnSummary = undefined;
 		lastFocusSummary = undefined;
 		latestSummaryState = undefined;
+		lastUsedModel = undefined;
+		lastFallback = undefined;
+		fallbackWarningKey = undefined;
 		cancelRequest();
 	});
 }

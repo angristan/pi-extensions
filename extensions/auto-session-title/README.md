@@ -25,20 +25,37 @@ and tree navigation.
 Start Pi with `--no-auto-title` to disable automatic title generation for that
 process only. `/title-refresh` remains available for a manual one-off refresh.
 
-The default backend is Mistral Medium 3.5 with minimal thinking. Configure a
-different Pi model in `~/.pi/agent/auto-session-title.json`, or under
+The default backend is Mistral Medium 3.5 with minimal thinking. Configure an
+ordered model list in `~/.pi/agent/auto-session-title.json`, or under
 `$PI_CODING_AGENT_DIR` when set:
 
 ```json
 {
-  "provider": "openai-codex",
-  "model": "gpt-5.6-luna",
-  "thinkingLevel": "xhigh"
+  "models": [
+    {
+      "provider": "openai-codex",
+      "model": "gpt-5.6-luna",
+      "thinkingLevel": "xhigh"
+    },
+    {
+      "provider": "apple-foundation-models",
+      "model": "system",
+      "thinkingLevel": "off"
+    }
+  ]
 }
 ```
 
-`thinkingLevel` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or
-`max`. The legacy `reasoning` key is also accepted.
+Models are tried in order. Missing models, unavailable authentication, request
+errors, and invalid title responses advance to the next model. Pi shows a small
+warning when a fallback first becomes active, then suppresses repeated warnings
+while the same fallback route remains active. `/title-status` shows the selected
+model and latest fallback.
+
+The previous top-level `provider`, `model`, and `thinkingLevel` object remains
+supported as a single-model configuration. `thinkingLevel` accepts `off`,
+`minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. The legacy `reasoning`
+key is also accepted on each model.
 
 ### Apple on-device model
 

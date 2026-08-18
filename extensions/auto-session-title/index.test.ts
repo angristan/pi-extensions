@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appleHelperBinaryPath, isAppleTitleModel, requestAppleTitleCompletion } from "./apple";
-import autoSessionTitle, { loadTitleModelConfig, normalizeTitle, sessionTitleIsManual, TITLE_SYSTEM_PROMPT, titleModelConfigPath } from "./index";
+import autoSessionTitle, { loadTitleModelConfig, loadTitleModelConfigs, normalizeTitle, requestTitleWithFallback, sessionTitleIsManual, TITLE_SYSTEM_PROMPT, titleModelConfigPath } from "./index";
 import { requestTitleCompletion } from "./request";
 
 describe("auto-session-title model requests", () => {
@@ -24,19 +24,171 @@ describe("auto-session-title model requests", () => {
 		expect(normalizeTitle("Pi Tab Title")).toBe("Pi Tab Title");
 	});
 
-	test("reads model config from the configured Pi agent directory", () => {
+	test("reads ordered model fallback config from the Pi agent directory", () => {
 		const directory = mkdtempSync(join(tmpdir(), "pi-auto-title-test-"));
+		const previous = process.env.PI_CODING_AGENT_DIR;
+		try {
+			process.env.PI_CODING_AGENT_DIR = directory;
+			writeFileSync(join(directory, "auto-session-title.json"), JSON.stringify({
+				models: [{
+					provider: "openai-codex",
+					model: "gpt-5.6-luna",
+					thinkingLevel: "xhigh",
+				}, {
+					provider: "apple-foundation-models",
+					model: "system",
+					thinkingLevel: "off",
+				}],
+			}));
+
+			expect(titleModelConfigPath()).toBe(join(directory, "auto-session-title.json"));
+			expect(loadTitleModelConfigs()).toEqual([
+				{ provider: "openai-codex", model: "gpt-5.6-luna", thinkingLevel: "xhigh" },
+				{ provider: "apple-foundation-models", model: "system", thinkingLevel: "off" },
+			]);
+			expect(loadTitleModelConfig()).toEqual({ provider: "openai-codex", model: "gpt-5.6-luna", thinkingLevel: "xhigh" });
+		} finally {
+			if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = previous;
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	test("keeps the legacy single-model config", () => {
+		const directory = mkdtempSync(join(tmpdir(), "pi-auto-title-legacy-test-"));
 		const previous = process.env.PI_CODING_AGENT_DIR;
 		try {
 			process.env.PI_CODING_AGENT_DIR = directory;
 			writeFileSync(join(directory, "auto-session-title.json"), JSON.stringify({
 				provider: "openai-codex",
 				model: "gpt-5.6-luna",
-				thinkingLevel: "xhigh",
+				reasoning: "high",
+			}));
+			expect(loadTitleModelConfigs()).toEqual([
+				{ provider: "openai-codex", model: "gpt-5.6-luna", thinkingLevel: "high" },
+			]);
+			expect(loadTitleModelConfig()).toEqual({ provider: "openai-codex", model: "gpt-5.6-luna", thinkingLevel: "high" });
+		} finally {
+			if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = previous;
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	test("falls back when the preferred model is unavailable", async () => {
+		const models = [
+			{ provider: "missing", model: "primary", thinkingLevel: "minimal" as const },
+			{ provider: "apple-foundation-models", model: "system", thinkingLevel: "off" as const },
+		];
+		const result = await requestTitleWithFallback(
+			{ modelRegistry: { find: () => undefined } },
+			models,
+			"title system prompt",
+			"title context",
+			"session-1",
+			new AbortController().signal,
+			{ requestAppleCompletion: async () => '{"title":"Local Apple Titles"}' },
+		);
+
+		expect(result).toMatchObject({
+			config: models[1],
+			index: 1,
+			failures: [{ config: models[0], code: "unavailable", reason: "model unavailable" }],
+		});
+	});
+
+	test("falls back after malformed, empty, or rejected title responses", async () => {
+		const models = [
+			{ provider: "test", model: "primary", thinkingLevel: "minimal" as const },
+			{ provider: "test", model: "fallback", thinkingLevel: "off" as const },
+		];
+		const ctx = {
+			modelRegistry: {
+				find: (provider: string, model: string) => ({ provider, id: model }),
+				getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test" }),
+			},
+		};
+
+		for (const invalidResponse of ["{not-json", "", '{"title":"src/session-title.ts"}']) {
+			const result = await requestTitleWithFallback(
+				ctx,
+				models,
+				"title system prompt",
+				"title context",
+				"session-1",
+				new AbortController().signal,
+				{
+					requestCompletion: async (_complete, model) => model.id === "primary"
+						? invalidResponse
+						: '{"title":"Valid Fallback"}',
+				},
+			);
+			expect(result?.index).toBe(1);
+			expect(result?.failures[0].code).toBe("invalid-response");
+		}
+	});
+
+	test("warns once while the same fallback remains active", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "pi-auto-title-warning-test-"));
+		const previous = process.env.PI_CODING_AGENT_DIR;
+		try {
+			process.env.PI_CODING_AGENT_DIR = directory;
+			writeFileSync(join(directory, "auto-session-title.json"), JSON.stringify({
+				models: [
+					{ provider: "test", model: "primary", thinkingLevel: "minimal" },
+					{ provider: "test", model: "fallback", thinkingLevel: "off" },
+				],
 			}));
 
-			expect(titleModelConfigPath()).toBe(join(directory, "auto-session-title.json"));
-			expect(loadTitleModelConfig()).toEqual({ provider: "openai-codex", model: "gpt-5.6-luna", thinkingLevel: "xhigh" });
+			const handlers = new Map<string, (...args: any[]) => any>();
+			const notifications: Array<{ message: string; level: string }> = [];
+			let sessionName: string | undefined;
+			let requestCount = 0;
+			const pi = {
+				on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
+				registerCommand() {},
+				registerFlag() {},
+				getFlag() { return false; },
+				getSessionName() { return sessionName; },
+				setSessionName(name: string) { sessionName = name; },
+				appendEntry() {},
+			};
+			const ctx = {
+				cwd: "/tmp/project",
+				hasUI: true,
+				modelRegistry: {
+					find: (provider: string, model: string) => ({ provider, id: model }),
+					getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test" }),
+				},
+				sessionManager: {
+					getBranch: () => [],
+					getEntries: () => [],
+					getSessionId: () => "session-1",
+					getLeafId: () => undefined,
+				},
+				ui: { notify: (message: string, level: string) => notifications.push({ message, level }) },
+			};
+			autoSessionTitle(pi as any, {
+				requestCompletion: async (_complete, model) => {
+					requestCount += 1;
+					if (model.id === "primary") throw new Error("temporarily unavailable");
+					return '{"turn_summary":"Fallback worked.","focus_summary":"Maintain titles.","title":"Fallback Titles"}';
+				},
+			});
+			handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+			handlers.get("before_agent_start")?.({ prompt: "Name this session" }, ctx);
+			while (requestCount < 2) await Bun.sleep(1);
+			await Bun.sleep(1);
+			handlers.get("before_agent_start")?.({ prompt: "Name this session again" }, ctx);
+			while (requestCount < 4) await Bun.sleep(1);
+			await Bun.sleep(1);
+
+			const warnings = notifications.filter(({ level }) => level === "warning");
+			expect(warnings).toEqual([{
+				level: "warning",
+				message: "Auto-title fallback: test/primary failed (temporarily unavailable); using test/fallback.",
+			}]);
 		} finally {
 			if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
 			else process.env.PI_CODING_AGENT_DIR = previous;
