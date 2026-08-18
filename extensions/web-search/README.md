@@ -32,7 +32,9 @@ search. The public `web_search` schema supports:
 - `maxAgeHours` (`0` for live crawl, `-1` for cache only)
 
 GitHub is intentionally not a category: use the authenticated `gh` CLI for
-anything on GitHub. Exa applies supported filters natively. Domain and known-date
+anything on GitHub. Exa applies supported filters natively. Its `publication`
+vertical rejects domain filters, so explicit domains take priority and the
+publication intent moves into the semantic query. Domain and known-date
 constraints are enforced again after every provider response, including
 fallbacks; category and freshness controls are best effort outside Exa.
 

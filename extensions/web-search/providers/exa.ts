@@ -232,12 +232,15 @@ function publicationBoundary(date: string, endExclusive: boolean): string {
 function advancedSearchArgs(args: WebSearchArgs, query: string, limit: number): Record<string, unknown> {
 	const includeDomains = cleanedDomains(args.includeDomains);
 	const excludeDomains = cleanedDomains(args.excludeDomains);
-	const restrictedCategory = args.category === "company" || args.category === "people";
+	const hasDomainFilters = Boolean(includeDomains || excludeDomains);
+	const publicationDomainSearch = args.category === "publication" && hasDomainFilters;
+	const nativeCategory = publicationDomainSearch ? undefined : args.category;
+	const restrictedCategory = nativeCategory === "company" || nativeCategory === "people";
 	return {
-		query,
+		query: publicationDomainSearch ? `Scholarly publication about ${query}` : query,
 		numResults: limit,
 		type: "auto",
-		...(args.category ? { category: args.category } : {}),
+		...(nativeCategory ? { category: nativeCategory } : {}),
 		...(includeDomains ? { includeDomains } : {}),
 		...(!restrictedCategory && excludeDomains ? { excludeDomains } : {}),
 		...(!restrictedCategory && args.startDate ? { startPublishedDate: publicationBoundary(args.startDate, false) } : {}),

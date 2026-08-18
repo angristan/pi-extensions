@@ -125,6 +125,31 @@ describe("provider normalization", () => {
 		}
 	});
 
+	test("prioritizes explicit domains over the incompatible publication vertical", async () => {
+		const previousFetch = globalThis.fetch;
+		let requestArguments: Record<string, unknown> = {};
+		globalThis.fetch = (async (_input, init) => {
+			requestArguments = JSON.parse(String(init?.body)).params.arguments;
+			return new Response(JSON.stringify({
+				jsonrpc: "2.0",
+				result: { content: [{ type: "text", text: JSON.stringify({ results: [] }) }] },
+			}), { headers: { "Content-Type": "application/json" } });
+		}) as typeof fetch;
+		try {
+			await searchExaWeb({
+				query: "dataset limitations",
+				category: "publication",
+				includeDomains: ["arxiv.org", "aclanthology.org"],
+				maxAgeHours: 24,
+			});
+			expect(requestArguments.query).toBe("Scholarly publication about dataset limitations");
+			expect(requestArguments.includeDomains).toEqual(["arxiv.org", "aclanthology.org"]);
+			expect(requestArguments).not.toHaveProperty("category");
+		} finally {
+			globalThis.fetch = previousFetch;
+		}
+	});
+
 	test("sends configured Exa credentials only in the request header", async () => {
 		const previousFetch = globalThis.fetch;
 		const previousApiKey = process.env.EXA_API_KEY;
