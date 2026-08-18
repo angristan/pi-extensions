@@ -15,7 +15,7 @@ import {
 	parseSearchResultText,
 	sanitizeSearchText,
 } from "./client";
-import { openUrl, searchNews, searchWeb, webStatus } from "./router";
+import { openUrl, searchWeb, webStatus } from "./router";
 import type { OpenDisplayDetails, ProviderAttempt, SearchDisplayDetails, SearchDisplayItem, WebProvider } from "./types";
 
 const providerPreferenceSchema = Type.Optional(Type.String({
@@ -33,18 +33,6 @@ const webSearchSchema = Type.Object({
 	provider: providerPreferenceSchema,
 });
 
-const newsSearchSchema = Type.Object({
-	query: Type.String({
-		minLength: 1,
-		description: "Keyword news-search query. Use specific names, dates, and terms.",
-	}),
-	startDate: Type.Optional(Type.String({ description: "Optional lower date bound in YYYY-MM-DD format. Defaults server-side if omitted." })),
-	endDate: Type.Optional(Type.String({ description: "Optional upper date bound in YYYY-MM-DD format. Defaults server-side if omitted." })),
-	lang: Type.Optional(Type.String({ description: "Optional language filter, for example 'en' or 'fr'." })),
-	limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20, default: 10, description: "Number of news results to return. Defaults to 10." })),
-	provider: providerPreferenceSchema,
-});
-
 const openUrlSchema = Type.Object({
 	url: Type.String({
 		minLength: 1,
@@ -54,7 +42,6 @@ const openUrlSchema = Type.Object({
 });
 
 type WebSearchArgs = Static<typeof webSearchSchema>;
-type NewsSearchArgs = Static<typeof newsSearchSchema>;
 type OpenUrlArgs = Static<typeof openUrlSchema>;
 
 type Theme = {
@@ -101,13 +88,12 @@ function providerPreference(value: unknown): string | undefined {
 	return undefined;
 }
 
-function searchDetail(args: (WebSearchArgs | NewsSearchArgs) | undefined, theme: Theme, details?: SearchDisplayDetails): string {
+function searchDetail(args: WebSearchArgs | undefined, theme: Theme, details?: SearchDisplayDetails): string {
 	const query = compactQuery(args?.query ?? details?.query);
 	const dates = [compactFilter(args?.startDate ?? details?.startDate), compactFilter(args?.endDate ?? details?.endDate)].filter(Boolean).join(" → ");
-	const lang = compactFilter(args && "lang" in args ? args.lang : details?.lang);
 	const provider = providerPreference(args?.provider);
 	const quotedQuery = query ? `${theme.fg("dim", "“")}${theme.fg("accent", query)}${theme.fg("dim", "”")}` : undefined;
-	return [quotedQuery, dates || undefined, lang ? `lang ${lang}` : undefined, provider].filter(Boolean).join(" · ");
+	return [quotedQuery, dates || undefined, provider].filter(Boolean).join(" · ");
 }
 
 function sanitizedError(text: string, fallback: string): string {
@@ -245,7 +231,7 @@ function openSummary(details: OpenDetails | undefined): string {
 	return [detail, route ? `via ${route}` : undefined, credits, elapsed].filter(Boolean).join(" · ");
 }
 
-function renderSearchCall(args: WebSearchArgs | NewsSearchArgs, theme: Theme, context: ToolRenderContext) {
+function renderSearchCall(args: WebSearchArgs, theme: Theme, context: ToolRenderContext) {
 	// The call slot owns the running row. Once settled, hand off to the result
 	// slot (return an empty container) so the verb isn't shown twice.
 	if (!context.isPartial) return new Container();
@@ -269,7 +255,7 @@ function renderSearchResult(
 		?.filter((part) => part.type === "text" && typeof part.text === "string")
 		.map((part) => part.text)
 		.join("\n") ?? "";
-	const args = context.args as WebSearchArgs | NewsSearchArgs | undefined;
+	const args = context.args as WebSearchArgs | undefined;
 
 	if (context.isError) {
 		const detail = searchDetail(args, theme);
@@ -391,24 +377,6 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerTool({
-		name: "news_search",
-		label: "News Search",
-		description:
-			"Search recent news through relevance-first providers. Returns bounded structured results with snippets, dates, URLs, ranks, provider attempts, and source metadata. Date and language constraints are best-effort when a provider lacks native filters.",
-		promptSnippet: "Search recent news through relevance-first providers and return structured results",
-		promptGuidelines: [
-			"Use news_search for recent events, journalism, or date-bounded news.",
-		],
-		parameters: newsSearchSchema,
-		renderShell: "self",
-		async execute(_toolCallId, params: NewsSearchArgs, signal) {
-			return createSearchToolResult(await searchNews(params, { signal }));
-		},
-		renderCall: (args: NewsSearchArgs, theme: Theme, context: ToolRenderContext) => renderSearchCall(args, theme, context),
-		renderResult: renderSearchResult,
-	});
-
-	pi.registerTool({
 		name: "open_url",
 		label: "Open URL",
 		description:
@@ -438,7 +406,6 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 			const access = Object.entries(status.providers).map(([name, provider]) => `${name}: ${provider.available ? provider.keyed ? "keyed" : "anonymous" : "unavailable"}`).join(" · ");
 			const routes = [
 				`web: ${status.routes.web.join(" → ") || "none"}`,
-				`news: ${status.routes.news.join(" → ") || "none"}`,
 				`open: ${status.routes.open.join(" → ") || "none"}`,
 			];
 			ctx.ui.notify(`${routes.join("\n")}\n${access}`, "info");

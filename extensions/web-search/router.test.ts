@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { WebProviderError } from "./provider-error";
 import {
-	newsProviderOrder,
 	openProviderOrder,
 	routeSearch,
 	webProviderOrder,
@@ -56,7 +55,7 @@ function result(provider: WebProvider, count = 1): WebSearchResult {
 describe("provider router", () => {
 	test("falls back sequentially and records each attempt", async () => {
 		const calls: WebProvider[] = [];
-		const routed = await routeSearch("web_search", ["exa", "firecrawl"], async (provider) => {
+		const routed = await routeSearch(["exa", "firecrawl"], async (provider) => {
 			calls.push(provider);
 			if (provider === "exa") throw new WebProviderError("temporary outage", { status: 503 });
 			return result(provider);
@@ -71,14 +70,14 @@ describe("provider router", () => {
 	});
 
 	test("falls back after empty results", async () => {
-		const routed = await routeSearch("web_search", ["exa", "firecrawl"], async (provider) => result(provider, provider === "exa" ? 0 : 1));
+		const routed = await routeSearch(["exa", "firecrawl"], async (provider) => result(provider, provider === "exa" ? 0 : 1));
 		expect(routed.provider).toBe("firecrawl");
 		expect(routed.attempts?.map((attempt) => attempt.status)).toEqual(["empty", "success"]);
 	});
 
 	test("does not continue after a non-retriable input error", async () => {
 		const calls: WebProvider[] = [];
-		await expect(routeSearch("web_search", ["exa", "firecrawl"], async (provider) => {
+		await expect(routeSearch(["exa", "firecrawl"], async (provider) => {
 			calls.push(provider);
 			throw new WebProviderError("invalid request", { status: 400, retriable: false });
 		})).rejects.toThrow("invalid request");
@@ -86,12 +85,12 @@ describe("provider router", () => {
 	});
 
 	test("tries a rate-limited provider again on the next search", async () => {
-		await routeSearch("web_search", ["exa", "firecrawl"], async (provider) => {
+		await routeSearch(["exa", "firecrawl"], async (provider) => {
 			if (provider === "exa") throw new WebProviderError("rate limited", { status: 429 });
 			return result(provider);
 		});
 		const calls: WebProvider[] = [];
-		const routed = await routeSearch("web_search", ["exa", "firecrawl"], async (provider) => {
+		const routed = await routeSearch(["exa", "firecrawl"], async (provider) => {
 			calls.push(provider);
 			return result(provider);
 		});
@@ -107,7 +106,6 @@ describe("provider router", () => {
 			firecrawlKey: process.env.FIRECRAWL_API_KEY,
 			mistralKey: process.env.MISTRAL_API_KEY,
 			searchProvider: process.env.PI_WEB_SEARCH_PROVIDER,
-			newsProvider: process.env.PI_WEB_NEWS_PROVIDER,
 			openProvider: process.env.PI_WEB_OPEN_PROVIDER,
 		};
 		try {
@@ -115,11 +113,9 @@ describe("provider router", () => {
 			delete process.env.FIRECRAWL_API_KEY;
 			delete process.env.MISTRAL_API_KEY;
 			delete process.env.PI_WEB_SEARCH_PROVIDER;
-			delete process.env.PI_WEB_NEWS_PROVIDER;
 			delete process.env.PI_WEB_OPEN_PROVIDER;
 
 			expect(webProviderOrder()).toEqual(["exa"]);
-			expect(newsProviderOrder()).toEqual(["exa"]);
 			expect(openProviderOrder("https://example.com/docs")).toEqual(["exa"]);
 			expect(openProviderOrder("mistral-news-article-id")).toEqual([]);
 			expect(webStatus().providers.firecrawl).toEqual({ available: false, keyed: false });
@@ -130,37 +126,32 @@ describe("provider router", () => {
 			restoreEnv("FIRECRAWL_API_KEY", previous.firecrawlKey);
 			restoreEnv("MISTRAL_API_KEY", previous.mistralKey);
 			restoreEnv("PI_WEB_SEARCH_PROVIDER", previous.searchProvider);
-			restoreEnv("PI_WEB_NEWS_PROVIDER", previous.newsProvider);
 			restoreEnv("PI_WEB_OPEN_PROVIDER", previous.openProvider);
 			rmSync(agentDir, { recursive: true, force: true });
 		}
 	});
 
-	test("uses one credential-gated order for web, news, open, and PDFs", () => {
+	test("uses one credential-gated order for web, open, and PDFs", () => {
 		const previous = {
 			firecrawlKey: process.env.FIRECRAWL_API_KEY,
 			mistralKey: process.env.MISTRAL_API_KEY,
 			searchProvider: process.env.PI_WEB_SEARCH_PROVIDER,
-			newsProvider: process.env.PI_WEB_NEWS_PROVIDER,
 			openProvider: process.env.PI_WEB_OPEN_PROVIDER,
 		};
 		try {
 			process.env.FIRECRAWL_API_KEY = "test-firecrawl";
 			process.env.MISTRAL_API_KEY = "test-mistral";
 			delete process.env.PI_WEB_SEARCH_PROVIDER;
-			delete process.env.PI_WEB_NEWS_PROVIDER;
 			delete process.env.PI_WEB_OPEN_PROVIDER;
 
 			const route = ["exa", "firecrawl", "mistral"];
 			expect(webProviderOrder()).toEqual(route);
-			expect(newsProviderOrder()).toEqual(route);
 			expect(openProviderOrder("https://example.com/docs")).toEqual(route);
 			expect(openProviderOrder("https://example.com/manual.pdf")).toEqual(route);
 		} finally {
 			restoreEnv("FIRECRAWL_API_KEY", previous.firecrawlKey);
 			restoreEnv("MISTRAL_API_KEY", previous.mistralKey);
 			restoreEnv("PI_WEB_SEARCH_PROVIDER", previous.searchProvider);
-			restoreEnv("PI_WEB_NEWS_PROVIDER", previous.newsProvider);
 			restoreEnv("PI_WEB_OPEN_PROVIDER", previous.openProvider);
 		}
 	});
@@ -170,25 +161,21 @@ describe("provider router", () => {
 			firecrawlKey: process.env.FIRECRAWL_API_KEY,
 			mistralKey: process.env.MISTRAL_API_KEY,
 			searchProvider: process.env.PI_WEB_SEARCH_PROVIDER,
-			newsProvider: process.env.PI_WEB_NEWS_PROVIDER,
 			openProvider: process.env.PI_WEB_OPEN_PROVIDER,
 		};
 		try {
 			process.env.FIRECRAWL_API_KEY = "test-firecrawl";
 			process.env.MISTRAL_API_KEY = "test-mistral";
 			process.env.PI_WEB_SEARCH_PROVIDER = "mistral";
-			process.env.PI_WEB_NEWS_PROVIDER = "mistral";
 			process.env.PI_WEB_OPEN_PROVIDER = "mistral";
 
 			expect(webProviderOrder("firecrawl")).toEqual(["firecrawl", "mistral", "exa"]);
-			expect(newsProviderOrder("firecrawl")).toEqual(["firecrawl", "mistral", "exa"]);
 			expect(openProviderOrder("https://example.com/docs", "firecrawl")).toEqual(["firecrawl", "mistral", "exa"]);
 			expect(webProviderOrder("unknown")).toEqual(["mistral", "exa", "firecrawl"]);
 		} finally {
 			restoreEnv("FIRECRAWL_API_KEY", previous.firecrawlKey);
 			restoreEnv("MISTRAL_API_KEY", previous.mistralKey);
 			restoreEnv("PI_WEB_SEARCH_PROVIDER", previous.searchProvider);
-			restoreEnv("PI_WEB_NEWS_PROVIDER", previous.newsProvider);
 			restoreEnv("PI_WEB_OPEN_PROVIDER", previous.openProvider);
 		}
 	});

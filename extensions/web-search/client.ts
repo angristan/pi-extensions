@@ -3,8 +3,6 @@ import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
-	NewsSearchArgs,
-	NewsSearchResult,
 	OpenUrlResult,
 	RagResult,
 	SearchDisplayDetails,
@@ -13,8 +11,6 @@ import type {
 	WebSearchResult,
 } from "./types";
 export type {
-	NewsSearchArgs,
-	NewsSearchResult,
 	OpenUrlResult,
 	RagResult,
 	SearchDisplayDetails,
@@ -246,32 +242,6 @@ export async function searchMistralWeb(args: WebSearchArgs | string, options: Mi
 	};
 }
 
-export async function searchMistralNews(args: NewsSearchArgs, options: MistralMcpOptions = {}): Promise<NewsSearchResult> {
-	const query = args.query.trim();
-	if (!query) throw new Error("query must not be empty");
-	const limit = clampLimit(args.limit, 10, 20);
-	const startDate = trimDate(args.startDate);
-	const endDate = trimDate(args.endDate);
-	const lang = args.lang?.trim() || undefined;
-	const mcpArgs: Record<string, unknown> = { query, limit };
-	if (startDate) mcpArgs.start_date = startDate;
-	if (endDate) mcpArgs.end_date = endDate;
-	if (lang) mcpArgs.lang = lang;
-
-	const { result, elapsedMs } = await callMcpTool("news_search", mcpArgs, options);
-	return {
-		provider: "mistral",
-		tool: "news_search",
-		query,
-		startDate,
-		endDate,
-		lang,
-		limit,
-		results: parseRagResults(result),
-		elapsedMs,
-	};
-}
-
 export function truncateText(text: string): { content: string; truncated: boolean; originalBytes: number; originalLines: number } {
 	const originalLines = text.split("\n").length;
 	const originalBytes = Buffer.byteLength(text, "utf8");
@@ -460,7 +430,7 @@ function fitsSearchOutput(lines: string[]): boolean {
 	return lines.length <= MAX_OUTPUT_LINES && Buffer.byteLength(lines.join("\n"), "utf8") <= MAX_OUTPUT_BYTES;
 }
 
-export function formatSearchResults(result: WebSearchResult | NewsSearchResult): string {
+export function formatSearchResults(result: WebSearchResult): string {
 	const lines = [
 		`query: ${shorten(result.query, MAX_QUERY_CHARS)}`,
 		`provider: ${result.provider}`,
@@ -475,7 +445,6 @@ export function formatSearchResults(result: WebSearchResult | NewsSearchResult):
 	if (result.creditsUsed) lines.push(`credits_used: ${result.creditsUsed}`);
 	if (result.startDate) lines.push(`start_date: ${shorten(result.startDate, MAX_DATE_CHARS)}`);
 	if (result.endDate) lines.push(`end_date: ${shorten(result.endDate, MAX_DATE_CHARS)}`);
-	if (result.tool === "news_search" && result.lang) lines.push(`lang: ${shorten(result.lang, MAX_SOURCE_CHARS)}`);
 	lines.push("", "results:");
 	if (result.results.length === 0) {
 		lines.push("No results returned.");
@@ -503,7 +472,7 @@ export function formatSearchResults(result: WebSearchResult | NewsSearchResult):
 	return lines.join("\n");
 }
 
-function createSearchDisplayDetails(result: WebSearchResult | NewsSearchResult): SearchDisplayDetails {
+function createSearchDisplayDetails(result: WebSearchResult): SearchDisplayDetails {
 	const results = result.results.slice(0, MAX_DISPLAY_RESULTS).map((item) => ({
 		title: sanitizeSearchText(item.title ?? item.url ?? item.id, MAX_TITLE_CHARS),
 		url: normalizeHttpUrl(item.url),
@@ -520,7 +489,6 @@ function createSearchDisplayDetails(result: WebSearchResult | NewsSearchResult):
 		query: sanitizeSearchText(result.query, MAX_QUERY_CHARS),
 		startDate: result.startDate ? sanitizeSearchText(result.startDate, MAX_DATE_CHARS) : undefined,
 		endDate: result.endDate ? sanitizeSearchText(result.endDate, MAX_DATE_CHARS) : undefined,
-		lang: result.tool === "news_search" && result.lang ? sanitizeSearchText(result.lang, MAX_SOURCE_CHARS) : undefined,
 		provider: result.provider,
 		attempts: result.attempts?.map((attempt) => ({
 			...attempt,
@@ -535,7 +503,7 @@ function createSearchDisplayDetails(result: WebSearchResult | NewsSearchResult):
 }
 
 /** Build bounded agent content and UI details without retaining the raw connector payload. */
-export function createSearchToolResult(result: WebSearchResult | NewsSearchResult) {
+export function createSearchToolResult(result: WebSearchResult) {
 	return {
 		content: [{ type: "text" as const, text: formatSearchResults(result) }],
 		details: createSearchDisplayDetails(result),
@@ -565,11 +533,6 @@ export function parseSearchResultText(text: string): SearchDisplayDetails {
 		match = /^end_date:\s*(.*)$/.exec(line);
 		if (match) {
 			details.endDate = match[1];
-			continue;
-		}
-		match = /^lang:\s*(.*)$/.exec(line);
-		if (match) {
-			details.lang = match[1];
 			continue;
 		}
 		match = /^elapsed_ms:\s*(-?\d+(?:\.\d+)?)$/.exec(line);

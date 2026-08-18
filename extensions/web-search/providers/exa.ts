@@ -5,8 +5,6 @@ import {
 } from "../client";
 import { combineSignals, WebProviderError } from "../provider-error";
 import type {
-	NewsSearchArgs,
-	NewsSearchResult,
 	OpenUrlResult,
 	ProviderOptions,
 	RagResult,
@@ -185,25 +183,6 @@ export async function searchExaWeb(args: WebSearchArgs, options: ProviderOptions
 		query,
 		startDate: args.startDate,
 		endDate: args.endDate,
-		limit,
-		results: filterKnownDates(parseExaSearchText(response.text), args.startDate, args.endDate).slice(0, limit),
-		elapsedMs: response.elapsedMs,
-	};
-}
-
-export async function searchExaNews(args: NewsSearchArgs, options: ProviderOptions = {}): Promise<NewsSearchResult> {
-	const query = args.query.trim();
-	const limit = boundedLimit(args.limit);
-	const language = args.lang?.trim() ? ` Language: ${args.lang.trim()}.` : "";
-	const enriched = `News articles${datePhrase(args.startDate, args.endDate)} about ${query}.${language} Prefer original reporting and primary announcements.`;
-	const response = await callExa("web_search_exa", { query: enriched, numResults: limit }, options);
-	return {
-		provider: "exa",
-		tool: "news_search",
-		query,
-		startDate: args.startDate,
-		endDate: args.endDate,
-		lang: args.lang?.trim() || undefined,
 		limit,
 		results: filterKnownDates(parseExaSearchText(response.text), args.startDate, args.endDate).slice(0, limit),
 		elapsedMs: response.elapsedMs,

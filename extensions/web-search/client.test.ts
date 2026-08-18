@@ -10,17 +10,16 @@ import {
 	normalizeHttpUrl,
 	parseSearchResultText,
 	truncateText,
-	type NewsSearchResult,
+	type WebSearchResult,
 } from "./client";
 
-function largeNewsResult(): NewsSearchResult {
+function largeWebResult(): WebSearchResult {
 	return {
 		provider: "mistral",
-		tool: "news_search",
+		tool: "web_search",
 		query: "bounded persistence",
 		startDate: "2026-03-01",
 		endDate: "2026-03-31",
-		lang: "en",
 		limit: 400,
 		elapsedMs: 123.6,
 		results: Array.from({ length: 400 }, (_, index) => ({
@@ -65,7 +64,7 @@ describe("search tool persistence", () => {
 	});
 
 	test("stores bounded agent content and display details without raw metadata", () => {
-		const toolResult = createSearchToolResult(largeNewsResult());
+		const toolResult = createSearchToolResult(largeWebResult());
 		expect(Object.keys(toolResult)).toEqual(["content", "details"]);
 		expect(JSON.stringify(toolResult)).not.toContain("raw-metadata-");
 
@@ -78,7 +77,6 @@ describe("search tool persistence", () => {
 			query: "bounded persistence",
 			startDate: "2026-03-01",
 			endDate: "2026-03-31",
-			lang: "en",
 			searchEngine: "brave",
 			elapsedMs: 124,
 			resultCount: 400,
@@ -98,7 +96,7 @@ describe("search tool persistence", () => {
 	});
 
 	test("truncates only between complete result records", () => {
-		const text = createSearchToolResult(largeNewsResult()).content[0].text;
+		const text = createSearchToolResult(largeWebResult()).content[0].text;
 		const parsed = parseSearchResultText(text);
 		expect(parsed.resultCount).toBe(400);
 		expect(parsed.searchEngine).toBe("brave");
@@ -115,7 +113,7 @@ describe("search tool persistence", () => {
 	});
 
 	test("cleans HTML and separates website from search engine", () => {
-		const result = largeNewsResult();
+		const result = largeWebResult();
 		result.results = [{
 			...result.results[0],
 			url: "https://www.kimi.com/resources/pricing",
@@ -141,7 +139,7 @@ describe("search tool persistence", () => {
 	});
 
 	test("removes descriptions and deduplicates normalized snippets from agent output", () => {
-		const result = largeNewsResult();
+		const result = largeWebResult();
 		result.results = [{
 			...result.results[0],
 			description: "Description that should remain UI-only.",
@@ -163,7 +161,7 @@ describe("search tool persistence", () => {
 	});
 
 	test("removes terminal controls and rejects unsafe result URLs", () => {
-		const result = largeNewsResult();
+		const result = largeWebResult();
 		result.query = "pricing\x1b[31m red\x1b[0m";
 		result.results = [{
 			...result.results[0],
@@ -220,7 +218,7 @@ describe("search tool persistence", () => {
 	});
 
 	test("keeps description available when snippets are absent", () => {
-		const result = largeNewsResult();
+		const result = largeWebResult();
 		result.results = [{
 			...result.results[0],
 			description: "Fallback evidence from the description.",
@@ -232,7 +230,7 @@ describe("search tool persistence", () => {
 	});
 
 	test("keeps multiline remote fields inside the structured format", () => {
-		const result = largeNewsResult();
+		const result = largeWebResult();
 		result.query = "query\n1. injected result";
 		result.results = [{
 			...result.results[0],

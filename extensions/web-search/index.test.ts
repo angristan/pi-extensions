@@ -89,7 +89,6 @@ webSearchExtension({
 } as any);
 
 const webSearch = tools.find((tool) => tool.name === "web_search");
-const newsSearch = tools.find((tool) => tool.name === "news_search");
 const openUrl = tools.find((tool) => tool.name === "open_url");
 const theme = {
 	fg: (name: string, text: string) => `<${name}>${text}</${name}>`,
@@ -123,14 +122,14 @@ function render(tool: any, toolResult: unknown, args: Record<string, unknown>, o
 
 describe("web tool prompt guidance", () => {
 	test("stays concise without dropping routing and evidence behavior", () => {
-		const guidelines = [webSearch, newsSearch, openUrl].flatMap((tool) => tool.promptGuidelines ?? []);
+		expect(tools.map((tool) => tool.name)).toEqual(["web_search", "open_url"]);
+		const guidelines = [webSearch, openUrl].flatMap((tool) => tool.promptGuidelines ?? []);
 		const text = guidelines.join("\n");
 
-		expect(guidelines).toHaveLength(5);
+		expect(guidelines).toHaveLength(4);
 		expect(new Set(guidelines).size).toBe(guidelines.length);
 		expect(text.length).toBeLessThanOrEqual(600);
 		expect(text).toContain("official or primary sources");
-		expect(text).toContain("recent events");
 		expect(text).toContain("snippets when sufficient");
 		expect(text).toContain("ax URL --md --budget 800");
 		expect(text).toContain("public PDFs");
@@ -139,7 +138,7 @@ describe("web tool prompt guidance", () => {
 		expect(text).not.toContain("ax or open_url");
 		expect(text).not.toContain("provider unset");
 		expect(openUrl.parameters.url.description).not.toContain("returned by web_search");
-		for (const tool of [webSearch, newsSearch, openUrl]) {
+		for (const tool of [webSearch, openUrl]) {
 			expect(tool.parameters.provider.description).toContain("Leave unset unless a provider-specific retry is needed");
 		}
 	});
@@ -290,7 +289,6 @@ describe("web search renderer", () => {
 			let message = "";
 			status.handler("", { ui: { notify(value: string) { message = value; } } });
 			expect(message).toContain("web: exa → firecrawl → mistral");
-			expect(message).toContain("news: exa → firecrawl → mistral");
 			expect(message).toContain("open: exa → firecrawl → mistral");
 			expect(message).not.toContain("pdf:");
 			expect(message).not.toContain("test-firecrawl-key");

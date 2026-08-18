@@ -1,8 +1,6 @@
 import { detectOpenUrlFailure, normalizeHttpUrl, truncateText } from "../client";
 import { combineSignals, WebProviderError } from "../provider-error";
 import type {
-	NewsSearchArgs,
-	NewsSearchResult,
 	OpenUrlResult,
 	ProviderOptions,
 	RagResult,
@@ -98,10 +96,6 @@ export function dateFilter(startDate?: string, endDate?: string): string | undef
 	return ["cdr:1", start ? `cd_min:${start}` : undefined, end ? `cd_max:${end}` : undefined].filter(Boolean).join(",");
 }
 
-export function newsDateFilter(startDate?: string, endDate?: string): string {
-	return dateFilter(startDate, endDate) ?? "qdr:w";
-}
-
 function credits(payload: any): number | undefined {
 	const value = payload?.creditsUsed ?? payload?.data?.metadata?.creditsUsed;
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -125,29 +119,6 @@ export async function searchFirecrawlWeb(args: WebSearchArgs, options: ProviderO
 		endDate: args.endDate,
 		limit,
 		results: parseFirecrawlItems(response.payload?.data?.web ?? []).slice(0, limit),
-		elapsedMs: response.elapsedMs,
-		creditsUsed: credits(response.payload),
-	};
-}
-
-export async function searchFirecrawlNews(args: NewsSearchArgs, options: ProviderOptions = {}): Promise<NewsSearchResult> {
-	const query = args.query.trim();
-	const limit = boundedLimit(args.limit);
-	const response = await post("/search", {
-		query,
-		limit,
-		sources: ["news"],
-		tbs: newsDateFilter(args.startDate, args.endDate),
-	}, options);
-	return {
-		provider: "firecrawl",
-		tool: "news_search",
-		query,
-		startDate: args.startDate,
-		endDate: args.endDate,
-		lang: args.lang?.trim() || undefined,
-		limit,
-		results: parseFirecrawlItems(response.payload?.data?.news ?? []).slice(0, limit),
 		elapsedMs: response.elapsedMs,
 		creditsUsed: credits(response.payload),
 	};

@@ -1,12 +1,11 @@
 # web-search
 
-Provider-neutral web search, news search, and remote page opening, rendered as
+Provider-neutral web search and remote page opening, rendered as
 compact transcript rows that match better-native-pi's tool-block grammar.
 
-The extension keeps three stable agent-facing tools:
+The extension keeps two stable agent-facing tools:
 
-- `web_search` — general web search
-- `news_search` — recent and date-bounded news discovery
+- `web_search` — general and date-bounded web search
 - `open_url` — remote fallback after local retrieval fails
 
 ## Routing
@@ -15,13 +14,12 @@ Requests use sequential fallbacks. Providers are never raced, avoiding duplicate
 requests and unnecessary Firecrawl credits.
 
 ```text
-web_search   Exa → Firecrawl (when configured) → Mistral (when configured)
-news_search  Exa → Firecrawl (when configured) → Mistral (when configured)
-open_url     Exa → Firecrawl (when configured) → Mistral (when configured)
+web_search  Exa → Firecrawl (when configured) → Mistral (when configured)
+open_url    Exa → Firecrawl (when configured) → Mistral (when configured)
 ```
 
-The same default provider order is used for web search, news search, and URL
-opening. Mistral article IDs are still opened with Mistral directly when
+The same default provider order is used for web search and URL opening.
+Mistral article IDs are still opened with Mistral directly when
 configured.
 
 Fallbacks happen after timeouts, rate limits, server failures, blocked pages,
@@ -47,7 +45,6 @@ resolvable key, Mistral is omitted from every route.
 Optional routing overrides:
 
 - `PI_WEB_SEARCH_PROVIDER=exa|mistral|firecrawl`
-- `PI_WEB_NEWS_PROVIDER=exa|mistral|firecrawl`
 - `PI_WEB_OPEN_PROVIDER=exa|mistral|firecrawl`
 
 Each tool also accepts an optional `provider` argument (`exa`, `firecrawl`, or

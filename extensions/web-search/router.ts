@@ -1,11 +1,9 @@
 import { performance } from "node:perf_hooks";
 import { compactProviderError, isRetriableProviderError, WebProviderError } from "./provider-error";
-import { openExaUrl, searchExaNews, searchExaWeb } from "./providers/exa";
-import { hasFirecrawlAccess, openFirecrawlUrl, searchFirecrawlNews, searchFirecrawlWeb } from "./providers/firecrawl";
-import { hasMistralAccess, openMistralUrl, searchMistralNews, searchMistralWeb } from "./providers/mistral";
+import { openExaUrl, searchExaWeb } from "./providers/exa";
+import { hasFirecrawlAccess, openFirecrawlUrl, searchFirecrawlWeb } from "./providers/firecrawl";
+import { hasMistralAccess, openMistralUrl, searchMistralWeb } from "./providers/mistral";
 import type {
-	NewsSearchArgs,
-	NewsSearchResult,
 	OpenUrlResult,
 	ProviderAttempt,
 	ProviderOptions,
@@ -47,8 +45,7 @@ function failureMessage(label: string, attempts: ProviderAttempt[]): string {
 	return `${label} failed: ${failures.map((attempt) => `${attempt.provider}: ${attempt.error}`).join("; ") || "no provider available"}`;
 }
 
-export async function routeSearch<T extends WebSearchResult | NewsSearchResult>(
-	operation: "web_search" | "news_search",
+export async function routeSearch<T extends WebSearchResult>(
 	providers: WebProvider[],
 	call: (provider: WebProvider) => Promise<T>,
 ): Promise<T> {
@@ -86,15 +83,11 @@ export async function routeSearch<T extends WebSearchResult | NewsSearchResult>(
 			creditsUsed: totalCredits(attempts),
 		};
 	}
-	throw new WebProviderError(failureMessage(operation === "web_search" ? "Web search" : "News search", attempts));
+	throw new WebProviderError(failureMessage("Web search", attempts));
 }
 
 export function webProviderOrder(preferredProvider?: string): WebProvider[] {
 	return ordered("PI_WEB_SEARCH_PROVIDER", preferredProvider);
-}
-
-export function newsProviderOrder(preferredProvider?: string): WebProvider[] {
-	return ordered("PI_WEB_NEWS_PROVIDER", preferredProvider);
 }
 
 export function openProviderOrder(url: string, preferredProvider?: string): WebProvider[] {
@@ -103,18 +96,10 @@ export function openProviderOrder(url: string, preferredProvider?: string): WebP
 }
 
 export async function searchWeb(args: WebSearchArgs, options: ProviderOptions = {}): Promise<WebSearchResult> {
-	return routeSearch("web_search", webProviderOrder(args.provider), (provider) => {
+	return routeSearch(webProviderOrder(args.provider), (provider) => {
 		if (provider === "exa") return searchExaWeb(args, options);
 		if (provider === "firecrawl") return searchFirecrawlWeb(args, options);
 		return searchMistralWeb(args, options);
-	});
-}
-
-export async function searchNews(args: NewsSearchArgs, options: ProviderOptions = {}): Promise<NewsSearchResult> {
-	return routeSearch("news_search", newsProviderOrder(args.provider), (provider) => {
-		if (provider === "exa") return searchExaNews(args, options);
-		if (provider === "firecrawl") return searchFirecrawlNews(args, options);
-		return searchMistralNews(args, options);
 	});
 }
 
@@ -155,7 +140,6 @@ export function webStatus() {
 		},
 		routes: {
 			web: webProviderOrder(),
-			news: newsProviderOrder(),
 			open: openProviderOrder("https://example.com"),
 		},
 	};

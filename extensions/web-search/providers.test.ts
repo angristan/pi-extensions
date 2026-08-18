@@ -1,6 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { parseExaSearchText, searchExaWeb } from "./providers/exa";
-import { dateFilter, newsDateFilter, parseFirecrawlItems } from "./providers/firecrawl";
+import { dateFilter, parseFirecrawlItems } from "./providers/firecrawl";
 
 describe("provider normalization", () => {
 	test("deduplicates Exa tracking variants and preserves evidence", () => {
@@ -92,10 +92,8 @@ describe("provider normalization", () => {
 		expect(results[1]).toMatchObject({ description: "News snippet", snippets: ["News snippet"], date: "1 day ago", rank: 2 });
 	});
 
-	test("uses exact custom news dates and a rolling-week default", () => {
-		expect(newsDateFilter("2026-06-17", "2026-07-17")).toBe("cdr:1,cd_min:06/17/2026,cd_max:07/17/2026");
+	test("uses exact custom web-search dates", () => {
 		expect(dateFilter("2026-06-17")).toBe("cdr:1,cd_min:06/17/2026");
 		expect(dateFilter(undefined, "2026-07-17")).toBe("cdr:1,cd_max:07/17/2026");
-		expect(newsDateFilter()).toBe("qdr:w");
 	});
 });
