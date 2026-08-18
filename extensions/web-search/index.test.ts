@@ -207,6 +207,7 @@ describe("web search renderer", () => {
 		expect(lines[1]).toContain("arxiv.org + aclanthology.org");
 		expect(lines[1]).toContain("≤24h old");
 		expect(lines[1]).toContain("via Exa");
+		expect(lines[1]).toContain("<muted>3s</muted>");
 	});
 
 	test("shows titles and clickable full URLs without snippets", () => {
@@ -224,6 +225,24 @@ describe("web search renderer", () => {
 		expect(output).toContain("<link:https://www.example1.com/article><mdLink>https://www.example1.com/article</mdLink></link>");
 		expect(output).toContain("<muted>2026-04-21</muted>");
 		expect(output).not.toContain("Evidence 1");
+	});
+
+	test("styles a recognized trailing site name as secondary text", () => {
+		const item = {
+			...result(1, "exa"),
+			url: "https://aclanthology.org/2021.emnlp-main.98/",
+			title: "Documenting Large Webtext Corpora - ACL Anthology",
+		};
+		const toolResult = createSearchToolResult({
+			provider: "exa",
+			tool: "web_search",
+			query: "web corpora",
+			limit: 1,
+			elapsedMs: 100,
+			results: [item],
+		});
+		const output = render(webSearch, toolResult, { query: "web corpora" }).join("\n");
+		expect(output).toContain("<text>Documenting Large Webtext Corpora</text><dim> - ACL Anthology</dim>");
 	});
 
 	test("compacts timestamps and omits unavailable dates", () => {

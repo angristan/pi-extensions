@@ -134,6 +134,24 @@ function resultWebsite(result: SearchDisplayItem): string | undefined {
 	return url ? new URL(url).hostname.replace(/^www\./i, "") || undefined : undefined;
 }
 
+function renderResultTitle(title: string, website: string | undefined, theme: Theme): string {
+	const siteBrand = website?.replace(/^www\./i, "").split(".")[0]?.replace(/[^a-z0-9]/gi, "").toLowerCase();
+	if (!siteBrand) return theme.fg("text", title);
+
+	const separators = [" - ", " — ", " | "];
+	const match = separators
+		.map((separator) => ({ separator, index: title.lastIndexOf(separator) }))
+		.filter(({ index }) => index > 0)
+		.sort((left, right) => right.index - left.index)[0];
+	if (!match) return theme.fg("text", title);
+
+	const suffix = title.slice(match.index + match.separator.length);
+	const suffixBrand = suffix.replace(/[^a-z0-9]/gi, "").toLowerCase();
+	if (suffixBrand !== siteBrand) return theme.fg("text", title);
+
+	return `${theme.fg("text", title.slice(0, match.index))}${theme.fg("dim", `${match.separator}${suffix}`)}`;
+}
+
 function resultSearchEngine(result: SearchDisplayItem): string | undefined {
 	const value = result.searchEngine ?? result.source;
 	if (!value) return undefined;
@@ -236,7 +254,7 @@ function searchSummary(details: SearchDisplayDetails, searchEngine: string | und
 		freshness ? theme.fg("muted", freshness) : undefined,
 		route ? theme.fg("muted", `via ${route}`) : undefined,
 		credits ? theme.fg("muted", credits) : undefined,
-		elapsed,
+		theme.fg("muted", elapsed),
 	].filter(Boolean).join(theme.fg("dim", " · "));
 }
 
@@ -301,6 +319,7 @@ function renderSearchResult(
 			const title = sanitizeSearchText(item.title ?? resultWebsite(item) ?? "Untitled result", 600);
 			const renderedUrl = url ? hyperlink(theme.fg("mdLink", label), url) : theme.fg("text", label);
 			const website = resultWebsite(item);
+			const renderedTitle = renderResultTitle(title, website, theme);
 			const itemSearchEngine = resultSearchEngine(item);
 			const itemDate = formatDisplayDate(item.date);
 			const via = !searchEngine && itemSearchEngine && itemSearchEngine.toLowerCase() !== website?.toLowerCase() ? `via ${itemSearchEngine}` : undefined;
@@ -308,7 +327,7 @@ function renderSearchResult(
 				via ? theme.fg("muted", via) : undefined,
 				itemDate ? theme.fg("muted", itemDate) : undefined,
 			].filter(Boolean).join(theme.fg("dim", " · "));
-			lines.push(`${INDENT}${theme.fg("muted", `${index + 1}.`)} ${theme.fg("text", title)}${collapsedMeta ? ` ${theme.fg("dim", "·")} ${collapsedMeta}` : ""}`);
+			lines.push(`${INDENT}${theme.fg("muted", `${index + 1}.`)} ${renderedTitle}${collapsedMeta ? ` ${theme.fg("dim", "·")} ${collapsedMeta}` : ""}`);
 			lines.push(`${INDENT}   ${renderedUrl}`);
 			if (expanded) {
 				const metadata = [
