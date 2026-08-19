@@ -241,7 +241,7 @@ function advancedSearchArgs(args: WebSearchArgs, query: string, limit: number): 
 		numResults: limit,
 		type: "auto",
 		...(nativeCategory ? { category: nativeCategory } : {}),
-		...(includeDomains ? { includeDomains } : {}),
+		...(!restrictedCategory && includeDomains ? { includeDomains } : {}),
 		...(!restrictedCategory && excludeDomains ? { excludeDomains } : {}),
 		...(!restrictedCategory && args.startDate ? { startPublishedDate: publicationBoundary(args.startDate, false) } : {}),
 		...(!restrictedCategory && args.endDate ? { endPublishedDate: publicationBoundary(args.endDate, true) } : {}),

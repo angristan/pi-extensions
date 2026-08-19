@@ -34,9 +34,11 @@ search. The public `web_search` schema supports:
 GitHub is intentionally not a category: use the authenticated `gh` CLI for
 anything on GitHub. Exa applies supported filters natively. Its `publication`
 vertical rejects domain filters, so explicit domains take priority and the
-publication intent moves into the semantic query. Domain and known-date
-constraints are enforced again after every provider response, including
-fallbacks; category and freshness controls are best effort outside Exa.
+publication intent moves into the semantic query. Its dedicated `company` and
+`people` indices reject domain and publication-date filters, so those filters
+are enforced locally instead. Domain and known-date constraints are enforced
+again after every provider response, including fallbacks; category and
+freshness controls are best effort outside Exa.
 
 Fallbacks happen after timeouts, rate limits, server failures, blocked pages,
 empty content, or empty search results. Exa has up to six HTTP 429 retry slots,

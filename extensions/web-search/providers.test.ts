@@ -115,10 +115,12 @@ describe("provider normalization", () => {
 				query: "European AI companies",
 				category: "company",
 				startDate: "2026-01-01",
+				includeDomains: ["github.com"],
 				excludeDomains: ["linkedin.com"],
 			});
 			expect(requestArguments.category).toBe("company");
 			expect(requestArguments).not.toHaveProperty("startPublishedDate");
+			expect(requestArguments).not.toHaveProperty("includeDomains");
 			expect(requestArguments).not.toHaveProperty("excludeDomains");
 		} finally {
 			globalThis.fetch = previousFetch;
