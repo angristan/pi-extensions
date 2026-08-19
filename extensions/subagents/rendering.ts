@@ -14,7 +14,7 @@ export const MAILBOX_HISTORY_ENTRY_TYPE = "subagent-mailbox-history";
 
 const TOOL_OUTPUT_BYTES = 48 * 1024;
 const MAX_REPORT_CHARS = 4_000;
-const COLLAPSED_RESULT_ROWS = 3;
+const COLLAPSED_RESULT_ROWS = 1;
 const TOOL_BRANCH = "  └ ";
 const TOOL_INDENT = "    ";
 const OVERLAY_MAX_ROWS = 10;
@@ -346,12 +346,17 @@ function agentStatusSummary(agents: AgentSnapshot[]): string {
 type DetailLabel = "prompt" | "message" | "result" | "usage" | "error";
 
 function detailPrefix(label: DetailLabel, theme: any, indent = TOOL_INDENT, failed = false): string {
-	const labelColor = label === "error" || (label === "result" && failed) ? "error" : "muted";
+	const labelColor = label === "error" || (label === "result" && failed)
+		? "error"
+		: label === "result"
+			? "toolTitle"
+			: "muted";
 	const displayLabel = label === "prompt" ? "Task" : `${label[0]?.toUpperCase()}${label.slice(1)}`;
 	return `${indent}${theme.fg(labelColor, displayLabel.padEnd(6))}  `;
 }
 
 function detailContentColor(label: DetailLabel): string {
+	if (label === "prompt") return "muted";
 	if (label === "usage") return "dim";
 	if (label === "error") return "error";
 	return "text";
