@@ -227,6 +227,27 @@ describe("web search renderer", () => {
 		expect(output).not.toContain("Evidence 1");
 	});
 
+	test("renders URL-valued titles once as numbered clickable URLs", () => {
+		const item = {
+			...result(1, "exa"),
+			url: "https://aerospike.com/docs/database/manage/planning/capacity/secondary-indexes/",
+			title: "https://aerospike.com/docs/database/manage/planning/capacity/secondary-indexes",
+		};
+		const toolResult = createSearchToolResult({
+			provider: "exa",
+			tool: "web_search",
+			query: "secondary index capacity",
+			limit: 1,
+			elapsedMs: 100,
+			results: [item],
+		});
+		const lines = render(webSearch, toolResult, { query: "secondary index capacity" });
+		expect(lines).toHaveLength(3);
+		expect(lines[2]).toContain("<muted>1.</muted> <link:https://aerospike.com/docs/database/manage/planning/capacity/secondary-indexes/>");
+		expect(lines[2]).toContain("<muted>2026-04-21</muted>");
+		expect(lines.join("\n")).not.toContain("<text>https://aerospike.com");
+	});
+
 	test("styles a recognized trailing site name as secondary text", () => {
 		const item = {
 			...result(1, "exa"),

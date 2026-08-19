@@ -128,6 +128,19 @@ function sourceUrl(result: SearchDisplayItem): string {
 	return sanitizeSearchText(result.url ?? "", 2_048) || "URL unavailable";
 }
 
+function urlsMatchForDisplay(left: string, right: string): boolean {
+	const leftUrl = normalizeHttpUrl(left);
+	const rightUrl = normalizeHttpUrl(right);
+	if (!leftUrl || !rightUrl) return false;
+	const comparable = (value: string) => {
+		const url = new URL(value);
+		url.hash = "";
+		url.pathname = url.pathname.replace(/\/+$/, "") || "/";
+		return url.href;
+	};
+	return comparable(leftUrl) === comparable(rightUrl);
+}
+
 function resultWebsite(result: SearchDisplayItem): string | undefined {
 	if (result.website) return sanitizeSearchText(result.website, 200);
 	const url = resultUrl(result);
@@ -319,7 +332,8 @@ function renderSearchResult(
 			const title = sanitizeSearchText(item.title ?? resultWebsite(item) ?? "Untitled result", 600);
 			const renderedUrl = url ? hyperlink(theme.fg("mdLink", label), url) : theme.fg("text", label);
 			const website = resultWebsite(item);
-			const renderedTitle = renderResultTitle(title, website, theme);
+			const titleIsUrl = url ? urlsMatchForDisplay(title, url) : false;
+			const renderedTitle = titleIsUrl ? renderedUrl : renderResultTitle(title, website, theme);
 			const itemSearchEngine = resultSearchEngine(item);
 			const itemDate = formatDisplayDate(item.date);
 			const via = !searchEngine && itemSearchEngine && itemSearchEngine.toLowerCase() !== website?.toLowerCase() ? `via ${itemSearchEngine}` : undefined;
@@ -328,7 +342,7 @@ function renderSearchResult(
 				itemDate ? theme.fg("muted", itemDate) : undefined,
 			].filter(Boolean).join(theme.fg("dim", " · "));
 			lines.push(`${INDENT}${theme.fg("muted", `${index + 1}.`)} ${renderedTitle}${collapsedMeta ? ` ${theme.fg("dim", "·")} ${collapsedMeta}` : ""}`);
-			lines.push(`${INDENT}   ${renderedUrl}`);
+			if (!titleIsUrl) lines.push(`${INDENT}   ${renderedUrl}`);
 			if (expanded) {
 				const metadata = [
 					via,
