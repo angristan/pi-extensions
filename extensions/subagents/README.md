@@ -80,10 +80,10 @@ produce duplicate completion cards.
 Mailbox cards group each child into a separate block with a status symbol, readable
 task summary, Markdown-rendered result, and subdued usage metadata. Result Markdown
 uses one subdued tool-output color instead of the normal assistant palette; status
-colors are limited to symbols and errors. The context mode appears in the spawn
-headline only, where it affects the action. Long
-results keep the latest five rendered rows and show the full-result shortcut below
-the usage line.
+colors are limited to symbols and errors. Cards omit internal spacer rows and put
+the result label beside the first preview row. The context mode appears in the
+spawn headline only, where it affects the action. Long results keep the latest
+three rendered rows and show the full-result shortcut below the usage line.
 
 Child model usage is persisted in the parent session and included in the footer's
 token and cost totals. Parent and child context windows remain independent.

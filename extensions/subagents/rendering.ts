@@ -14,7 +14,7 @@ export const MAILBOX_HISTORY_ENTRY_TYPE = "subagent-mailbox-history";
 
 const TOOL_OUTPUT_BYTES = 48 * 1024;
 const MAX_REPORT_CHARS = 4_000;
-const COLLAPSED_RESULT_ROWS = 5;
+const COLLAPSED_RESULT_ROWS = 3;
 const TOOL_BRANCH = "  └ ";
 const TOOL_INDENT = "    ";
 const OVERLAY_MAX_ROWS = 10;
@@ -419,7 +419,9 @@ function resultMarkdownTheme(theme: any): MarkdownTheme {
 
 function resultBlockLines(agent: AgentSnapshot, width: number, theme: any, expanded: boolean): ResultBlock {
 	if (!agent.output) return { lines: [], hiddenRows: 0 };
-	const contentWidth = Math.max(1, width - visibleWidth(TOOL_INDENT));
+	const prefix = detailPrefix("result", theme);
+	const continuation = " ".repeat(visibleWidth(prefix));
+	const contentWidth = Math.max(1, width - visibleWidth(prefix));
 	const output = sanitizeTerminal(agent.output).replace(/\r\n?/g, "\n").replace(/\s+$/, "");
 	const rendered = new Markdown(output, 0, 0, resultMarkdownTheme(theme))
 		.render(contentWidth)
@@ -427,10 +429,7 @@ function resultBlockLines(agent: AgentSnapshot, width: number, theme: any, expan
 	const hiddenRows = expanded ? 0 : Math.max(0, rendered.length - COLLAPSED_RESULT_ROWS);
 	const visibleRows = hiddenRows > 0 ? rendered.slice(-COLLAPSED_RESULT_ROWS) : rendered;
 	return {
-		lines: [
-			`${TOOL_INDENT}${theme.fg("toolTitle", theme.bold("Result"))}`,
-			...visibleRows.map((line) => `${TOOL_INDENT}${theme.fg("toolOutput", line)}`),
-		],
+		lines: visibleRows.map((line, index) => `${index === 0 ? prefix : continuation}${theme.fg("toolOutput", line)}`),
 		hiddenRows,
 	};
 }
@@ -455,15 +454,14 @@ function agentBodyLines(
 	let hiddenResultRows = 0;
 	if (options.showResult && agent.output) {
 		const result = resultBlockLines(agent, width, theme, Boolean(options.expanded));
-		lines.push("", ...result.lines);
+		lines.push(...result.lines);
 		hiddenResultRows = result.hiddenRows;
 	}
 	if (options.showResult && agent.error) {
-		if (!agent.output) lines.push("");
 		lines.push(detailLine("error", compact(agent.error, 240), width, theme));
 	}
 	const usage = options.showUsage ? usageText(agent) : "";
-	if (usage) lines.push("", `${TOOL_INDENT}${theme.fg("dim", usage)}`);
+	if (usage) lines.push(`${TOOL_INDENT}${theme.fg("dim", usage)}`);
 	if (hiddenResultRows > 0) {
 		const noun = hiddenResultRows === 1 ? "line" : "lines";
 		lines.push(`${TOOL_INDENT}${theme.fg("dim", `Ctrl+O for full result · ${hiddenResultRows} earlier ${noun} hidden`)}`);
@@ -529,7 +527,7 @@ export function renderAgentResult(result: any, options: ToolRenderOptions, theme
 			|| action === "read"
 			|| action === "interrupt"
 			|| action === "close";
-		for (const agent of visibleAgents) {
+		for (const [index, agent] of visibleAgents.entries()) {
 			const completed = isSettled(agent);
 			const isMessageAction = action === "send" || action === "followup" || action === "message";
 			const prompt = action === "close"
@@ -538,7 +536,7 @@ export function renderAgentResult(result: any, options: ToolRenderOptions, theme
 					? String(args?.message ?? "")
 					: agent.task;
 			const showsCompletion = (action === "wait" || action === "list" || action === "read") && completed;
-			if (showsCompletion || visibleAgents.length > 1) lines.push("");
+			if (index > 0) lines.push("");
 			lines.push(...agentBodyLines(agent, width, theme, {
 				prompt,
 				promptLabel: isMessageAction ? "message" : "prompt",
@@ -564,7 +562,6 @@ class CompletionComponent implements Component {
 				"",
 				agent.status === "paused",
 			),
-			"",
 			...agentBodyLines(agent, width, theme, {
 				prompt: agent.task,
 				showResult: true,
@@ -602,8 +599,8 @@ class MailboxBatchComponent implements Component {
 			for (const event of details.mailbox?.filter((candidate) => candidate.kind === "final" && candidate.omittedBefore) ?? []) {
 				lines.push(`${TOOL_BRANCH}${theme.fg("muted", `${event.agentName} · ${event.omittedBefore} earlier updates omitted`)}`);
 			}
-			for (const agent of details.agents) {
-				lines.push("");
+			for (const [index, agent] of details.agents.entries()) {
+				if (index > 0) lines.push("");
 				lines.push(...agentBodyLines(agent, width, theme, {
 					prompt: agent.task,
 					showResult: true,

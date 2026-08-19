@@ -585,12 +585,10 @@ describe("subagents", () => {
 		const waited = await waiting;
 		const collapsed = rendered(harness.tool.renderResult(waited, { isPartial: false, expanded: false }, renderTheme, { args: waitArgs }));
 		expect(collapsed[0]).toBe("• Updates received — Collect delegated review");
-		expect(collapsed[1]).toBe("");
-		expect(collapsed[2]).toContain(first.details.agents[0].name);
-		expect(collapsed[3]).toBe("    Task    Inspect API");
-		expect(collapsed[5]).toBe("    Result");
-		expect(collapsed[6]).toBe("    API review complete.");
-		expect(collapsed[8]).toContain("    1 turn · ↑10 · ↓5 · R2 · W3 · $0.0100 · test-provider/test-model");
+		expect(collapsed[1]).toContain(first.details.agents[0].name);
+		expect(collapsed[2]).toBe("    Task    Inspect API");
+		expect(collapsed[3]).toBe("    Result  API review complete.");
+		expect(collapsed[4]).toContain("    1 turn · ↑10 · ↓5 · R2 · W3 · $0.0100 · test-provider/test-model");
 		expect(harness.sentMessages).toHaveLength(0);
 		const expanded = rendered(harness.tool.renderResult(waited, { isPartial: false, expanded: true }, renderTheme, { args: waitArgs }), 60);
 		expect(expanded.join("\n")).toContain("API review complete.");
@@ -631,17 +629,14 @@ describe("subagents", () => {
 		const waited = await waiting;
 
 		const collapsed = rendered(harness.tool.renderResult(waited, { isPartial: false, expanded: false }, renderTheme, { args: waitArgs }), 100);
-		expect(collapsed.slice(5, 11)).toEqual([
-			"    Result",
-			"    review line 4",
-			"    review line 5",
-			"    review line 6",
-			"    review line 7",
-			"    review line 8",
+		expect(collapsed.slice(3, 6)).toEqual([
+			"    Result  review line 6",
+			"            review line 7",
+			"            review line 8",
 		]);
 		expect(collapsed.join("\n")).not.toContain("review line 1");
 		expect(collapsed.at(-2)).toContain("1 turn");
-		expect(collapsed.at(-1)).toBe("    Ctrl+O for full result · 3 earlier lines hidden");
+		expect(collapsed.at(-1)).toBe("    Ctrl+O for full result · 5 earlier lines hidden");
 
 		const expanded = rendered(harness.tool.renderResult(waited, { isPartial: false, expanded: true }, renderTheme, { args: waitArgs }), 100);
 		expect(expanded.join("\n")).toContain("review line 1");
@@ -658,20 +653,17 @@ describe("subagents", () => {
 		const renderer = harness.messageRenderers.get("subagent-result")!;
 		const compactLines = rendered(renderer(message, { expanded: false }, renderTheme));
 		expect(compactLines[0]).toBe("• Agent completed");
-		expect(compactLines[1]).toBe("");
-		expect(compactLines[2]).toContain(`✓ ${message.details.name}`);
+		expect(compactLines[1]).toContain(`✓ ${message.details.name}`);
 		expect(compactLines.join("\n")).not.toContain(message.details.id);
-		expect(compactLines[2]).not.toContain("context");
-		expect(compactLines[3]).toBe("    Task    Review renderer");
-		expect(compactLines[5]).toBe("    Result");
-		expect(compactLines[6]).toBe("    Renderer matches the shared design.");
-		expect(compactLines[8]).toContain("    1 turn · ↑10 · ↓5 · R2 · W3 · $0.0100 · test-provider/test-model");
+		expect(compactLines[1]).not.toContain("context");
+		expect(compactLines[2]).toBe("    Task    Review renderer");
+		expect(compactLines[3]).toBe("    Result  Renderer matches the shared design.");
+		expect(compactLines[4]).toContain("    1 turn · ↑10 · ↓5 · R2 · W3 · $0.0100 · test-provider/test-model");
 		const styledLines = renderer(message, { expanded: false }, semanticTheme).render(100);
-		expect(styledLines[2]).toContain(`\x1b[39m${message.details.name}\x1b[0m`);
-		expect(styledLines[3]).toContain("\x1b[90mTask  \x1b[0m  \x1b[90mReview renderer\x1b[0m");
-		expect(styledLines[5]).toContain("\x1b[36mResult\x1b[0m");
-		expect(styledLines[6]).toContain("\x1b[37mRenderer matches the shared design.");
-		expect(styledLines[8]).toContain("\x1b[2m1 turn");
+		expect(styledLines[1]).toContain(`\x1b[39m${message.details.name}\x1b[0m`);
+		expect(styledLines[2]).toContain("\x1b[90mTask  \x1b[0m  \x1b[90mReview renderer\x1b[0m");
+		expect(styledLines[3]).toContain("\x1b[36mResult\x1b[0m  \x1b[37mRenderer matches the shared design.");
+		expect(styledLines[4]).toContain("\x1b[2m1 turn");
 		const waitArgs = { reasoning: "Collect reported result", action: "wait", agent_names: [message.details.name], timeout_ms: 1_000 };
 		const waited = await harness.tool.execute("wait", waitArgs, undefined, undefined, harness.ctx);
 		expect(waited.details.alreadyReportedAgentIds).toEqual([message.details.id]);
@@ -740,7 +732,7 @@ describe("subagents", () => {
 		const completionLines = rendered(completion);
 		expect(completionLines[0]).toBe("• Agent paused");
 		expect(completion.render(100)[0]).toContain("\x1b[33m•\x1b[0m");
-		expect(completionLines[2]).toContain("Ⅱ");
+		expect(completionLines[1]).toContain("Ⅱ");
 		expect(completionLines[0]).toContain("paused");
 
 		await harness.tool.execute("resume-paused", {
@@ -1232,19 +1224,19 @@ setInterval(() => {}, 1000);
 		const lines = rendered(renderer(delivery, { expanded: false }, renderTheme));
 		const output = lines.join("\n");
 		expect(lines[0]).toBe("• Agent mailbox · 2 completed");
-		expect(lines[2]).toContain(`✓ ${first.details.agents[0].name}`);
-		expect(lines[2]).not.toContain("context");
-		expect(lines[10]).toContain(`✓ ${second.details.agents[0].name}`);
-		expect(lines[10]).not.toContain("context");
+		expect(lines[1]).toContain(`✓ ${first.details.agents[0].name}`);
+		expect(lines[1]).not.toContain("context");
+		expect(lines[6]).toContain(`✓ ${second.details.agents[0].name}`);
+		expect(lines[6]).not.toContain("context");
 		expect(output).toContain("API review complete with client.ts.");
 		expect(output).toContain("Accessibility review");
 		expect(output).not.toContain("**");
 		expect(output).not.toContain("](");
 
 		const styled = renderer(delivery, { expanded: true }, semanticTheme).render(100);
-		for (const resultLine of [styled[6], styled[14]]) {
+		for (const resultLine of [styled[3], styled[8]]) {
 			const foregrounds = [...resultLine.matchAll(/\x1b\[(3\d|9\d)m/g)].map((match) => match[1]);
-			expect(new Set(foregrounds)).toEqual(new Set(["37"]));
+			expect(new Set(foregrounds)).toEqual(new Set(["36", "37"]));
 		}
 	});
 
@@ -1611,8 +1603,7 @@ setInterval(() => {}, 1000);
 		expect(result.details.agents[0]).toMatchObject({ status: "completed", output: "Reusable final response" });
 		const lines = rendered(harness.tool.renderResult(result, { isPartial: false, expanded: false }, renderTheme, { args }));
 		expect(lines[0]).toBe(`• Read agent ${name} to Recall delegated result`);
-		expect(lines).toContain("    Result");
-		expect(lines).toContain("    Reusable final response");
+		expect(lines).toContain("    Result  Reusable final response");
 		expect(harness.clients).toHaveLength(1);
 		expect(harness.clients[0].stopped).toBe(true);
 	});
