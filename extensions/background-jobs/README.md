@@ -14,7 +14,7 @@ sessions without blocking the agent or losing track of child processes.
   - `tty: true` allocates a PTY for prompts, REPLs, watch processes, and control characters
 - `terminal_write` — write characters to a yielded terminal or poll with empty input
 - `job_output` — read only output produced since the previous cursor
-- `job_kill` — stop one terminal immediately
+- `job_kill` — stop one terminal immediately, with a required short reason
 
 The three terminal-control tools are registered but initially inactive, keeping
 their schemas out of ordinary requests. The first yielded `bash` call activates
@@ -59,11 +59,12 @@ heading-colored terminal name, accent reasoning, dim `│` command-output gutter
 collapse, and `└` metadata hierarchy: `Interacted with <terminal> to <goal>`,
 `Waited for <terminal> to <goal>`, or `Read from <terminal> to <goal>`. The
 `job_kill` follows the same tool hierarchy: one accent pending row is replaced
-by a success-colored result headline with a bold action and heading-colored
-terminal name. Signal details stay in the dim metadata branch:
+by a success-colored result headline with a bold action, heading-colored
+terminal name, and accent reason. Signal details stay in the dim metadata
+branch:
 
 ```text
-• Stopping Confirm application health
+• Stopping Confirm application health to finish the demo
   └ ◌ confirm-app-he-ff5ed8c6 · SIGTERM sent
 ```
 

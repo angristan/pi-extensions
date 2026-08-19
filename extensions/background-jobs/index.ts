@@ -290,10 +290,15 @@ function jobKillIdentity(source: any): string {
 	return compactCommand(source?.description || source?.id || "terminal", 96);
 }
 
+function jobKillIntent(args: any, theme: any): string {
+	const reasoning = compactCommand(args?.reasoning, 96);
+	return reasoning ? ` ${theme.fg("dim", "to")} ${theme.fg("accent", reasoning)}` : "";
+}
+
 function renderJobKillCall(args: any, theme: any, context: any): Container | JobKillComponent {
 	if (!context?.isPartial) return new Container();
 	const identity = theme.fg("mdHeading", compactCommand(args?.job_id || "terminal", 96));
-	return new JobKillComponent([`${theme.fg("accent", "•")} ${theme.bold("Stopping")} ${identity}`]);
+	return new JobKillComponent([`${theme.fg("accent", "•")} ${theme.bold("Stopping")} ${identity}${jobKillIntent(args, theme)}`]);
 }
 
 function renderJobKillResult(result: any, options: any, theme: any, context: any): Container | JobKillComponent {
@@ -303,17 +308,18 @@ function renderJobKillResult(result: any, options: any, theme: any, context: any
 	const details = result?.details;
 	const status = details?.status;
 	const identity = theme.fg("mdHeading", jobKillIdentity(details));
+	const intent = jobKillIntent(context?.args, theme);
 
 	if (context?.isError) {
 		return new JobKillComponent([
-			`${theme.fg("error", "•")} ${theme.bold("Stop failed")} ${identity}`,
+			`${theme.fg("error", "•")} ${theme.bold("Stop failed")} ${identity}${intent}`,
 			`${theme.fg("dim", "  └ ")}${theme.fg("error", text)}`,
 		]);
 	}
 	if (text.startsWith("Sent SIGTERM")) {
 		const id = compactCommand(details?.id || "terminal", 96);
 		return new JobKillComponent([
-			`${theme.fg("success", "•")} ${theme.bold("Stopping")} ${identity}`,
+			`${theme.fg("success", "•")} ${theme.bold("Stopping")} ${identity}${intent}`,
 			`${theme.fg("dim", "  └ ")}${theme.fg("warning", "◌")} ${theme.fg("dim", `${id} · SIGTERM sent`)}`,
 		]);
 	}
@@ -1181,11 +1187,14 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	pi.registerTool({
 		name: "job_kill",
 		label: "Stop Job",
-		description: "Stop one managed terminal.",
+		description: "Stop one managed terminal for the stated reason.",
 		parameters: {
 			type: "object",
-			properties: { job_id: { type: "string", description: "Full terminal ID or an unambiguous prefix" } },
-			required: ["job_id"],
+			properties: {
+				reasoning: { type: "string", description: INTERACTION_REASONING_DESCRIPTION },
+				job_id: { type: "string", description: "Full terminal ID or an unambiguous prefix" },
+			},
+			required: ["reasoning", "job_id"],
 		} as any,
 		executionMode: "sequential",
 		async execute(_id: string, params: any) {

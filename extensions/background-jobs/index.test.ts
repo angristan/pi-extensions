@@ -511,16 +511,19 @@ describe("terminal tools", () => {
 			fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
 			bold: (text: string) => `<bold>${text}</bold>`,
 		};
+		expect(tool.parameters.required).toEqual(["reasoning", "job_id"]);
+		expect(Object.keys(tool.parameters.properties)).toEqual(["reasoning", "job_id"]);
+		const args = { reasoning: "finish the demo", job_id: "confirm-app-he-ff5ed8c6" };
 		const pending = tool.renderCall(
-			{ job_id: "confirm-app-he-ff5ed8c6" },
+			args,
 			theme,
 			{ isPartial: true },
-		).render(120).join("\n").trimEnd();
+		).render(240).join("\n").trimEnd();
 		const settledCall = tool.renderCall(
-			{ job_id: "confirm-app-he-ff5ed8c6" },
+			args,
 			theme,
 			{ isPartial: false },
-		).render(120).join("\n").trimEnd();
+		).render(240).join("\n").trimEnd();
 		const accepted = tool.renderResult(
 			{
 				content: [{ type: "text", text: "Sent SIGTERM to background terminal confirm-app-he-ff5ed8c6." }],
@@ -528,8 +531,8 @@ describe("terminal tools", () => {
 			},
 			{ expanded: false, isPartial: false },
 			theme,
-			{ isError: false },
-		).render(120).join("\n").trimEnd();
+			{ isError: false, args },
+		).render(240).join("\n").trimEnd();
 		const noOp = tool.renderResult(
 			{
 				content: [{ type: "text", text: "confirm-app-he-ff5ed8c6 is already timed_out." }],
@@ -538,12 +541,12 @@ describe("terminal tools", () => {
 			{ expanded: false, isPartial: false },
 			theme,
 			{ isError: false },
-		).render(120).join("\n").trimEnd();
+		).render(240).join("\n").trimEnd();
 
-		expect(pending).toBe("<accent>•</accent> <bold>Stopping</bold> <mdHeading>confirm-app-he-ff5ed8c6</mdHeading>");
+		expect(pending).toBe("<accent>•</accent> <bold>Stopping</bold> <mdHeading>confirm-app-he-ff5ed8c6</mdHeading> <dim>to</dim> <accent>finish the demo</accent>");
 		expect(settledCall).toBe("");
 		expect(accepted).toBe([
-			"<success>•</success> <bold>Stopping</bold> <mdHeading>Confirm application health</mdHeading>",
+			"<success>•</success> <bold>Stopping</bold> <mdHeading>Confirm application health</mdHeading> <dim>to</dim> <accent>finish the demo</accent>",
 			"<dim>  └ </dim><warning>◌</warning> <dim>confirm-app-he-ff5ed8c6 · SIGTERM sent</dim>",
 		].join("\n"));
 		expect(noOp).toBe("<warning>◷</warning> confirm-app-he-ff5ed8c6 is already timed out.");
@@ -1071,6 +1074,7 @@ describe("background terminal UX", () => {
 		try {
 			await Bun.sleep(1_100);
 			const stop = await harness.tools.get("job_kill").execute("kill", {
+				reasoning: "test timeout stop race",
 				job_id: started.details.id,
 			}, undefined, undefined, harness.ctx);
 			expect(stop.content[0].text).toContain("Stop already requested");
@@ -1148,8 +1152,9 @@ describe("background terminal UX", () => {
 		try {
 			await Bun.sleep(50);
 			harness.ctx.ui.confirm = async () => { throw new Error("job_kill must not request confirmation"); };
-			const first = await harness.tools.get("job_kill").execute("kill-1", { job_id: started.details.id }, undefined, undefined, harness.ctx);
-			const second = await harness.tools.get("job_kill").execute("kill-2", { job_id: started.details.id }, undefined, undefined, harness.ctx);
+			const stopArgs = { reasoning: "test duplicate stop requests", job_id: started.details.id };
+			const first = await harness.tools.get("job_kill").execute("kill-1", stopArgs, undefined, undefined, harness.ctx);
+			const second = await harness.tools.get("job_kill").execute("kill-2", stopArgs, undefined, undefined, harness.ctx);
 			expect(first.content[0].text).toContain("Sent SIGTERM");
 			expect(second.content[0].text).toContain("Stop already requested");
 			const finished = await harness.tools.get("job_output").execute("output", { job_id: started.details.id, wait: true });
