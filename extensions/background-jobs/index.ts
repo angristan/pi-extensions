@@ -1145,19 +1145,18 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	pi.registerTool({
 		name: "job_kill",
 		label: "Stop Job",
-		description: "Stop one managed terminal after explicit user confirmation.",
+		description: "Stop one managed terminal.",
 		parameters: {
 			type: "object",
 			properties: { job_id: { type: "string", description: "Full terminal ID or an unambiguous prefix" } },
 			required: ["job_id"],
 		} as any,
 		executionMode: "sequential",
-		async execute(_id: string, params: any, _signal: AbortSignal | undefined, _update: any, ctx: any) {
+		async execute(_id: string, params: any) {
 			const job = findJob(params.job_id);
 			if (!job) throw new Error(`Background terminal not found or prefix is ambiguous: ${params.job_id}`);
 			if (!isActive(job)) return { content: [{ type: "text", text: `${job.id} is already ${job.status}.` }], details: snapshot(job, PERSISTED_OUTPUT_BYTES) };
 			if (job.killReason) return { content: [{ type: "text", text: `Stop already requested for background terminal ${job.id}.` }], details: snapshot(job, PERSISTED_OUTPUT_BYTES) };
-			if (!(await confirmKill(job, ctx))) throw new Error(`Did not stop ${job.id}; user confirmation was not granted.`);
 			requestKill(job, "user");
 			return { content: [{ type: "text", text: `Sent SIGTERM to background terminal ${job.id}.` }], details: snapshot(job, PERSISTED_OUTPUT_BYTES) };
 		},

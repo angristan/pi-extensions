@@ -14,7 +14,7 @@ sessions without blocking the agent or losing track of child processes.
   - `tty: true` allocates a PTY for prompts, REPLs, watch processes, and control characters
 - `terminal_write` — write characters to a yielded terminal or poll with empty input
 - `job_output` — read only output produced since the previous cursor
-- `job_kill` — stop one terminal after explicit confirmation
+- `job_kill` — stop one terminal immediately
 
 The three terminal-control tools are registered but initially inactive, keeping
 their schemas out of ordinary requests. The first yielded `bash` call activates

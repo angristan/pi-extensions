@@ -1110,7 +1110,7 @@ describe("background terminal UX", () => {
 		}
 	}, 5_000);
 
-	test("makes repeated stop requests idempotent", async () => {
+	test("stops immediately without confirmation and keeps repeated requests idempotent", async () => {
 		if (process.platform === "win32") return;
 		const harness = createHarness({ killGraceMs: 50 });
 		await startHarness(harness);
@@ -1121,6 +1121,7 @@ describe("background terminal UX", () => {
 		}, undefined, undefined, harness.ctx);
 		try {
 			await Bun.sleep(50);
+			harness.ctx.ui.confirm = async () => { throw new Error("job_kill must not request confirmation"); };
 			const first = await harness.tools.get("job_kill").execute("kill-1", { job_id: started.details.id }, undefined, undefined, harness.ctx);
 			const second = await harness.tools.get("job_kill").execute("kill-2", { job_id: started.details.id }, undefined, undefined, harness.ctx);
 			expect(first.content[0].text).toContain("Sent SIGTERM");
