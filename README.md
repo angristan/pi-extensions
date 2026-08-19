@@ -75,7 +75,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | [`notifications`](extensions/notifications/) | Desktop notifications for agent activity, so you can context-switch away and get pinged |
 | [`openai-codex-fast`](extensions/openai-codex-fast/) | Toggle OpenAI Codex Fast mode and show a purple `fast` footer indicator when active |
 | [`prevent-sleep`](extensions/prevent-sleep/) | Keep macOS awake while Pi is actively processing an agent run |
-| [`telegram`](extensions/telegram/) | Send critical agent alerts and answer delayed structured questions through Telegram |
+| [`telegram`](extensions/telegram/) | Send direct messages and answer delayed structured questions through Telegram |
 | [`web-search`](extensions/web-search/) | Quality-routed web search and page opening through Exa, Firecrawl, and optional Mistral |
 
 ### Diagnostics & performance

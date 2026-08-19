@@ -5,7 +5,6 @@ import { join } from "node:path";
 import {
 	createTelegramExtension,
 	formatResolvedMessage,
-	formatUserNotification,
 	formatWaitingMessage,
 	loadTelegramConfig,
 	saveTelegramConfig,
@@ -66,7 +65,6 @@ function makeHarness(options: {
 	sendQuestion?: (config: TelegramConfig, text: string, question: any, signal?: AbortSignal) => Promise<{ chatId: string; messageId: number }>;
 	waitForAnswer?: (config: TelegramConfig, sent: any, question: any, signal: AbortSignal) => Promise<string>;
 	resolveQuestion?: (config: TelegramConfig, sent: any, text: string) => Promise<void>;
-	now?: () => number;
 } = {}) {
 	const lifecycleHandlers: Record<string, Array<(event: any, ctx: any) => any>> = {};
 	const busHandlers: Record<string, Array<(event: any) => void>> = {};
@@ -92,7 +90,6 @@ function makeHarness(options: {
 		resolveQuestion: options.resolveQuestion ?? (async (_config, _question, text) => { resolved.push(text); }),
 		setTimer: scheduler.setTimer,
 		clearTimer: scheduler.clearTimer,
-		now: options.now,
 	});
 	extension({
 		events: {
@@ -347,37 +344,31 @@ describe("question wait lifecycle", () => {
 	});
 });
 
-describe("urgent user notifications", () => {
-	test("sends a bounded alert with session context", async () => {
-		const harness = makeHarness({ sessionName: "Database migration" });
+describe("direct user messages", () => {
+	test("sends free-form text verbatim", async () => {
+		const harness = makeHarness();
 		await harness.emit("session_start");
+		const message = "The requested crawl is complete.\nArtifacts are ready for review.";
 
-		const result = await harness.invokeTool("notify_user", {
-			message: "A production migration changed unexpected rows. Further writes have stopped; review the current session.",
-		});
+		const result = await harness.invokeTool("notify_user", { message });
 
-		expect(harness.sent).toEqual([
-			"🚨 Critical agent alert\nDatabase migration\n\nA production migration changed unexpected rows. Further writes have stopped; review the current session.",
-		]);
+		expect(harness.sent).toEqual([message]);
 		expect(result).toMatchObject({
-			content: [{ type: "text", text: "Urgent Telegram alert sent to the user." }],
-			details: { status: "sent", project: "Database migration" },
+			content: [{ type: "text", text: "Telegram message sent to the user." }],
+			details: { status: "sent" },
 		});
 	});
 
-	test("deduplicates identical alerts for five minutes", async () => {
-		let currentTime = 1_000;
-		const harness = makeHarness({ now: () => currentTime });
+	test("guides the agent toward explicit, timely, or sensitive updates", async () => {
+		const harness = makeHarness();
 		await harness.emit("session_start");
+		const tool = harness.tools.get("notify_user");
+		const guidance = [tool.description, ...tool.promptGuidelines].join(" ");
 
-		await harness.invokeTool("notify_user", { message: "Critical security issue found; review the session." });
-		currentTime += 60_000;
-		const duplicate = await harness.invokeTool("notify_user", { message: "Critical security issue found; review the session." });
-		currentTime += 5 * 60_000;
-		await harness.invokeTool("notify_user", { message: "Critical security issue found; review the session." });
-
-		expect(harness.sent).toHaveLength(2);
-		expect(duplicate.details).toEqual({ status: "duplicate", project: "example-project" });
+		expect(guidance).toContain("explicitly");
+		expect(guidance).toContain("time-sensitive");
+		expect(guidance).toContain("important or sensitive");
+		expect(guidance).toContain("questionnaire");
 	});
 
 	test("registers only for enabled Telegram configurations", async () => {
@@ -387,16 +378,16 @@ describe("urgent user notifications", () => {
 
 		await harness.invokeCommand("telegram", "on");
 		expect(harness.tools.has("notify_user")).toBe(true);
-		await harness.invokeTool("notify_user", { message: "Critical issue" });
-		expect(harness.sent).toHaveLength(1);
+		await harness.invokeTool("notify_user", { message: "Work is complete." });
+		expect(harness.sent).toEqual(["Work is complete."]);
 	});
 
-	test("rejects messages that exceed the bound", async () => {
-		const enabled = makeHarness();
-		await enabled.emit("session_start");
-		await expect(enabled.invokeTool("notify_user", { message: "x".repeat(2_001) }))
-			.rejects.toThrow("Telegram notification messages are limited to 2000 characters.");
-		expect(enabled.sent).toEqual([]);
+	test("rejects messages that exceed Telegram's bound", async () => {
+		const harness = makeHarness();
+		await harness.emit("session_start");
+		await expect(harness.invokeTool("notify_user", { message: "x".repeat(4_097) }))
+			.rejects.toThrow("Telegram messages are limited to 4096 characters.");
+		expect(harness.sent).toEqual([]);
 	});
 
 	test("redacts the bot token from delivery failures", async () => {
@@ -405,14 +396,9 @@ describe("urgent user notifications", () => {
 		});
 		await harness.emit("session_start");
 
-		const alert = harness.invokeTool("notify_user", { message: "Critical issue" });
-		await expect(alert).rejects.toThrow("Telegram notification failed: request failed for [redacted]");
-		await expect(alert).rejects.not.toThrow(config.botToken);
-	});
-
-	test("formats a stable plain-text alert card", () => {
-		expect(formatUserNotification("api-worker", "Credentials may be exposed. Work stopped."))
-			.toBe("🚨 Critical agent alert\napi-worker\n\nCredentials may be exposed. Work stopped.");
+		const message = harness.invokeTool("notify_user", { message: "Work is complete." });
+		await expect(message).rejects.toThrow("Telegram message failed: request failed for [redacted]");
+		await expect(message).rejects.not.toThrow(config.botToken);
 	});
 });
 

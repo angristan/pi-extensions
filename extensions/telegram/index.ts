@@ -22,14 +22,13 @@ const QUESTION_ANSWER_EVENT = "questions:answer";
 const QUESTION_RESOLVED_EVENT = "questions:resolved";
 const DEFAULT_DELAY_MINUTES = 5;
 const MAX_DELAY_MINUTES = 7 * 24 * 60;
-const MAX_NOTIFICATION_CHARACTERS = 2_000;
-const NOTIFICATION_DEDUP_WINDOW_MS = 5 * 60_000;
+const MAX_TELEGRAM_MESSAGE_CHARACTERS = 4_096;
 
 const notifyUserParameters = Type.Object({
 	message: Type.String({
-		description: "Short, sanitized account of the critical event and what the user should review now.",
+		description: "Free-form message sent verbatim to the configured Telegram chat.",
 		minLength: 1,
-		maxLength: MAX_NOTIFICATION_CHARACTERS,
+		maxLength: MAX_TELEGRAM_MESSAGE_CHARACTERS,
 	}),
 }, { additionalProperties: false });
 
@@ -61,7 +60,6 @@ interface RuntimeDependencies {
 	resolveQuestion?: (config: TelegramConfig, sent: SentTelegramQuestion, text: string) => Promise<void>;
 	setTimer?: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
 	clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
-	now?: () => number;
 }
 
 export function telegramConfigPath(): string {
@@ -163,15 +161,6 @@ function contextLabel(pi: ExtensionAPI, cwd: string): string {
 
 function messageContext(project: string, question: WaitingQuestion): string {
 	return `<b>${escapeTelegramHtml(preview(project, 100))}</b> · Question ${question.index} of ${question.total}`;
-}
-
-export function formatUserNotification(project: string, message: string): string {
-	return [
-		"🚨 Critical agent alert",
-		preview(project, 100),
-		"",
-		preview(message, MAX_NOTIFICATION_CHARACTERS),
-	].join("\n");
 }
 
 export function formatWaitingMessage(project: string, question: WaitingQuestion, delayMinutes: number): string {
@@ -296,7 +285,6 @@ export function createTelegramExtension(dependencies: RuntimeDependencies = {}) 
 	const resolveQuestion = dependencies.resolveQuestion ?? resolveTelegramQuestion;
 	const setTimer = dependencies.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
 	const clearTimer = dependencies.clearTimer ?? ((timer) => clearTimeout(timer));
-	const now = dependencies.now ?? Date.now;
 
 	return function telegram(pi: ExtensionAPI) {
 		interface PendingQuestion {
@@ -316,7 +304,6 @@ export function createTelegramExtension(dependencies: RuntimeDependencies = {}) 
 		let activeCtx: any;
 		let pending: PendingQuestion | undefined;
 		let activatedQuestionnaireId: string | undefined;
-		let lastNotification: { text: string; sentAt: number } | undefined;
 
 		const finalizePending = (question: PendingQuestion) => {
 			if (!question.sent || question.finalized) return;
@@ -408,40 +395,30 @@ export function createTelegramExtension(dependencies: RuntimeDependencies = {}) 
 			pi.registerTool({
 				name: "notify_user",
 				label: "Notify User",
-				description: "Send the user an urgent out-of-band Telegram alert. Use only after stopping further risky action and only for a credible, time-sensitive security issue, data exposure, production incident, or unintended destructive change. Never use it for routine status, completion, ordinary failures, or questions, and never include secrets or raw sensitive data.",
-				promptSnippet: "Send the user an urgent out-of-band Telegram alert",
+				description: "Send a free-form Telegram message to the user. Use when the user explicitly requests a message, when a time-sensitive action needs their awareness, or when an important or sensitive event deserves out-of-band notice. Use questionnaire instead when input, confirmation, or approval is required.",
+				promptSnippet: "Send the user a free-form Telegram message",
 				promptGuidelines: [
-					"Use notify_user only for credible critical events that require the user's immediate attention; do not use it for routine updates, completion notices, ordinary failures, or questions.",
-					"Never include credentials, secret values, private keys, or raw leaked data in notify_user messages.",
+					"Use notify_user when the user explicitly asks for a Telegram message, when a time-sensitive action needs their awareness, or when an important or sensitive event deserves out-of-band notice.",
+					"Do not use notify_user to request input, confirmation, or approval; use questionnaire for anything that needs the user's response.",
 				],
 				parameters: notifyUserParameters,
 				executionMode: "sequential",
-				async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+				async execute(_toolCallId, params, signal) {
 					if (!config?.enabled) throw new Error("Telegram is not configured or is disabled.");
 					const snapshot = { ...config };
-					const message = params.message.trim();
-					if (!message) throw new Error("Telegram notification message cannot be empty.");
-					if ([...message].length > MAX_NOTIFICATION_CHARACTERS) {
-						throw new Error(`Telegram notification messages are limited to ${MAX_NOTIFICATION_CHARACTERS} characters.`);
-					}
-					const project = contextLabel(pi, ctx.cwd);
-					const text = formatUserNotification(project, message);
-					const sentAt = now();
-					if (lastNotification?.text === text && sentAt - lastNotification.sentAt < NOTIFICATION_DEDUP_WINDOW_MS) {
-						return {
-							content: [{ type: "text", text: "Skipped an identical Telegram alert sent within the last five minutes." }],
-							details: { status: "duplicate", project },
-						};
+					const message = params.message;
+					if (!message.trim()) throw new Error("Telegram message cannot be empty.");
+					if ([...message].length > MAX_TELEGRAM_MESSAGE_CHARACTERS) {
+						throw new Error(`Telegram messages are limited to ${MAX_TELEGRAM_MESSAGE_CHARACTERS} characters.`);
 					}
 					try {
-						await sendMessage(snapshot, text, signal);
+						await sendMessage(snapshot, message, signal);
 					} catch (error) {
-						throw new Error(`Telegram notification failed: ${safeError(error, snapshot.botToken)}`);
+						throw new Error(`Telegram message failed: ${safeError(error, snapshot.botToken)}`);
 					}
-					lastNotification = { text, sentAt };
 					return {
-						content: [{ type: "text", text: "Urgent Telegram alert sent to the user." }],
-						details: { status: "sent", project },
+						content: [{ type: "text", text: "Telegram message sent to the user." }],
+						details: { status: "sent" },
 					};
 				},
 			});
@@ -518,7 +495,6 @@ export function createTelegramExtension(dependencies: RuntimeDependencies = {}) 
 		pi.on("session_start", (_event, ctx) => {
 			clearPending();
 			activatedQuestionnaireId = undefined;
-			lastNotification = undefined;
 			config = readConfig();
 			if (config?.enabled) registerNotifyTool();
 			activeCtx = ctx;

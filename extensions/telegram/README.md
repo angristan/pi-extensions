@@ -1,32 +1,29 @@
 # telegram
 
-Provides Telegram communication for Pi. It exposes `notify_user` for rare,
-critical out-of-band alerts and bridges delayed prompts from the `questions`
-extension. Choice questions use inline buttons; free-text questions let you
-reply directly to the bot. A valid Telegram answer resolves the questionnaire
-and dismisses the pending Pi dialog.
+Provides Telegram communication for Pi. It exposes `notify_user` for direct
+out-of-band messages and bridges delayed prompts from the `questions` extension.
+Choice questions use inline buttons; free-text questions let you reply directly
+to the bot. A valid Telegram answer resolves the questionnaire and dismisses the
+pending Pi dialog.
 
-## Critical alerts
+## Direct messages
 
-The agent can call `notify_user` after stopping further risky action when a
-credible security issue, data exposure, production incident, or unintended
-destructive change needs immediate attention. The tool accepts one sanitized
-`message` of at most 2,000 characters. It must not be used for routine status,
-completion notices, ordinary failures, or questions, and messages must not
-contain credentials, secret values, private keys, or raw leaked data.
+`notify_user` sends one free-form message verbatim to the configured Telegram
+chat. It is appropriate when:
 
-Alerts include the session title, falling back to the current directory name:
+- the user explicitly asks for a Telegram message, including a completion update;
+- a time-sensitive action needs the user's awareness; or
+- an important or sensitive event deserves out-of-band notice.
+
+The tool is one-way. It must not replace `questionnaire` when the agent needs
+input, confirmation, or approval. Messages may contain up to Telegram's 4,096
+character limit, preserve line breaks, and disable link previews. The agent
+cannot select another recipient.
 
 ```text
-🚨 Critical agent alert
-api-worker
-
-Credentials may be exposed. Work stopped.
+The requested crawl is complete.
+Artifacts are ready for review.
 ```
-
-Identical alerts are suppressed for five minutes. Each successful or suppressed
-call remains visible in the tool transcript. The destination is always the chat
-ID saved during setup; the agent cannot choose another recipient.
 
 ## Delayed questions
 
@@ -104,7 +101,7 @@ config file.
 - `/telegram setup` — securely configure the bot, chat, and delay
 - `/telegram status` — show configuration status without exposing credentials
 - `/telegram test` — send a test message
-- `/telegram on` / `/telegram off` — enable or disable alerts and delayed questions
+- `/telegram on` / `/telegram off` — enable or disable direct messages and delayed questions
 
 ## Dependencies
 
