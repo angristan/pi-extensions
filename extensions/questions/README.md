@@ -36,11 +36,11 @@ submit a matching `questions:answer`; a valid remote answer dismisses the local
 dialog and is recorded exactly like a TUI answer. `questions:resolved` reports
 whether the prompt was answered or cancelled and whether TUI or remote input won.
 Remote answers are rejected for secret
-questions, and `telegram-notifications` redacts secret question text before it
+questions, and `telegram` redacts secret question text before it
 leaves Pi.
 
 ## Dependencies
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
 - **Depends on extensions:** None; `footer` optionally keeps the attention title pinned while its activity spinner runs.
-- **Used by extensions:** `telegram-notifications`, through runtime events.
+- **Used by extensions:** `telegram`, through runtime events.

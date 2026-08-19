@@ -75,7 +75,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | [`notifications`](extensions/notifications/) | Desktop notifications for agent activity, so you can context-switch away and get pinged |
 | [`openai-codex-fast`](extensions/openai-codex-fast/) | Toggle OpenAI Codex Fast mode and show a purple `fast` footer indicator when active |
 | [`prevent-sleep`](extensions/prevent-sleep/) | Keep macOS awake while Pi is actively processing an agent run |
-| [`telegram-notifications`](extensions/telegram-notifications/) | Answer delayed structured questions from Telegram with buttons or message replies |
+| [`telegram`](extensions/telegram/) | Send critical agent alerts and answer delayed structured questions through Telegram |
 | [`web-search`](extensions/web-search/) | Quality-routed web search and page opening through Exa, Firecrawl, and optional Mistral |
 
 ### Diagnostics & performance
@@ -111,7 +111,7 @@ A few extensions read optional config from Pi's agent directory (`~/.pi/agent` b
 - `telegram-notifications.json` — created with owner-only permissions by `/telegram setup`
 - `working-timer.json` — `{"spinner": "native" | "rail-3" | "rail-3-eased"}`
 
-All default to sensible values if the file is absent. Telegram notifications stay disabled until configured.
+All default to sensible values if the file is absent. The Telegram integration stays disabled until configured.
 
 ## Development
 
@@ -165,5 +165,5 @@ directions: the former reuses shared rendering primitives, while the latter
 owns `bash` and delegates its execution to the managed terminal service.
 
 Runtime event coupling does not appear in the direct-import graph. In particular,
-`telegram-notifications` consumes the events emitted by `questions` without
-importing that extension.
+`telegram` consumes the events emitted by `questions` without importing that
+extension.

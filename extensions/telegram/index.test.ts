@@ -3,8 +3,9 @@ import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-	createTelegramNotificationsExtension,
+	createTelegramExtension,
 	formatResolvedMessage,
+	formatUserNotification,
 	formatWaitingMessage,
 	loadTelegramConfig,
 	saveTelegramConfig,
@@ -65,6 +66,7 @@ function makeHarness(options: {
 	sendQuestion?: (config: TelegramConfig, text: string, question: any, signal?: AbortSignal) => Promise<{ chatId: string; messageId: number }>;
 	waitForAnswer?: (config: TelegramConfig, sent: any, question: any, signal: AbortSignal) => Promise<string>;
 	resolveQuestion?: (config: TelegramConfig, sent: any, text: string) => Promise<void>;
+	now?: () => number;
 } = {}) {
 	const lifecycleHandlers: Record<string, Array<(event: any, ctx: any) => any>> = {};
 	const busHandlers: Record<string, Array<(event: any) => void>> = {};
@@ -73,12 +75,14 @@ function makeHarness(options: {
 	const notices: string[] = [];
 	const emitted: Array<{ name: string; payload: unknown }> = [];
 	const resolved: string[] = [];
+	const tools = new Map<string, any>();
+	const commands = new Map<string, any>();
 	const ctx = {
 		cwd: "/tmp/example-project",
 		mode: "tui",
 		ui: { notify: (message: string) => notices.push(message) },
 	};
-	const extension = createTelegramNotificationsExtension({
+	const extension = createTelegramExtension({
 		loadConfig: () => options.config ?? config,
 		saveConfig: async () => {},
 		sendMessage: options.sendMessage ?? (async (_config, text) => { sent.push(text); }),
@@ -88,6 +92,7 @@ function makeHarness(options: {
 		resolveQuestion: options.resolveQuestion ?? (async (_config, _question, text) => { resolved.push(text); }),
 		setTimer: scheduler.setTimer,
 		clearTimer: scheduler.clearTimer,
+		now: options.now,
 	});
 	extension({
 		events: {
@@ -106,7 +111,8 @@ function makeHarness(options: {
 			(lifecycleHandlers[name] ??= []).push(handler);
 		},
 		getSessionName: () => options.sessionName,
-		registerCommand() {},
+		registerCommand(name: string, command: any) { commands.set(name, command); },
+		registerTool(tool: any) { tools.set(tool.name, tool); },
 	} as any);
 
 	return {
@@ -115,6 +121,13 @@ function makeHarness(options: {
 		notices,
 		emitted,
 		resolved,
+		tools,
+		async invokeTool(name: string, params: unknown) {
+			return tools.get(name).execute("tool-call", params, new AbortController().signal, undefined, ctx);
+		},
+		async invokeCommand(name: string, args: string) {
+			return commands.get(name).handler(args, ctx);
+		},
 		emitBus(name: string, event: unknown) {
 			for (const handler of busHandlers[name] ?? []) handler(event);
 		},
@@ -334,6 +347,75 @@ describe("question wait lifecycle", () => {
 	});
 });
 
+describe("urgent user notifications", () => {
+	test("sends a bounded alert with session context", async () => {
+		const harness = makeHarness({ sessionName: "Database migration" });
+		await harness.emit("session_start");
+
+		const result = await harness.invokeTool("notify_user", {
+			message: "A production migration changed unexpected rows. Further writes have stopped; review the current session.",
+		});
+
+		expect(harness.sent).toEqual([
+			"🚨 Critical agent alert\nDatabase migration\n\nA production migration changed unexpected rows. Further writes have stopped; review the current session.",
+		]);
+		expect(result).toMatchObject({
+			content: [{ type: "text", text: "Urgent Telegram alert sent to the user." }],
+			details: { status: "sent", project: "Database migration" },
+		});
+	});
+
+	test("deduplicates identical alerts for five minutes", async () => {
+		let currentTime = 1_000;
+		const harness = makeHarness({ now: () => currentTime });
+		await harness.emit("session_start");
+
+		await harness.invokeTool("notify_user", { message: "Critical security issue found; review the session." });
+		currentTime += 60_000;
+		const duplicate = await harness.invokeTool("notify_user", { message: "Critical security issue found; review the session." });
+		currentTime += 5 * 60_000;
+		await harness.invokeTool("notify_user", { message: "Critical security issue found; review the session." });
+
+		expect(harness.sent).toHaveLength(2);
+		expect(duplicate.details).toEqual({ status: "duplicate", project: "example-project" });
+	});
+
+	test("registers only for enabled Telegram configurations", async () => {
+		const harness = makeHarness({ config: { ...config, enabled: false } });
+		await harness.emit("session_start");
+		expect(harness.tools.has("notify_user")).toBe(false);
+
+		await harness.invokeCommand("telegram", "on");
+		expect(harness.tools.has("notify_user")).toBe(true);
+		await harness.invokeTool("notify_user", { message: "Critical issue" });
+		expect(harness.sent).toHaveLength(1);
+	});
+
+	test("rejects messages that exceed the bound", async () => {
+		const enabled = makeHarness();
+		await enabled.emit("session_start");
+		await expect(enabled.invokeTool("notify_user", { message: "x".repeat(2_001) }))
+			.rejects.toThrow("Telegram notification messages are limited to 2000 characters.");
+		expect(enabled.sent).toEqual([]);
+	});
+
+	test("redacts the bot token from delivery failures", async () => {
+		const harness = makeHarness({
+			sendMessage: async (credentials) => { throw new Error(`request failed for ${credentials.botToken}`); },
+		});
+		await harness.emit("session_start");
+
+		const alert = harness.invokeTool("notify_user", { message: "Critical issue" });
+		await expect(alert).rejects.toThrow("Telegram notification failed: request failed for [redacted]");
+		await expect(alert).rejects.not.toThrow(config.botToken);
+	});
+
+	test("formats a stable plain-text alert card", () => {
+		expect(formatUserNotification("api-worker", "Credentials may be exposed. Work stopped."))
+			.toBe("🚨 Critical agent alert\napi-worker\n\nCredentials may be exposed. Work stopped.");
+	});
+});
+
 describe("configuration and Telegram client", () => {
 	test("uses the configured Pi agent directory by default", async () => {
 		await saveTelegramConfig(config);
@@ -368,7 +450,11 @@ describe("configuration and Telegram client", () => {
 
 		expect(capturedUrl).toBe("https://api.telegram.org/bot123456:test-token/sendMessage");
 		expect(capturedInit?.method).toBe("POST");
-		expect(JSON.parse(String(capturedInit?.body))).toEqual({ chat_id: "987654321", text: "Question waiting" });
+		expect(JSON.parse(String(capturedInit?.body))).toEqual({
+			chat_id: "987654321",
+			text: "Question waiting",
+			link_preview_options: { is_disabled: true },
+		});
 	});
 
 	test("reports bounded API errors without exposing the token", async () => {

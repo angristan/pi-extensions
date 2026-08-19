@@ -86,7 +86,11 @@ export async function sendTelegramMessage(
 	signal?: AbortSignal,
 	fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
-	await telegramRequest(credentials, "sendMessage", { chat_id: credentials.chatId, text }, signal, fetchImpl);
+	await telegramRequest(credentials, "sendMessage", {
+		chat_id: credentials.chatId,
+		text,
+		link_preview_options: { is_disabled: true },
+	}, signal, fetchImpl);
 }
 
 export async function sendTelegramHtmlMessage(
