@@ -658,7 +658,7 @@ describe("subagents", () => {
 		const styledLines = renderer(message, { expanded: false }, semanticTheme).render(100);
 		expect(styledLines[1]).toContain(`\x1b[39m${message.details.name}\x1b[0m`);
 		expect(styledLines[2]).toContain("\x1b[90mTask  \x1b[0m  \x1b[39mReview renderer\x1b[0m");
-		expect(styledLines[3]).toContain("\x1b[36mResult\x1b[0m  \x1b[39mRenderer matches the shared design.");
+		expect(styledLines[3]).toContain("\x1b[39mResult\x1b[0m  \x1b[39mRenderer matches the shared design.");
 		expect(styledLines[4]).toContain("\x1b[2m1 turn");
 		const waitArgs = { reasoning: "Collect reported result", action: "wait", agent_names: [message.details.name], timeout_ms: 1_000 };
 		const waited = await harness.tool.execute("wait", waitArgs, undefined, undefined, harness.ctx);
@@ -1232,7 +1232,7 @@ setInterval(() => {}, 1000);
 		const styled = renderer(delivery, { expanded: true }, semanticTheme).render(100);
 		for (const resultLine of [styled[3], styled[8]]) {
 			const foregrounds = [...resultLine.matchAll(/\x1b\[(3\d|9\d)m/g)].map((match) => match[1]);
-			expect(new Set(foregrounds)).toEqual(new Set(["36", "39"]));
+			expect(new Set(foregrounds)).toEqual(new Set(["39"]));
 		}
 	});
 

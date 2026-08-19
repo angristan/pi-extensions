@@ -346,13 +346,11 @@ function agentStatusSummary(agents: AgentSnapshot[]): string {
 type DetailLabel = "prompt" | "message" | "result" | "usage" | "error";
 
 function detailPrefix(label: DetailLabel, theme: any, indent = TOOL_INDENT, failed = false): string {
-	const labelColor = label === "error" || (label === "result" && failed)
-		? "error"
-		: label === "result"
-			? "toolTitle"
-			: "muted";
+	const isError = label === "error" || (label === "result" && failed);
+	const labelColor = isError ? "error" : label === "result" ? "text" : "muted";
 	const displayLabel = label === "prompt" ? "Task" : `${label[0]?.toUpperCase()}${label.slice(1)}`;
-	return `${indent}${theme.fg(labelColor, displayLabel.padEnd(6))}  `;
+	const styledLabel = theme.fg(labelColor, displayLabel.padEnd(6));
+	return `${indent}${label === "result" && !failed ? theme.bold(styledLabel) : styledLabel}  `;
 }
 
 function detailContentColor(label: DetailLabel): string {
