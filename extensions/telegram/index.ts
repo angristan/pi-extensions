@@ -1,11 +1,12 @@
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Input, wrapTextWithAnsi, type Component, type Focusable, type TUI } from "@earendil-works/pi-tui";
+import { Container, Input, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type Focusable, type TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { BOLD, GREEN, MAGENTA, RED, RESET } from "../better-native-pi/render.js";
 import {
 	resolveTelegramQuestion,
 	sendTelegramHtmlMessage,
@@ -220,6 +221,108 @@ export function formatResolvedMessage(
 	return lines.join("\n");
 }
 
+const TOOL_BRANCH = "  └ ";
+const TOOL_INDENT = "    ";
+
+interface TelegramToolRenderContext {
+	lastComponent?: unknown;
+	isPartial?: boolean;
+	isError?: boolean;
+	args?: { message?: unknown };
+}
+
+class TelegramToolLines implements Component {
+	private cachedWidth?: number;
+	private cachedLines?: string[];
+
+	constructor(private source: (width: number) => string[] = () => []) {}
+
+	update(source: (width: number) => string[]): void {
+		this.source = source;
+		this.invalidate();
+	}
+
+	invalidate(): void {
+		this.cachedWidth = undefined;
+		this.cachedLines = undefined;
+	}
+
+	render(width: number): string[] {
+		const max = Math.max(1, width);
+		if (this.cachedLines && this.cachedWidth === max) return this.cachedLines;
+		this.cachedLines = this.source(max).map((line) =>
+			visibleWidth(line) <= max ? line : truncateToWidth(line, max, "…"));
+		this.cachedWidth = max;
+		return this.cachedLines;
+	}
+}
+
+function telegramToolLines(context: TelegramToolRenderContext): TelegramToolLines {
+	return context.lastComponent instanceof TelegramToolLines ? context.lastComponent : new TelegramToolLines();
+}
+
+function telegramHeadline(partial: boolean, error: boolean, text: string): string {
+	const mark = partial ? `${MAGENTA}•${RESET}` : error ? `${RED}•${RESET}` : `${GREEN}•${RESET}`;
+	return `${mark} ${BOLD}${text}${RESET}`;
+}
+
+function messageArgument(context: TelegramToolRenderContext): string {
+	return typeof context.args?.message === "string" ? context.args.message : "";
+}
+
+function oneLineMessage(message: string): string {
+	return message.replace(/\s+/g, " ").trim();
+}
+
+function toolResultText(result: any): string {
+	const content = result?.content;
+	if (!Array.isArray(content)) return "";
+	return content.find((item: any) => item?.type === "text" && typeof item.text === "string")?.text ?? "";
+}
+
+function fullMessageRows(message: string, width: number, theme: any): string[] {
+	const available = Math.max(1, width - visibleWidth(TOOL_INDENT));
+	return message.replace(/\s+$/g, "").split("\n").flatMap((line) =>
+		wrapTextWithAnsi(theme.fg("dim", line || " "), available).map((row) => `${TOOL_INDENT}${row}`));
+}
+
+function renderTelegramCall(args: { message?: unknown }, theme: any, context: TelegramToolRenderContext): Component {
+	if (!context.isPartial) return new Container();
+	const component = telegramToolLines(context);
+	const message = typeof args?.message === "string" ? args.message : "";
+	component.update(() => [
+		telegramHeadline(true, false, "Sending Telegram message"),
+		...(message ? [`${TOOL_BRANCH}${theme.fg("dim", oneLineMessage(message))}`] : []),
+	]);
+	return component;
+}
+
+function renderTelegramResult(
+	result: any,
+	options: { isPartial?: boolean; expanded?: boolean },
+	theme: any,
+	context: TelegramToolRenderContext,
+): Component {
+	if (options.isPartial) return new Container();
+	const component = telegramToolLines(context);
+	const message = messageArgument(context);
+	component.update((width) => {
+		if (context.isError) {
+			return [
+				telegramHeadline(false, true, "Telegram message failed"),
+				`${TOOL_BRANCH}${theme.fg("error", oneLineMessage(toolResultText(result)) || "Unknown error")}`,
+				...(options.expanded && message ? fullMessageRows(message, width, theme) : []),
+			];
+		}
+		return [
+			telegramHeadline(false, false, "Sent Telegram message"),
+			...(message ? [`${TOOL_BRANCH}${theme.fg("dim", oneLineMessage(message))}`] : []),
+			...(options.expanded && message ? fullMessageRows(message, width, theme) : []),
+		];
+	});
+	return component;
+}
+
 class MaskedInput extends Input {
 	override render(width: number): string[] {
 		const runtime = this as unknown as { value: string };
@@ -403,6 +506,9 @@ export function createTelegramExtension(dependencies: RuntimeDependencies = {}) 
 				],
 				parameters: notifyUserParameters,
 				executionMode: "sequential",
+				renderShell: "self",
+				renderCall: renderTelegramCall,
+				renderResult: renderTelegramResult,
 				async execute(_toolCallId, params, signal) {
 					if (!config?.enabled) throw new Error("Telegram is not configured or is disabled.");
 					const snapshot = { ...config };

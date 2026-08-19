@@ -18,7 +18,8 @@ chat. It is appropriate when:
 The tool is one-way. It must not replace `questionnaire` when the agent needs
 input, confirmation, or approval. Messages may contain up to Telegram's 4,096
 character limit, preserve line breaks, and disable link previews. The agent
-cannot select another recipient.
+cannot select another recipient. Calls use the same compact status block as the
+other native-style tools; expand a settled call to see the complete message.
 
 ```text
 The requested crawl is complete.
@@ -108,7 +109,8 @@ config file.
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
 - **Service:** [Telegram Bot API](https://core.telegram.org/bots/api), including
   `sendMessage`, inline keyboards, `ForceReply`, and `getUpdates`.
-- **Depends on extensions:** Optionally `questions`, through its
-  `questions:waiting`, `questions:answer`, and `questions:resolved` runtime
-  events. Direct alerts work without it.
+- **Depends on extensions:** `better-native-pi` for shared compact tool-rendering
+  primitives. Optionally `questions`, through its `questions:waiting`,
+  `questions:answer`, and `questions:resolved` runtime events. Direct messages
+  work without `questions`.
 - **Used by extensions:** None.

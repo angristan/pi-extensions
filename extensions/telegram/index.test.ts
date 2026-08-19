@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -145,6 +146,16 @@ function waiting(requestId: string, question = "Deploy to production?") {
 		total: 1,
 		secret: false,
 	};
+}
+
+const renderTheme = {
+	fg: (_name: string, text: string) => text,
+};
+
+function rendered(component: { render(width: number): string[] }, width = 120): string[] {
+	return component.render(width).map((line) => line
+		.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+		.replace(/<[^>]+>/g, ""));
 }
 
 describe("question wait lifecycle", () => {
@@ -357,6 +368,45 @@ describe("direct user messages", () => {
 			content: [{ type: "text", text: "Telegram message sent to the user." }],
 			details: { status: "sent" },
 		});
+	});
+
+	test("renders compact native-style call, success, and error blocks", async () => {
+		const harness = makeHarness();
+		await harness.emit("session_start");
+		const tool = harness.tools.get("notify_user");
+		const args = { message: "The crawl is complete.\nArtifacts are ready." };
+
+		expect(tool.renderShell).toBe("self");
+		expect(rendered(tool.renderCall(args, renderTheme, { isPartial: true }))).toEqual([
+			"• Sending Telegram message",
+			"  └ The crawl is complete. Artifacts are ready.",
+		]);
+		expect(rendered(tool.renderResult(
+			{ content: [{ type: "text", text: "Telegram message sent to the user." }], details: { status: "sent" } },
+			{ isPartial: false, expanded: false },
+			renderTheme,
+			{ args, isError: false },
+		))).toEqual([
+			"• Sent Telegram message",
+			"  └ The crawl is complete. Artifacts are ready.",
+		]);
+		expect(rendered(tool.renderResult(
+			{ content: [{ type: "text", text: "Request timed out" }] },
+			{ isPartial: false, expanded: false },
+			renderTheme,
+			{ args, isError: true },
+		))).toEqual([
+			"• Telegram message failed",
+			"  └ Request timed out",
+		]);
+
+		const expanded = tool.renderResult(
+			{ content: [{ type: "text", text: "Telegram message sent to the user." }], details: { status: "sent" } },
+			{ isPartial: false, expanded: true },
+			renderTheme,
+			{ args, isError: false },
+		).render(32);
+		expect(expanded.every((line: string) => visibleWidth(line) <= 32)).toBe(true);
 	});
 
 	test("guides the agent toward explicit, timely, or sensitive updates", async () => {
