@@ -58,10 +58,18 @@ without mixing metadata into command output:
 heading-colored terminal name, accent reasoning, dim `│` command-output gutter, tail-first
 collapse, and `└` metadata hierarchy: `Interacted with <terminal> to <goal>`,
 `Waited for <terminal> to <goal>`, or `Read from <terminal> to <goal>`. The
-`job_kill` uses the stopping icon while the request is in flight, then renders
-the terminal's final status icon and color. No-op stop requests render as
-`◷ <id> is already timed out.` instead of plain status text. The `/jobs` and
-`/ps` live viewer uses that same normal command-output treatment.
+`job_kill` follows the same tool hierarchy: one accent pending row is replaced
+by a success-colored result headline with a bold action and heading-colored
+terminal name. Signal details stay in the dim metadata branch:
+
+```text
+• Stopping Confirm application health
+  └ ◌ confirm-app-he-ff5ed8c6 · SIGTERM sent
+```
+
+No-op stop requests render as `◷ <id> is already timed out.` instead of plain
+status text. The `/jobs` and `/ps` live viewer uses that same normal
+command-output treatment.
 
 After terminals yield into the background, they appear in the shared top-right
 overlay stack:

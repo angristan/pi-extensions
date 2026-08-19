@@ -504,23 +504,49 @@ describe("terminal tools", () => {
 		}
 	});
 
-	test("renders stop calls and results with terminal status styling", () => {
+	test("renders stop calls and results with the shared tool hierarchy", () => {
 		const harness = createHarness();
 		const tool = harness.tools.get("job_kill");
-		const theme = { fg: (color: string, text: string) => `<${color}>${text}</${color}>`, bold: (text: string) => text };
-		const call = tool.renderCall({ job_id: "confirm-app-he-ff5ed8c6" }, theme).render(120).join("\n").trimEnd();
-		const result = tool.renderResult(
+		const theme = {
+			fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+			bold: (text: string) => `<bold>${text}</bold>`,
+		};
+		const pending = tool.renderCall(
+			{ job_id: "confirm-app-he-ff5ed8c6" },
+			theme,
+			{ isPartial: true },
+		).render(120).join("\n").trimEnd();
+		const settledCall = tool.renderCall(
+			{ job_id: "confirm-app-he-ff5ed8c6" },
+			theme,
+			{ isPartial: false },
+		).render(120).join("\n").trimEnd();
+		const accepted = tool.renderResult(
+			{
+				content: [{ type: "text", text: "Sent SIGTERM to background terminal confirm-app-he-ff5ed8c6." }],
+				details: { id: "confirm-app-he-ff5ed8c6", description: "Confirm application health", status: "stopping" },
+			},
+			{ expanded: false, isPartial: false },
+			theme,
+			{ isError: false },
+		).render(120).join("\n").trimEnd();
+		const noOp = tool.renderResult(
 			{
 				content: [{ type: "text", text: "confirm-app-he-ff5ed8c6 is already timed_out." }],
 				details: { status: "timed_out" },
 			},
-			{ expanded: false },
+			{ expanded: false, isPartial: false },
 			theme,
 			{ isError: false },
 		).render(120).join("\n").trimEnd();
 
-		expect(call).toBe("<warning>◌</warning> Stopping confirm-app-he-ff5ed8c6");
-		expect(result).toBe("<warning>◷</warning> confirm-app-he-ff5ed8c6 is already timed out.");
+		expect(pending).toBe("<accent>•</accent> <bold>Stopping</bold> <mdHeading>confirm-app-he-ff5ed8c6</mdHeading>");
+		expect(settledCall).toBe("");
+		expect(accepted).toBe([
+			"<success>•</success> <bold>Stopping</bold> <mdHeading>Confirm application health</mdHeading>",
+			"<dim>  └ </dim><warning>◌</warning> <dim>confirm-app-he-ff5ed8c6 · SIGTERM sent</dim>",
+		].join("\n"));
+		expect(noOp).toBe("<warning>◷</warning> confirm-app-he-ff5ed8c6 is already timed out.");
 	});
 
 	test("returns quick commands normally and clears persistent status", async () => {

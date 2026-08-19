@@ -278,13 +278,49 @@ function textResult(result: any): string {
 	return content?.type === "text" ? content.text : "";
 }
 
-function renderJobKillResult(result: any, theme: any, context: any): Text {
+class JobKillComponent {
+	constructor(private readonly lines: string[]) {}
+	render(width: number): string[] {
+		return this.lines.map((line) => fitToolLine(line, Math.max(1, width)));
+	}
+	invalidate(): void {}
+}
+
+function jobKillIdentity(source: any): string {
+	return compactCommand(source?.description || source?.id || "terminal", 96);
+}
+
+function renderJobKillCall(args: any, theme: any, context: any): Container | JobKillComponent {
+	if (!context?.isPartial) return new Container();
+	const identity = theme.fg("mdHeading", compactCommand(args?.job_id || "terminal", 96));
+	return new JobKillComponent([`${theme.fg("accent", "•")} ${theme.bold("Stopping")} ${identity}`]);
+}
+
+function renderJobKillResult(result: any, options: any, theme: any, context: any): Container | JobKillComponent {
+	if (options?.isPartial) return new Container();
 	const text = displayStatusText(textResult(result));
-	if (!text) return new Text("", 0, 0);
-	const status = result?.details?.status;
-	if (isJobStatus(status)) return new Text(`${theme.fg(statusColor(status), statusSymbol(status))} ${text}`, 0, 0);
-	if (context?.isError) return new Text(`${theme.fg("warning", "■")} ${theme.fg("warning", text)}`, 0, 0);
-	return new Text(text, 0, 0);
+	if (!text) return new Container();
+	const details = result?.details;
+	const status = details?.status;
+	const identity = theme.fg("mdHeading", jobKillIdentity(details));
+
+	if (context?.isError) {
+		return new JobKillComponent([
+			`${theme.fg("error", "•")} ${theme.bold("Stop failed")} ${identity}`,
+			`${theme.fg("dim", "  └ ")}${theme.fg("error", text)}`,
+		]);
+	}
+	if (text.startsWith("Sent SIGTERM")) {
+		const id = compactCommand(details?.id || "terminal", 96);
+		return new JobKillComponent([
+			`${theme.fg("success", "•")} ${theme.bold("Stopping")} ${identity}`,
+			`${theme.fg("dim", "  └ ")}${theme.fg("warning", "◌")} ${theme.fg("dim", `${id} · SIGTERM sent`)}`,
+		]);
+	}
+	if (isJobStatus(status)) {
+		return new JobKillComponent([`${theme.fg(statusColor(status), statusSymbol(status))} ${text}`]);
+	}
+	return new JobKillComponent([text]);
 }
 
 function renderOverlayJob(job: ManagedJob, width: number, theme: any): string[] {
@@ -1160,8 +1196,8 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			requestKill(job, "user");
 			return { content: [{ type: "text", text: `Sent SIGTERM to background terminal ${job.id}.` }], details: snapshot(job, PERSISTED_OUTPUT_BYTES) };
 		},
-		renderCall: (args: any, theme: any) => new Text(`${theme.fg("warning", "◌")} Stopping ${args.job_id ?? "terminal"}`, 0, 0),
-		renderResult: (result: any, _options: any, theme: any, context: any) => renderJobKillResult(result, theme, context),
+		renderCall: (args: any, theme: any, context: any) => renderJobKillCall(args, theme, context),
+		renderResult: (result: any, options: any, theme: any, context: any) => renderJobKillResult(result, options, theme, context),
 		renderShell: "self",
 	});
 
