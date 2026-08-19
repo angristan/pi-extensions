@@ -79,9 +79,9 @@ produce duplicate completion cards.
 
 Mailbox cards group each child into a separate block with a status symbol, readable
 task summary, Markdown-rendered result, and subdued usage metadata. Status symbols
-and errors carry semantic color. The Task label is muted and the Result label uses
-bold normal text, keeping purple reserved for reasoning; both contents use the same
-normal text color. Cards omit
+and errors carry semantic color. The Task label uses the theme's blue heading color
+and the Result label uses success green; both contents use the same softer
+tool-output color. Purple stays reserved for reasoning. Cards omit
 internal spacer rows and put the result label beside the preview. The context mode
 appears in the spawn headline only, where it affects the action. Long results keep
 only the first rendered row, followed immediately by an explicit truncated-row

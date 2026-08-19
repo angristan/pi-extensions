@@ -347,16 +347,15 @@ type DetailLabel = "prompt" | "message" | "result" | "usage" | "error";
 
 function detailPrefix(label: DetailLabel, theme: any, indent = TOOL_INDENT, failed = false): string {
 	const isError = label === "error" || (label === "result" && failed);
-	const labelColor = isError ? "error" : label === "result" ? "text" : "muted";
+	const labelColor = isError ? "error" : label === "result" ? "success" : label === "prompt" ? "mdHeading" : "muted";
 	const displayLabel = label === "prompt" ? "Task" : `${label[0]?.toUpperCase()}${label.slice(1)}`;
-	const styledLabel = theme.fg(labelColor, displayLabel.padEnd(6));
-	return `${indent}${label === "result" && !failed ? theme.bold(styledLabel) : styledLabel}  `;
+	return `${indent}${theme.fg(labelColor, displayLabel.padEnd(6))}  `;
 }
 
 function detailContentColor(label: DetailLabel): string {
 	if (label === "usage") return "dim";
 	if (label === "error") return "error";
-	return "text";
+	return "toolOutput";
 }
 
 function detailLine(
@@ -393,7 +392,7 @@ interface ResultBlock {
 
 function resultMarkdownTheme(theme: any): MarkdownTheme {
 	const base = getMarkdownTheme();
-	const output = (text: string) => theme.fg("text", text);
+	const output = (text: string) => theme.fg("toolOutput", text);
 	return {
 		...base,
 		heading: output,
@@ -422,7 +421,7 @@ function resultBlockLines(agent: AgentSnapshot, width: number, theme: any, expan
 	const hiddenRows = expanded ? 0 : Math.max(0, rendered.length - COLLAPSED_RESULT_ROWS);
 	const visibleRows = hiddenRows > 0 ? rendered.slice(0, COLLAPSED_RESULT_ROWS) : rendered;
 	return {
-		lines: visibleRows.map((line, index) => `${index === 0 ? prefix : continuation}${theme.fg("text", line)}`),
+		lines: visibleRows.map((line, index) => `${index === 0 ? prefix : continuation}${theme.fg("toolOutput", line)}`),
 		hiddenRows,
 	};
 }
