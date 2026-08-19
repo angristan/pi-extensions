@@ -631,8 +631,8 @@ describe("subagents", () => {
 		const collapsed = rendered(harness.tool.renderResult(waited, { isPartial: false, expanded: false }, renderTheme, { args: waitArgs }), 100);
 		expect(collapsed[3]).toBe("    Result  review line 1");
 		expect(collapsed.join("\n")).not.toContain("review line 2");
-		expect(collapsed.at(-2)).toContain("1 turn");
-		expect(collapsed.at(-1)).toBe("    Ctrl+O for full result · 7 later lines hidden");
+		expect(collapsed.at(-2)).toBe("    ↳ Truncated · 7 more lines · Ctrl+O to expand");
+		expect(collapsed.at(-1)).toContain("1 turn");
 
 		const expanded = rendered(harness.tool.renderResult(waited, { isPartial: false, expanded: true }, renderTheme, { args: waitArgs }), 100);
 		expect(expanded.join("\n")).toContain("review line 1");
@@ -657,7 +657,7 @@ describe("subagents", () => {
 		expect(compactLines[4]).toContain("    1 turn · ↑10 · ↓5 · R2 · W3 · $0.0100 · test-provider/test-model");
 		const styledLines = renderer(message, { expanded: false }, semanticTheme).render(100);
 		expect(styledLines[1]).toContain(`\x1b[39m${message.details.name}\x1b[0m`);
-		expect(styledLines[2]).toContain("\x1b[90mTask  \x1b[0m  \x1b[90mReview renderer\x1b[0m");
+		expect(styledLines[2]).toContain("\x1b[90mTask  \x1b[0m  \x1b[39mReview renderer\x1b[0m");
 		expect(styledLines[3]).toContain("\x1b[36mResult\x1b[0m  \x1b[39mRenderer matches the shared design.");
 		expect(styledLines[4]).toContain("\x1b[2m1 turn");
 		const waitArgs = { reasoning: "Collect reported result", action: "wait", agent_names: [message.details.name], timeout_ms: 1_000 };
@@ -855,7 +855,7 @@ describe("subagents", () => {
 		expect(styled[0]).toContain("\x1b[36mrenderer review\x1b[0m");
 		expect(styled[0]).toContain("\x1b[90mfresh context\x1b[0m");
 		expect(styled[0]).not.toContain("running");
-		expect(styled[1]).toContain("\x1b[90mTask  \x1b[0m  \x1b[90mReview the renderer\x1b[0m");
+		expect(styled[1]).toContain("\x1b[90mTask  \x1b[0m  \x1b[39mReview the renderer\x1b[0m");
 		const sendArgs = { reasoning: "Refine delegated review", action: "send", agent_name: agent.name, message: "Check tests too" };
 		const sent = await harness.tool.execute("send", sendArgs, undefined, undefined, harness.ctx);
 		expect(harness.clients[0].steering).toEqual(["Check tests too"]);

@@ -79,11 +79,12 @@ produce duplicate completion cards.
 
 Mailbox cards group each child into a separate block with a status symbol, readable
 task summary, Markdown-rendered result, and subdued usage metadata. Status symbols
-and errors carry semantic color. Tasks are muted; the result label uses the tool
-title color; result content uses the normal text color. Cards omit internal spacer
-rows and put the result label beside the preview. The context mode appears in the
-spawn headline only, where it affects the action. Long results keep only the first
-rendered row and show the full-result shortcut below the usage line.
+and errors carry semantic color. The Task label is muted and the Result label uses
+the tool-title color; both contents use the same normal text color. Cards omit
+internal spacer rows and put the result label beside the preview. The context mode
+appears in the spawn headline only, where it affects the action. Long results keep
+only the first rendered row, followed immediately by an explicit truncated-row
+count and the full-result shortcut.
 
 Child model usage is persisted in the parent session and included in the footer's
 token and cost totals. Parent and child context windows remain independent.

@@ -356,7 +356,6 @@ function detailPrefix(label: DetailLabel, theme: any, indent = TOOL_INDENT, fail
 }
 
 function detailContentColor(label: DetailLabel): string {
-	if (label === "prompt") return "muted";
 	if (label === "usage") return "dim";
 	if (label === "error") return "error";
 	return "text";
@@ -456,12 +455,12 @@ function agentBodyLines(
 	if (options.showResult && agent.error) {
 		lines.push(detailLine("error", compact(agent.error, 240), width, theme));
 	}
-	const usage = options.showUsage ? usageText(agent) : "";
-	if (usage) lines.push(`${TOOL_INDENT}${theme.fg("dim", usage)}`);
 	if (hiddenResultRows > 0) {
 		const noun = hiddenResultRows === 1 ? "line" : "lines";
-		lines.push(`${TOOL_INDENT}${theme.fg("dim", `Ctrl+O for full result · ${hiddenResultRows} later ${noun} hidden`)}`);
+		lines.push(`${TOOL_INDENT}${theme.fg("dim", `↳ Truncated · ${hiddenResultRows} more ${noun} · Ctrl+O to expand`)}`);
 	}
+	const usage = options.showUsage ? usageText(agent) : "";
+	if (usage) lines.push(`${TOOL_INDENT}${theme.fg("dim", usage)}`);
 	return lines;
 }
 
