@@ -18,11 +18,12 @@ metadata.
   ...
 ```
 
-Strips pi's internal web-search HTML comments and collapses runs of blank
-lines so the reading view is clean. Navigate with the usual pager keys.
+Strips pi's internal web-search HTML comments, normalizes legacy Title-case
+tool reasons to lowercase phrases, and collapses runs of blank lines so the
+reading view is clean. Navigate with the usual pager keys.
 
 ## Dependencies
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** None.
+- **Depends on extensions:** [`better-native-pi`](../better-native-pi/).
 - **Used by extensions:** [`subagents`](../subagents/).

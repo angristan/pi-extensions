@@ -47,7 +47,7 @@ test("opens a cleaned scrollable transcript from both command and shortcut", asy
 	expect(rendered).toContain("› User\n  hello world");
 	expect(rendered).toContain("· Thinking\n  considering");
 	expect(rendered).toContain("● Agent\n  answer");
-	expect(rendered).toContain("◆ Tool · read\n  Inspect code\n  path  src/index.ts");
+	expect(rendered).toContain("◆ Tool · read\n  inspect code\n  path  src/index.ts");
 	expect(rendered).toContain("✓ Tool result · read\n  file contents");
 	expect(rendered).not.toContain("pi:web-search");
 	expect(rendered).not.toContain("hidden");

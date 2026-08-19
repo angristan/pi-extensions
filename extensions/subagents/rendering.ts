@@ -1,6 +1,6 @@
 import { getMarkdownTheme, SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type MarkdownTheme } from "@earendil-works/pi-tui";
-import { fitToolLine, formatElapsed } from "../better-native-pi/core.js";
+import { fitToolLine, formatElapsed, normalizeToolReasoning } from "../better-native-pi/core.js";
 import { BOLD, GREEN, MAGENTA, RED, RESET } from "../better-native-pi/render.js";
 import type { TranscriptEntry } from "../transcript/pager.js";
 import type { ContextFork } from "./context.js";
@@ -317,7 +317,7 @@ function actionDetail(args: Record<string, unknown> | undefined): string {
 }
 
 function reasoningDetail(args: Record<string, unknown> | undefined, theme: any, partial: boolean): string {
-	const reasoning = compact(String(args?.reasoning ?? ""), 100);
+	const reasoning = compact(normalizeToolReasoning(args?.reasoning), 100);
 	if (reasoning) {
 		const connector = args?.action === "wait" ? "—" : "to";
 		return `${theme.fg("dim", connector)} ${theme.fg("accent", reasoning)}`;

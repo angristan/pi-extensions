@@ -27,8 +27,10 @@ Re-registers pi's built-in tools under their native names (`read`, `write`,
   line per tool), draws a tight block inline
 - a **required `reasoning` parameter** injected into each tool's schema; the
   model states the intent of the call, which renders as the line-1 headline.
-  The schema requests a present-tense phrase of at most eight words with no
-  period and stays compact because it is repeated across all seven schemas
+  The schema requests a lowercase present-tense phrase of at most eight words
+  with no period and stays compact because it is repeated across all schemas.
+  A shared normalizer also fixes legacy Title-case reasons before execution and
+  rendering while preserving acronyms such as API and SSH.
 - `execute` delegates to the real built-in tool (reasoning stripped first) and
   preserves Pi's execution context, including the current `PI_SESSION_*`,
   `PI_PROVIDER`, `PI_MODEL`, and `PI_REASONING_LEVEL` bash environment; when
@@ -82,4 +84,4 @@ volatile-render churn for both.
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
 - **Depends on extensions:** [`background-jobs`](../background-jobs/), [`code-blocks`](../code-blocks/), [`hyperlinks`](../hyperlinks/), [`image-store`](../image-store/).
-- **Used by extensions:** [`background-jobs`](../background-jobs/), [`web-search`](../web-search/).
+- **Used by extensions:** [`background-jobs`](../background-jobs/), [`goal`](../goal/), [`subagents`](../subagents/), [`transcript`](../transcript/), [`web-search`](../web-search/).

@@ -1,5 +1,6 @@
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Key, Markdown, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { normalizeToolReasoning } from "../better-native-pi/core.js";
 
 export type TranscriptEntry = any;
 
@@ -61,7 +62,7 @@ function compactValue(value: unknown): string {
 function toolArguments(args: any): string {
 	if (!args || typeof args !== "object") return "(no arguments)";
 	const lines: string[] = [];
-	if (typeof args.reasoning === "string" && args.reasoning.trim()) lines.push(displayText(args.reasoning));
+	if (typeof args.reasoning === "string" && args.reasoning.trim()) lines.push(displayText(normalizeToolReasoning(args.reasoning)));
 	for (const [key, value] of Object.entries(args)) {
 		if (key === "reasoning") continue;
 		if (key === "edits" && Array.isArray(value)) {

@@ -19,8 +19,12 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import fileTools from "./file-tools.js";
 import bash from "./bash.js";
 import exploration from "./exploration.js";
+import { normalizeToolReasoningInput } from "./core.js";
 
 export default function betterNativePi(pi: ExtensionAPI) {
+	// Keep every extension's reason grammatically consistent, including custom
+	// tools that use Pi's fallback renderer instead of better-native-pi blocks.
+	pi.on("tool_call", (event) => normalizeToolReasoningInput(event.input));
 	fileTools(pi);
 	bash(pi);
 	exploration(pi);

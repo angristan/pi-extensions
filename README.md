@@ -155,6 +155,7 @@ plan-progress -> overlay-stack
 subagents -> better-native-pi
 subagents -> overlay-stack
 subagents -> transcript
+transcript -> better-native-pi
 web-search -> better-native-pi
 ```
 <!-- extension-imports:end -->

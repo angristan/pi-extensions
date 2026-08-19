@@ -13,7 +13,12 @@ import {
 	type Focusable,
 	type TUI,
 } from "@earendil-works/pi-tui";
-import { fitToolLine, renderCommandOutput } from "../better-native-pi/core.js";
+import {
+	fitToolLine,
+	normalizeToolReasoning,
+	renderCommandOutput,
+	REASONING_DESCRIPTION,
+} from "../better-native-pi/core.js";
 import { registerOverlayCard } from "../overlay-stack/index.js";
 import { BoundedOutput, CursorOutput, sanitizeTerminalOutput, type CursorRead } from "./output.js";
 import {
@@ -134,7 +139,6 @@ const MAX_POLL_MS = 5 * 60 * 1_000;
 // Cap it at MAX_POLL_MS so a stuck process still returns control to the model,
 // which can then re-poll or kill. No kill happens here — this is a soft wait.
 const DEFAULT_WAIT_COMPLETION_MS = MAX_POLL_MS;
-const INTERACTION_REASONING_DESCRIPTION = "Short phrase stating the goal behind this terminal interaction, not the mechanics or command";
 
 export type JobStatus = "running" | "stopping" | "completed" | "failed" | "killed" | "timed_out";
 
@@ -291,7 +295,7 @@ function jobKillIdentity(source: any): string {
 }
 
 function jobKillIntent(args: any, theme: any): string {
-	const reasoning = compactCommand(args?.reasoning, 96);
+	const reasoning = compactCommand(normalizeToolReasoning(args?.reasoning), 96);
 	return reasoning ? ` ${theme.fg("dim", "to")} ${theme.fg("accent", reasoning)}` : "";
 }
 
@@ -621,7 +625,7 @@ class TerminalInteractionComponent {
 		const verb = this.action === "read" ? "Read from" : wrote ? "Interacted with" : "Waited for";
 		const color = statusColor(details.status);
 		const name = details.description || details.id;
-		const reasoning = typeof this.args?.reasoning === "string" ? compactCommand(this.args.reasoning, 96) : "";
+		const reasoning = compactCommand(normalizeToolReasoning(this.args?.reasoning), 96);
 		const terminal = this.theme.fg("mdHeading", compactCommand(name, 64));
 		const goal = reasoning ? ` ${this.theme.fg("dim", "to")} ${this.theme.fg("accent", reasoning)}` : "";
 		const elapsed = compactDuration(duration(details, this.observedAt));
@@ -1006,7 +1010,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	const executeUnified = async (_id: string, rawParams: any, signal: AbortSignal | undefined, onUpdate: any, ctx: any) => {
 		const params = {
 			...rawParams,
-			description: rawParams.description ?? rawParams.reasoning,
+			description: rawParams.description ?? normalizeToolReasoning(rawParams.reasoning),
 			timeoutSeconds: rawParams.timeoutSeconds ?? rawParams.timeout,
 		};
 		const yieldMs = params["yield-time_ms"] ?? DEFAULT_YIELD_MS;
@@ -1090,19 +1094,19 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			parameters: {
 				type: "object",
 				properties: {
+					reasoning: { type: "string", description: REASONING_DESCRIPTION },
 					command: { type: "string", description: "Shell command to run" },
 					timeout: { type: "integer", minimum: 1, maximum: MAX_TIMEOUT_SECONDS, description: `Optional hard timeout from 1 to ${MAX_TIMEOUT_SECONDS} seconds. Omit to let the command run until completion or an explicit stop.` },
 					cwd: { type: "string", description: "Working directory, relative to the current project unless absolute" },
 					tty: { type: "boolean", description: "Allocate a PTY for prompts, REPLs, and control characters", default: false },
 					"yield-time_ms": { type: "integer", minimum: 250, maximum: 30_000, description: `Wait before yielding a terminal ID (default ${DEFAULT_YIELD_MS} ms)` },
 					max_output_tokens: { type: "integer", minimum: 1, description: "Output byte budget in tokens (~4 bytes/token). Defaults to 10000; larger requests cap at 1 MiB." },
-					reasoning: { type: "string", description: "Goal or intent behind running this command" },
 				},
-				required: ["command", "reasoning"],
+				required: ["reasoning", "command"],
 			} as any,
 			executionMode: "sequential",
 			execute: executeUnified,
-			renderCall: (args: any, theme: any) => new Text(`${theme.fg("accent", "●")} ${theme.bold("Running bash")} ${compactCommand(args.reasoning || args.command || "")}`, 0, 0),
+			renderCall: (args: any, theme: any) => new Text(`${theme.fg("accent", "●")} ${theme.bold("Running bash")} ${compactCommand(normalizeToolReasoning(args.reasoning) || args.command || "")}`, 0, 0),
 			renderResult: (result: any) => new Text(result?.content?.[0]?.text ?? "", 0, 0),
 			renderShell: "self",
 		});
@@ -1120,7 +1124,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		parameters: {
 			type: "object",
 			properties: {
-				reasoning: { type: "string", description: INTERACTION_REASONING_DESCRIPTION },
+				reasoning: { type: "string", description: REASONING_DESCRIPTION },
 				job_id: { type: "string", description: "Full terminal ID or an unambiguous prefix" },
 				cursor: { type: "integer", minimum: 0, description: "Optional output cursor; defaults to this tool's last read position" },
 				waitMs: { type: "integer", minimum: 0, maximum: MAX_POLL_MS, description: `Wait this many milliseconds for new output. Also caps wait:true. Defaults to 0 (instant) for read polls, ${DEFAULT_WAIT_COMPLETION_MS} ms for wait:true.` },
@@ -1156,7 +1160,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		parameters: {
 			type: "object",
 			properties: {
-				reasoning: { type: "string", description: INTERACTION_REASONING_DESCRIPTION },
+				reasoning: { type: "string", description: REASONING_DESCRIPTION },
 				job_id: { type: "string", description: "Full terminal ID or an unambiguous prefix" },
 				chars: { type: "string", description: "Characters to write; empty polls without writing", default: "" },
 				"yield-time_ms": { type: "integer", minimum: 0, maximum: MAX_POLL_MS, description: `Wait for output after writing (default ${DEFAULT_POLL_MS} ms)` },
@@ -1191,7 +1195,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		parameters: {
 			type: "object",
 			properties: {
-				reasoning: { type: "string", description: INTERACTION_REASONING_DESCRIPTION },
+				reasoning: { type: "string", description: REASONING_DESCRIPTION },
 				job_id: { type: "string", description: "Full terminal ID or an unambiguous prefix" },
 			},
 			required: ["reasoning", "job_id"],

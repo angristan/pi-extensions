@@ -81,8 +81,9 @@ Mailbox cards group each child into a separate block with a status symbol, reada
 task summary, Markdown-rendered result, and subdued usage metadata. Status symbols
 and errors carry semantic color. The Task label uses the theme's blue heading color
 and the Result label uses success green; both contents use the same softer
-tool-output color. Purple stays reserved for reasoning. Cards omit
-internal spacer rows and put the result label beside the preview. The context mode
+tool-output color. Purple stays reserved for lowercase reasoning phrases. Cards
+normalize legacy Title-case reasons while preserving acronyms, omit internal
+spacer rows and put the result label beside the preview. The context mode
 appears in the spawn headline only, where it affects the action. Long results keep
 only the first rendered row, followed immediately by an explicit truncated-row
 count and the full-result shortcut.
@@ -136,5 +137,6 @@ must use separate file scopes.
 ## Dependencies
 
 - **Runtime:** Pi extension, session, TUI, and RPC APIs
+- **Depends on extensions:** [`better-native-pi`](../better-native-pi/), [`overlay-stack`](../overlay-stack/), [`transcript`](../transcript/).
 - **npm packages:** None
 - **External services:** The configured model provider only

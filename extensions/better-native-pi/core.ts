@@ -307,7 +307,29 @@ function summarize(
 }
 
 /** Kept compact because this text is repeated in every restyled tool schema. */
-export const REASONING_DESCRIPTION = "≤8-word present-tense intent phrase: why needed, not what it does. No period. Emit first.";
+export const REASONING_DESCRIPTION = "≤8-word present-tense intent: why needed, not mechanics. Start lowercase; no period. Emit first.";
+
+/**
+ * Make a reason compose naturally after a tool verb or `to` connector.
+ * Only plain Title-case initials are lowered; acronyms and brand casing stay
+ * intact (`Inspect API` → `inspect API`, but `API`, `iOS`, and `GitHub` stay).
+ */
+export function normalizeToolReasoning(value: unknown): string {
+	if (typeof value !== "string") return "";
+	const match = /^(\P{L}*)(\p{L}+)/u.exec(value);
+	if (!match) return value;
+	const [wordInitial, nextLetter] = [...match[2]];
+	if (!wordInitial || wordInitial !== wordInitial.toUpperCase() || nextLetter !== nextLetter?.toLowerCase()) return value;
+	if ([...match[2]].slice(1).some((letter) => letter === letter.toUpperCase() && letter !== letter.toLowerCase())) return value;
+	return `${match[1]}${wordInitial.toLowerCase()}${match[2].slice(wordInitial.length)}${value.slice(match[0].length)}`;
+}
+
+/** Normalize a mutable tool input before execution. */
+export function normalizeToolReasoningInput(input: unknown): void {
+	if (!input || typeof input !== "object") return;
+	const record = input as Record<string, unknown>;
+	if (typeof record.reasoning === "string") record.reasoning = normalizeToolReasoning(record.reasoning);
+}
 
 /** Clone a JSON-schema params object and inject a REQUIRED, first `reasoning` prop. */
 export function withReasoning(parameters: any): any {
@@ -406,7 +428,7 @@ export function buildToolBlock(
 	const hasDetail = Boolean(detail);
 	// Reasoning is the informative part — bold it so it's the emphasis, but keep
 	// it default-colored (accent was too loud). The verb stays plain text.
-	const headline = oneLine(reasoning);
+	const headline = oneLine(normalizeToolReasoning(reasoning));
 	// Reasoning in the theme's accent tone: distinct from every syntax token
 	// (red/green/blue/yellow) and from default text, so it never blends with the
 	// command. On gruvbox this is the signature purple.

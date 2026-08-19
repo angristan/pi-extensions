@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { generateDiffString } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { buildToolBlock, renderCommandOutput, REASONING_DESCRIPTION, withReasoning } from "./core.js";
+import {
+	buildToolBlock,
+	normalizeToolReasoning,
+	normalizeToolReasoningInput,
+	renderCommandOutput,
+	REASONING_DESCRIPTION,
+	withReasoning,
+} from "./core.js";
 
 const ANSI_PATTERN = /\x1b\[[0-9;:]*m/g;
 const OSC8_PATTERN = /\x1b\]8;;.*?(?:\x07|\x1b\\)/g;
@@ -23,8 +30,23 @@ describe("withReasoning", () => {
 		expect(schema.required).toEqual(["reasoning", "path"]);
 		expect(schema.properties.reasoning.description).toBe(REASONING_DESCRIPTION);
 		expect(REASONING_DESCRIPTION).toContain("≤8-word");
-		expect(REASONING_DESCRIPTION).toContain("No period");
+		expect(REASONING_DESCRIPTION).toContain("Start lowercase");
+		expect(REASONING_DESCRIPTION).toContain("no period");
 		expect(REASONING_DESCRIPTION.length).toBeLessThanOrEqual(100);
+	});
+
+	test("lowercases Title-case starts while preserving acronyms and brands", () => {
+		expect(normalizeToolReasoning("Inspect API behavior")).toBe("inspect API behavior");
+		expect(normalizeToolReasoning("API review")).toBe("API review");
+		expect(normalizeToolReasoning("iOS build check")).toBe("iOS build check");
+		expect(normalizeToolReasoning("GitHub API review")).toBe("GitHub API review");
+		expect(normalizeToolReasoning("  Évaluer OCR output")).toBe("  évaluer OCR output");
+	});
+
+	test("normalizes mutable tool input for every extension", () => {
+		const input = { reasoning: "Verify shared casing", path: "src" };
+		normalizeToolReasoningInput(input);
+		expect(input).toEqual({ reasoning: "verify shared casing", path: "src" });
 	});
 });
 
@@ -42,6 +64,17 @@ describe("renderCommandOutput", () => {
 				expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
 			}
 		}
+	});
+});
+
+describe("buildToolBlock reasoning casing", () => {
+	test("normalizes legacy Title-case reasons at render time", () => {
+		const lines = buildToolBlock(
+			"read",
+			{ reasoning: "Inspect API behavior", path: "src/api.ts" },
+			{ content: [{ type: "text", text: "one line" }] },
+		);
+		expect(plain(lines[0])).toContain("Read inspect API behavior");
 	});
 });
 

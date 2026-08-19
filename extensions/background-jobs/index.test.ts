@@ -513,7 +513,7 @@ describe("terminal tools", () => {
 		};
 		expect(tool.parameters.required).toEqual(["reasoning", "job_id"]);
 		expect(Object.keys(tool.parameters.properties)).toEqual(["reasoning", "job_id"]);
-		const args = { reasoning: "finish the demo", job_id: "confirm-app-he-ff5ed8c6" };
+		const args = { reasoning: "Finish the demo", job_id: "confirm-app-he-ff5ed8c6" };
 		const pending = tool.renderCall(
 			args,
 			theme,
@@ -739,7 +739,7 @@ describe("terminal tools", () => {
 			result,
 			{ expanded: false },
 			theme,
-			{ args: { reasoning: "answer the test prompt", job_id: started.details.id, chars: "hello\n" } },
+			{ args: { reasoning: "Answer the test prompt", job_id: started.details.id, chars: "hello\n" } },
 		).render(200).join("\n");
 		expect(rendered).toContain("<success>•</success> Interacted with <mdHeading>");
 		expect(rendered).toContain("</mdHeading> <dim>to</dim> <accent>answer the test prompt</accent>");
