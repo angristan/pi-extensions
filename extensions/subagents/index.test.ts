@@ -1212,12 +1212,12 @@ setInterval(() => {}, 1000);
 		expect(harness.parent.getEntries().some((entry: any) => entry.customType === "subagent-mailbox-state" && entry.data?.state === "delivered")).toBe(true);
 	});
 
-	test("renders two active-turn final results as readable Markdown blocks", async () => {
+	test("renders two active-turn final results as monochrome Markdown blocks", async () => {
 		const harness = createHarness();
 		await harness.handlers.get("agent_start")?.({}, harness.ctx);
 		const first = await spawnAgent(harness, "Inspect API");
 		const second = await spawnAgent(harness, "Inspect accessibility");
-		harness.clients[0].complete("**API review complete.**");
+		harness.clients[0].complete("**API review complete with `client.ts`.**");
 		harness.clients[1].complete("[Accessibility review](https://www.w3.org/WAI/) complete.");
 		await Bun.sleep(0);
 		expect(harness.sentMessages).toHaveLength(0);
@@ -1225,7 +1225,7 @@ setInterval(() => {}, 1000);
 		const boundary = await harness.handlers.get("context")?.({ messages: [] }, harness.ctx);
 		const delivery = boundary.messages.at(-1);
 		expect(delivery.details.agents).toMatchObject([
-			{ name: first.details.agents[0].name, status: "completed", output: "**API review complete.**" },
+			{ name: first.details.agents[0].name, status: "completed", output: "**API review complete with `client.ts`.**" },
 			{ name: second.details.agents[0].name, status: "completed", output: "[Accessibility review](https://www.w3.org/WAI/) complete." },
 		]);
 		const renderer = harness.messageRenderers.get("subagent-mailbox")!;
@@ -1236,10 +1236,16 @@ setInterval(() => {}, 1000);
 		expect(lines[2]).not.toContain("context");
 		expect(lines[10]).toContain(`✓ ${second.details.agents[0].name}`);
 		expect(lines[10]).not.toContain("context");
-		expect(output).toContain("API review complete.");
+		expect(output).toContain("API review complete with client.ts.");
 		expect(output).toContain("Accessibility review");
 		expect(output).not.toContain("**");
 		expect(output).not.toContain("](");
+
+		const styled = renderer(delivery, { expanded: true }, semanticTheme).render(100);
+		for (const resultLine of [styled[6], styled[14]]) {
+			const foregrounds = [...resultLine.matchAll(/\x1b\[(3\d|9\d)m/g)].map((match) => match[1]);
+			expect(new Set(foregrounds)).toEqual(new Set(["37"]));
+		}
 	});
 
 	test("waits for all selected agents while retaining interim updates", async () => {

@@ -1,5 +1,5 @@
 import { getMarkdownTheme, SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import { Container, Markdown, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type MarkdownTheme } from "@earendil-works/pi-tui";
 import { fitToolLine, formatElapsed } from "../better-native-pi/core.js";
 import { BOLD, GREEN, MAGENTA, RED, RESET } from "../better-native-pi/render.js";
 import type { TranscriptEntry } from "../transcript/pager.js";
@@ -398,11 +398,30 @@ interface ResultBlock {
 	hiddenRows: number;
 }
 
+function resultMarkdownTheme(theme: any): MarkdownTheme {
+	const base = getMarkdownTheme();
+	const output = (text: string) => theme.fg("toolOutput", text);
+	return {
+		...base,
+		heading: output,
+		link: output,
+		linkUrl: output,
+		code: output,
+		codeBlock: output,
+		codeBlockBorder: output,
+		quote: output,
+		quoteBorder: output,
+		hr: output,
+		listBullet: output,
+		highlightCode: (code: string) => code.split("\n").map(output),
+	};
+}
+
 function resultBlockLines(agent: AgentSnapshot, width: number, theme: any, expanded: boolean): ResultBlock {
 	if (!agent.output) return { lines: [], hiddenRows: 0 };
 	const contentWidth = Math.max(1, width - visibleWidth(TOOL_INDENT));
 	const output = sanitizeTerminal(agent.output).replace(/\r\n?/g, "\n").replace(/\s+$/, "");
-	const rendered = new Markdown(output, 0, 0, getMarkdownTheme())
+	const rendered = new Markdown(output, 0, 0, resultMarkdownTheme(theme))
 		.render(contentWidth)
 		.map((line) => line.replace(/[ \t]+((?:\x1b\[[0-9;]*m)*)$/, "$1"));
 	const hiddenRows = expanded ? 0 : Math.max(0, rendered.length - COLLAPSED_RESULT_ROWS);
