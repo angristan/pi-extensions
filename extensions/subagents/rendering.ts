@@ -346,24 +346,15 @@ function agentStatusSummary(agents: AgentSnapshot[]): string {
 type DetailLabel = "prompt" | "message" | "result" | "usage" | "error";
 
 function detailPrefix(label: DetailLabel, theme: any, indent = TOOL_INDENT, failed = false): string {
-	const labelColor = label === "prompt"
-		? "muted"
-		: label === "message"
-			? "accent"
-			: label === "result"
-				? (failed ? "error" : "toolTitle")
-				: label === "error"
-					? "error"
-					: "muted";
+	const labelColor = label === "error" || (label === "result" && failed) ? "error" : "muted";
 	const displayLabel = label === "prompt" ? "Task" : `${label[0]?.toUpperCase()}${label.slice(1)}`;
 	return `${indent}${theme.fg(labelColor, displayLabel.padEnd(6))}  `;
 }
 
 function detailContentColor(label: DetailLabel): string {
-	if (label === "prompt") return "muted";
 	if (label === "usage") return "dim";
 	if (label === "error") return "error";
-	return "toolOutput";
+	return "text";
 }
 
 function detailLine(
@@ -400,7 +391,7 @@ interface ResultBlock {
 
 function resultMarkdownTheme(theme: any): MarkdownTheme {
 	const base = getMarkdownTheme();
-	const output = (text: string) => theme.fg("toolOutput", text);
+	const output = (text: string) => theme.fg("text", text);
 	return {
 		...base,
 		heading: output,
@@ -427,9 +418,9 @@ function resultBlockLines(agent: AgentSnapshot, width: number, theme: any, expan
 		.render(contentWidth)
 		.map((line) => line.replace(/[ \t]+((?:\x1b\[[0-9;]*m)*)$/, "$1"));
 	const hiddenRows = expanded ? 0 : Math.max(0, rendered.length - COLLAPSED_RESULT_ROWS);
-	const visibleRows = hiddenRows > 0 ? rendered.slice(-COLLAPSED_RESULT_ROWS) : rendered;
+	const visibleRows = hiddenRows > 0 ? rendered.slice(0, COLLAPSED_RESULT_ROWS) : rendered;
 	return {
-		lines: visibleRows.map((line, index) => `${index === 0 ? prefix : continuation}${theme.fg("toolOutput", line)}`),
+		lines: visibleRows.map((line, index) => `${index === 0 ? prefix : continuation}${theme.fg("text", line)}`),
 		hiddenRows,
 	};
 }
@@ -464,7 +455,7 @@ function agentBodyLines(
 	if (usage) lines.push(`${TOOL_INDENT}${theme.fg("dim", usage)}`);
 	if (hiddenResultRows > 0) {
 		const noun = hiddenResultRows === 1 ? "line" : "lines";
-		lines.push(`${TOOL_INDENT}${theme.fg("dim", `Ctrl+O for full result · ${hiddenResultRows} earlier ${noun} hidden`)}`);
+		lines.push(`${TOOL_INDENT}${theme.fg("dim", `Ctrl+O for full result · ${hiddenResultRows} later ${noun} hidden`)}`);
 	}
 	return lines;
 }
