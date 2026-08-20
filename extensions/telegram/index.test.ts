@@ -62,6 +62,7 @@ function makeHarness(options: {
 	config?: TelegramConfig;
 	sessionName?: string;
 	sendMessage?: (config: TelegramConfig, text: string, signal?: AbortSignal) => Promise<void>;
+	sendMarkdownMessage?: (config: TelegramConfig, text: string, signal?: AbortSignal) => Promise<void>;
 	sendRenderedMessage?: (config: TelegramConfig, text: string, signal?: AbortSignal) => Promise<{ chatId: string; messageId: number }>;
 	sendQuestion?: (config: TelegramConfig, text: string, question: any, signal?: AbortSignal) => Promise<{ chatId: string; messageId: number }>;
 	waitForAnswer?: (config: TelegramConfig, sent: any, question: any, signal: AbortSignal) => Promise<string>;
@@ -85,6 +86,7 @@ function makeHarness(options: {
 		loadConfig: () => options.config ?? config,
 		saveConfig: async () => {},
 		sendMessage: options.sendMessage ?? (async (_config, text) => { sent.push(text); }),
+		sendMarkdownMessage: options.sendMarkdownMessage ?? (async (_config, text) => { sent.push(text); }),
 		sendRenderedMessage: options.sendRenderedMessage ?? (async (_config, text) => { sent.push(text); return { chatId: "987654321", messageId: 42 }; }),
 		sendQuestion: options.sendQuestion ?? (async (_config, text) => { sent.push(text); return { chatId: "987654321", messageId: 42 }; }),
 		waitForAnswer: options.waitForAnswer ?? (async () => new Promise<string>(() => {})),
@@ -356,10 +358,10 @@ describe("question wait lifecycle", () => {
 });
 
 describe("direct user messages", () => {
-	test("sends free-form text verbatim", async () => {
+	test("sends Markdown source to the rich-message client", async () => {
 		const harness = makeHarness();
 		await harness.emit("session_start");
-		const message = "The requested crawl is complete.\nArtifacts are ready for review.";
+		const message = "**Crawl complete.**\n[Artifacts](https://example.com) are ready for review.";
 
 		const result = await harness.invokeTool("notify_user", { message });
 
@@ -415,6 +417,7 @@ describe("direct user messages", () => {
 		const tool = harness.tools.get("notify_user");
 		const guidance = [tool.description, ...tool.promptGuidelines].join(" ");
 
+		expect(tool.description).toContain("Markdown-formatted");
 		expect(guidance).toContain("explicitly");
 		expect(guidance).toContain("time-sensitive");
 		expect(guidance).toContain("important or sensitive");
@@ -442,7 +445,7 @@ describe("direct user messages", () => {
 
 	test("redacts the bot token from delivery failures", async () => {
 		const harness = makeHarness({
-			sendMessage: async (credentials) => { throw new Error(`request failed for ${credentials.botToken}`); },
+			sendMarkdownMessage: async (credentials) => { throw new Error(`request failed for ${credentials.botToken}`); },
 		});
 		await harness.emit("session_start");
 

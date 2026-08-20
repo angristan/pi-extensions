@@ -1,3 +1,5 @@
+import { telegramMarkdownToHtml } from "./markdown";
+
 const REQUEST_TIMEOUT_MS = 15_000;
 const LONG_POLL_TIMEOUT_SECONDS = 20;
 const LONG_POLL_REQUEST_TIMEOUT_MS = 25_000;
@@ -89,6 +91,20 @@ export async function sendTelegramMessage(
 	await telegramRequest(credentials, "sendMessage", {
 		chat_id: credentials.chatId,
 		text,
+		link_preview_options: { is_disabled: true },
+	}, signal, fetchImpl);
+}
+
+export async function sendTelegramMarkdownMessage(
+	credentials: TelegramCredentials,
+	text: string,
+	signal?: AbortSignal,
+	fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+	await telegramRequest(credentials, "sendMessage", {
+		chat_id: credentials.chatId,
+		text: telegramMarkdownToHtml(text),
+		parse_mode: "HTML",
 		link_preview_options: { is_disabled: true },
 	}, signal, fetchImpl);
 }

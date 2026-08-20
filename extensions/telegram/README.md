@@ -8,7 +8,7 @@ pending Pi dialog.
 
 ## Direct messages
 
-`notify_user` sends one free-form message verbatim to the configured Telegram
+`notify_user` sends one Markdown-formatted message to the configured Telegram
 chat. It is appropriate when:
 
 - the user explicitly asks for a Telegram message, including a completion update;
@@ -17,13 +17,18 @@ chat. It is appropriate when:
 
 The tool is one-way. It must not replace `questionnaire` when the agent needs
 input, confirmation, or approval. Messages may contain up to Telegram's 4,096
-character limit, preserve line breaks, and disable link previews. The agent
-cannot select another recipient. Calls use the same compact status block as the
-other native-style tools; expand a settled call to see the complete message.
+character limit, preserve line breaks, and disable link previews. Common
+Markdown is converted to Telegram formatting: headings, bold, italic,
+strikethrough, inline and fenced code, block quotes, links, lists, task lists,
+and tables. Raw HTML is escaped, and unsafe link schemes remain plain text.
+The agent cannot select another recipient. Calls use the same compact status
+block as the other native-style tools; expand a settled call to see the complete
+Markdown source.
 
-```text
-The requested crawl is complete.
-Artifacts are ready for review.
+```markdown
+## Crawl complete
+
+**42 files** are ready. Open the [report](https://example.com/report).
 ```
 
 ## Delayed questions
@@ -106,7 +111,7 @@ config file.
 
 ## Dependencies
 
-- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API and [Marked](https://marked.js.org/) for Markdown parsing.
 - **Service:** [Telegram Bot API](https://core.telegram.org/bots/api), including
   `sendMessage`, inline keyboards, `ForceReply`, and `getUpdates`.
 - **Depends on extensions:** `better-native-pi` for shared compact tool-rendering

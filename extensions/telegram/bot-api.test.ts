@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	resolveTelegramQuestion,
 	sendTelegramHtmlMessage,
+	sendTelegramMarkdownMessage,
 	sendTelegramQuestion,
 	waitForTelegramAnswer,
 	type SentTelegramQuestion,
@@ -25,6 +26,21 @@ function methodFromUrl(url: string | URL | Request): string {
 }
 
 describe("Telegram question messages", () => {
+	test("sends direct Markdown messages as Telegram HTML", async () => {
+		let body: any;
+		await sendTelegramMarkdownMessage(credentials, "**Done**: see [report](https://example.com?a=1&b=2)", undefined, async (_url, init) => {
+			body = JSON.parse(String(init?.body));
+			return telegramResponse({ message_id: 41, chat: { id: 987654321 } });
+		});
+
+		expect(body).toEqual({
+			chat_id: "987654321",
+			text: '<b>Done</b>: see <a href="https://example.com?a=1&amp;b=2">report</a>',
+			parse_mode: "HTML",
+			link_preview_options: { is_disabled: true },
+		});
+	});
+
 	test("renders choice questions as inline buttons", async () => {
 		let body: any;
 		const sent = await sendTelegramQuestion(credentials, "Choose a target", {

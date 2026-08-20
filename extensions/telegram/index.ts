@@ -10,6 +10,7 @@ import { BOLD, GREEN, MAGENTA, RED, RESET } from "../better-native-pi/render.js"
 import {
 	resolveTelegramQuestion,
 	sendTelegramHtmlMessage,
+	sendTelegramMarkdownMessage,
 	sendTelegramMessage,
 	sendTelegramQuestion,
 	waitForTelegramAnswer,
@@ -27,7 +28,7 @@ const MAX_TELEGRAM_MESSAGE_CHARACTERS = 4_096;
 
 const notifyUserParameters = Type.Object({
 	message: Type.String({
-		description: "Free-form message sent verbatim to the configured Telegram chat.",
+		description: "Message sent to the configured Telegram chat. Common Markdown formatting is supported.",
 		minLength: 1,
 		maxLength: MAX_TELEGRAM_MESSAGE_CHARACTERS,
 	}),
@@ -55,6 +56,7 @@ interface RuntimeDependencies {
 	loadConfig?: () => TelegramConfig | undefined;
 	saveConfig?: (config: TelegramConfig) => Promise<void>;
 	sendMessage?: (config: TelegramConfig, text: string, signal?: AbortSignal) => Promise<void>;
+	sendMarkdownMessage?: (config: TelegramConfig, text: string, signal?: AbortSignal) => Promise<void>;
 	sendRenderedMessage?: (config: TelegramConfig, text: string, signal?: AbortSignal) => Promise<SentTelegramQuestion>;
 	sendQuestion?: (config: TelegramConfig, text: string, question: WaitingQuestion, signal?: AbortSignal) => Promise<SentTelegramQuestion>;
 	waitForAnswer?: (config: TelegramConfig, sent: SentTelegramQuestion, question: WaitingQuestion, signal: AbortSignal) => Promise<string>;
@@ -382,6 +384,7 @@ export function createTelegramExtension(dependencies: RuntimeDependencies = {}) 
 	const readConfig = dependencies.loadConfig ?? loadTelegramConfig;
 	const writeConfig = dependencies.saveConfig ?? saveTelegramConfig;
 	const sendMessage = dependencies.sendMessage ?? sendTelegramMessage;
+	const sendMarkdownMessage = dependencies.sendMarkdownMessage ?? sendTelegramMarkdownMessage;
 	const sendRenderedMessage = dependencies.sendRenderedMessage ?? sendTelegramHtmlMessage;
 	const sendQuestion = dependencies.sendQuestion ?? sendTelegramQuestion;
 	const waitForAnswer = dependencies.waitForAnswer ?? waitForTelegramAnswer;
@@ -498,8 +501,8 @@ export function createTelegramExtension(dependencies: RuntimeDependencies = {}) 
 			pi.registerTool({
 				name: "notify_user",
 				label: "Notify User",
-				description: "Send a free-form Telegram message to the user. Use when the user explicitly requests a message, when a time-sensitive action needs their awareness, or when an important or sensitive event deserves out-of-band notice. Use questionnaire instead when input, confirmation, or approval is required.",
-				promptSnippet: "Send the user a free-form Telegram message",
+				description: "Send a Markdown-formatted Telegram message to the user. Use when the user explicitly requests a message, when a time-sensitive action needs their awareness, or when an important or sensitive event deserves out-of-band notice. Use questionnaire instead when input, confirmation, or approval is required.",
+				promptSnippet: "Send the user a Markdown-formatted Telegram message",
 				promptGuidelines: [
 					"Use notify_user when the user explicitly asks for a Telegram message, when a time-sensitive action needs their awareness, or when an important or sensitive event deserves out-of-band notice.",
 					"Do not use notify_user to request input, confirmation, or approval; use questionnaire for anything that needs the user's response.",
@@ -518,7 +521,7 @@ export function createTelegramExtension(dependencies: RuntimeDependencies = {}) 
 						throw new Error(`Telegram messages are limited to ${MAX_TELEGRAM_MESSAGE_CHARACTERS} characters.`);
 					}
 					try {
-						await sendMessage(snapshot, message, signal);
+						await sendMarkdownMessage(snapshot, message, signal);
 					} catch (error) {
 						throw new Error(`Telegram message failed: ${safeError(error, snapshot.botToken)}`);
 					}
