@@ -701,11 +701,14 @@ test("a settled run without goal_block breaks the blocker audit", async () => {
 	expect(latestGoalState(h).blockedAudit).toBeUndefined();
 });
 
-test("goal_set is always available and sets a fresh active goal", async () => {
+test("goal_set and goal_resume are always available", async () => {
 	const h = makeHarness();
 	await emit(h, "session_start");
-	// goal_set is NOT gated on an active goal, so it must be registered from the start.
+	// Lifecycle entry tools are available before a goal exists; terminal tools
+	// remain gated until a goal becomes active.
 	expect(h.activeTools.has("goal_set")).toBe(true);
+	expect(h.activeTools.has("goal_resume")).toBe(true);
+	expect(h.tools.goal_resume.description).toContain("Do not use goal_set with replace: true");
 	expect(h.activeTools.has("goal_complete")).toBe(false);
 	expect(h.activeTools.has("goal_block")).toBe(false);
 	const notificationsBeforeSet = h.notifications.length;
@@ -726,6 +729,50 @@ test("goal_set is always available and sets a fresh active goal", async () => {
 	expect(sentMessages(h, "goal-continuation")).toHaveLength(1);
 	expect(sentMessages(h, "goal-continuation")[0]!.message.content).toBe("Goal continuation requested.");
 	expect(h.notifications).toHaveLength(notificationsBeforeSet);
+});
+
+test("goal_resume preserves paused goal identity and lifetime state", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("# Goal\nship the existing feature\n\n## Validation\n- focused tests pass", h.ctx);
+	await h.commands.goal.handler("pause", h.ctx);
+	const paused = latestGoalState(h);
+	const snapshot = {
+		objective: paused.objective,
+		validation: [...paused.validation],
+		createdAt: paused.createdAt,
+		accumulatedActiveMs: paused.accumulatedActiveMs,
+		continuations: paused.continuations,
+	};
+	const continuationsBeforeResume = sentMessages(h, "goal-continuation").length;
+	// Match the reported regression: the paused goal was restored from an older
+	// session branch before the agent was asked to resume it.
+	await emit(h, "session_start");
+
+	const result = await h.tools.goal_resume.execute("resume", {}, undefined, undefined, h.ctx);
+	const resumed = latestGoalState(h);
+	expect(result.details).toMatchObject({ ok: true, resumed: true, previousStatus: "paused" });
+	expect(resumed.status).toBe("active");
+	expect(resumed.objective).toBe(snapshot.objective);
+	expect(resumed.validation).toEqual(snapshot.validation);
+	expect(resumed.createdAt).toBe(snapshot.createdAt);
+	expect(resumed.accumulatedActiveMs).toBe(snapshot.accumulatedActiveMs);
+	expect(resumed.continuations).toBe(snapshot.continuations + 1);
+	expect(sentMessages(h, "goal-continuation")).toHaveLength(continuationsBeforeResume + 1);
+
+	const block = h.tools.goal_resume.renderResult(result, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
+	const lines = renderBlock(block);
+	expect(lines[0]).toContain("Resumed goal");
+	expect(lines[1]).toContain("ship the existing feature");
+});
+
+test("goal_resume reports when no goal exists", async () => {
+	const h = makeHarness();
+	const result = await h.tools.goal_resume.execute("resume", {}, undefined, undefined, h.ctx);
+	expect(result.details).toEqual({ ok: false, reason: "no-goal" });
+	const block = h.tools.goal_resume.renderResult(result, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
+	const lines = renderBlock(block);
+	expect(lines[0]).toContain("Goal resume failed");
+	expect(lines[1]).toContain("No session goal to resume");
 });
 
 test("goal_set refuses to silently overwrite an in-progress goal", async () => {

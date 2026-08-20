@@ -657,6 +657,10 @@ interface GoalToolResultDetails {
 	replaced?: boolean;
 	/** goal_set refused because a goal is in progress and replace was not set. */
 	needsReplace?: boolean;
+	/** goal_resume reactivated the existing goal without replacing it. */
+	resumed?: boolean;
+	/** Status immediately before goal_resume reactivated the goal. */
+	previousStatus?: GoalStatus;
 	/** goal_complete: lifetime stats snapshot for the completion block. */
 	completion?: GoalCompletionStats;
 	/** Conservative nested model audit used to veto premature completion/blocking. */
@@ -842,6 +846,40 @@ function renderGoalBlockResult(
 		return [
 			toolHeadline(false, false, "Blocker recorded", ""),
 			toolBranch(branch ? theme.fg("dim", branch) : ""),
+		];
+	});
+	return component;
+}
+
+/** Render the state-preserving `goal_resume` operation. */
+function renderGoalResumeCall(_args: any, _theme: any, context: any): Component {
+	if (!context?.isPartial) return new Container();
+	const component = reuseGoalToolLines(context);
+	component.update(() => [toolHeadline(true, false, "Resuming goal", "")]);
+	return component;
+}
+
+function renderGoalResumeResult(
+	result: { details?: GoalToolResultDetails } | undefined,
+	{ isPartial }: GoalRenderOptions,
+	theme: any,
+	context: any,
+): Component {
+	if (isPartial) return new Container();
+	const details = result?.details;
+	const component = reuseGoalToolLines(context);
+	const storedText = textFromResult(result);
+	const objective = extractObjectiveLine(storedText);
+	component.update(() => {
+		if (details?.ok === false) {
+			return [
+				toolHeadline(false, true, "Goal resume failed", ""),
+				toolBranch(theme.fg("dim", oneLinePreview(storedText))),
+			];
+		}
+		return [
+			toolHeadline(false, false, "Resumed goal", ""),
+			toolBranch(theme.fg("dim", middlePreview(objective || storedText))),
 		];
 	});
 	return component;
@@ -1250,6 +1288,21 @@ export default function (pi: ExtensionAPI) {
 		return true;
 	};
 
+	/** Reactivate the current goal without replacing its identity or lifetime stats. */
+	const resumeGoal = async (ctx: any): Promise<GoalStatus | undefined> => {
+		if (!state) return undefined;
+		const previousStatus = state.status;
+		setStatus("active", ctx);
+		// A resumed loop starts fresh blocked/no-tool audits while preserving the
+		// durable objective, validation, timing, and continuation history.
+		lastTurnWasContinuation = false;
+		lastTurnHadToolCall = false;
+		currentRunBlockerFingerprint = undefined;
+		noToolContinuationStreak = 0;
+		await maybeContinue(ctx);
+		return previousStatus;
+	};
+
 	// ------------------------------------------------------------------------
 	// Commands
 	// ------------------------------------------------------------------------
@@ -1267,16 +1320,7 @@ export default function (pi: ExtensionAPI) {
 					if (!setStatus("paused", ctx)) ctx.ui.notify("No session goal to pause.", "warning");
 					return;
 				case "resume":
-					if (!setStatus("active", ctx)) ctx.ui.notify("No session goal to resume.", "warning");
-					else {
-						// Reset loop-audit flags so a fresh resume starts a new
-						// blocked audit.
-						lastTurnWasContinuation = false;
-						lastTurnHadToolCall = false;
-						currentRunBlockerFingerprint = undefined;
-						noToolContinuationStreak = 0;
-						await maybeContinue(ctx);
-					}
+					if (await resumeGoal(ctx) === undefined) ctx.ui.notify("No session goal to resume.", "warning");
 					return;
 				case "block":
 				case "blocked":
@@ -1642,13 +1686,39 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	// ------------------------------------------------------------------------
-	// goal_set tool: lets the agent set (or replace) the session goal itself,
-	// without a user running /goal. Always available — it is intentionally NOT
-	// part of GOAL_TOOL_NAME_SET, so syncGoalToolAvailability never removes it.
-	// Replacing an active/paused/blocked goal requires an explicit replace:true
-	// so the agent cannot silently redefine an in-progress goal around an easier
-	// task; a completed goal is overwritten freely (it is done).
+	// goal_resume / goal_set are always available. They are intentionally NOT
+	// part of GOAL_TOOL_NAME_SET, so paused and blocked goals remain controllable
+	// by the agent while goal_complete / goal_block stay gated on active state.
 	// ------------------------------------------------------------------------
+	pi.registerTool({
+		name: "goal_resume",
+		label: "Resume Session Goal",
+		description:
+			"Resume the existing session goal and restart auto-continuation without changing its objective, validation criteria, identity, timing, or continuation history. " +
+			"Use when the user asks to resume or continue a paused or blocked goal. Do not use goal_set with replace: true to resume an existing goal.",
+		parameters: Type.Object({}),
+		renderShell: "self",
+		renderCall: renderGoalResumeCall,
+		renderResult: renderGoalResumeResult,
+		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+			const objective = state?.objective;
+			const previousStatus = await resumeGoal(ctx);
+			if (previousStatus === undefined || !objective) {
+				return {
+					content: [{ type: "text", text: "No session goal to resume." }],
+					details: { ok: false, reason: "no-goal" },
+				};
+			}
+			return {
+				content: [{ type: "text", text: `Goal resumed.\nObjective: ${objective}` }],
+				details: { ok: true, resumed: true, previousStatus },
+			};
+		},
+	});
+
+	// goal_set lets the agent create or replace a goal without a user running
+	// /goal. Replacing an active/paused/blocked goal requires replace:true so the
+	// agent cannot silently redefine in-progress work around an easier task.
 	pi.registerTool({
 		name: "goal_set",
 		label: "Set Session Goal",

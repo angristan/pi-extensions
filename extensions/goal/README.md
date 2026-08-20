@@ -125,6 +125,10 @@ All sections except `# Goal` are optional.
   overwrite an active/paused/blocked goal and asks the caller to re-call with
   `replace: true`, so an in-progress goal cannot be silently redefined around
   an easier task.
+- **`goal_resume`** — always available; reactivates the existing paused or
+  blocked goal and restarts auto-continuation without replacing its objective,
+  validation criteria, identity, timing, or continuation history. This is the
+  agent-callable equivalent of `/goal resume`.
 - **`goal_complete`** — introduced when a `/goal` first becomes active; asks the
   judge to audit current evidence, then marks the goal complete only if the
   judge allows it. It accepts an optional `summary`. It remains non-terminating
@@ -140,14 +144,15 @@ All sections except `# Goal` are optional.
   blocker repeats across three settled agent runs and the judge accepts the
   terminal block. Multiple reports in one run count once.
 
-`goal_set` is always registered. `goal_complete` and `goal_block` start inactive,
-are added when the first goal becomes active, and remain in the active loadout for
-the rest of that session. This monotonic activation preserves deferred-tool and
-prompt-cache reuse across pause, block, completion, and clear transitions. Calls
+`goal_set` and `goal_resume` are always registered. `goal_complete` and
+`goal_block` start inactive, are added when the first goal becomes active, and
+remain in the active loadout for the rest of that session. This monotonic
+activation preserves deferred-tool and prompt-cache reuse across pause, block,
+completion, and clear transitions. Stale `goal_complete` and `goal_block` calls
 made while no goal is active are ignored silently so they do not add noisy output
 to the transcript; the rendered block is hidden too.
 
-All three tools render as the same compact 2-line transcript blocks as the native
+All four tools render as the same compact 2-line transcript blocks as the native
 and web tools (`renderShell: "self"`): a `• verb` headline whose bullet color
 tracks the outcome (magenta while running, green on success, red for a real
 blocker) over a dim `└ summary` branch. Example settled blocks:
@@ -156,6 +161,8 @@ blocker) over a dim `└ summary` branch. Example settled blocks:
 • Set goal
   └ make all tests pass
 • Replaced goal
+  └ ship the feature
+• Resumed goal
   └ ship the feature
 • Goal already active
   └ make all tests pass
