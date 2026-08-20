@@ -62,7 +62,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | [`edit-summary`](extensions/edit-summary/) | Show a passive overlay with net file changes for the current or last agent turn |
 | [`goal`](extensions/goal/) | Track an explicit objective for the session |
 | [`plan-progress`](extensions/plan-progress/) | Track a multi-step plan as a collapsible overlay above the editor, and expose a tool the agent can call to maintain it |
-| [`questions`](extensions/questions/) | A tool the agent can call to ask you structured questions and preserve the answers in the transcript |
+| [`questions`](extensions/questions/) | Ask structured questions, preserve answers, and report pending input as blocked to Herdr |
 | [`side-chat`](extensions/side-chat/) | An ephemeral, read-only side question about the current conversation, without changing the main transcript |
 | [`subagents`](extensions/subagents/) | Spawn and coordinate generic child agents with isolated persistent conversations |
 
@@ -166,5 +166,5 @@ directions: the former reuses shared rendering primitives, while the latter
 owns `bash` and delegates its execution to the managed terminal service.
 
 Runtime event coupling does not appear in the direct-import graph. In particular,
-`telegram` consumes the events emitted by `questions` without importing that
-extension.
+`telegram` and Herdr's agent-state integration consume events emitted by
+`questions` without importing that extension.

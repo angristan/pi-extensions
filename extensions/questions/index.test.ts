@@ -63,16 +63,46 @@ test("collects answers with numbered, semantically colored prompts", async () =>
 	expect(titles).toEqual(["❓ Input needed · Question 1/2", "❓ Input needed · Question 2/2", "pi"]);
 	expect(events).toEqual([
 		{ name: "terminal-title:override", payload: { source: "questions", title: "❓ Input needed · Question 1/2" } },
+		{ name: "herdr:blocked", payload: { active: true, label: "Waiting for user input" } },
 		{ name: "questions:waiting", payload: { requestId: "id:0", questionnaireId: "id", question: "Pick a color", options: ["Red", "Blue"], allowOther: false, index: 1, total: 2, secret: false } },
+		{ name: "herdr:blocked", payload: { active: false } },
 		{ name: "questions:resolved", payload: { requestId: "id:0", questionnaireId: "id", index: 1, total: 2, outcome: "answered", source: "tui" } },
 		{ name: "terminal-title:override", payload: { source: "questions", title: "❓ Input needed · Question 2/2" } },
+		{ name: "herdr:blocked", payload: { active: true, label: "Waiting for user input" } },
 		{ name: "questions:waiting", payload: { requestId: "id:1", questionnaireId: "id", question: "Why?", options: [], allowOther: false, index: 2, total: 2, secret: false } },
+		{ name: "herdr:blocked", payload: { active: false } },
 		{ name: "questions:resolved", payload: { requestId: "id:1", questionnaireId: "id", index: 2, total: 2, outcome: "answered", source: "tui" } },
 		{ name: "terminal-title:override", payload: { source: "questions", title: undefined } },
 	]);
 	expect(result.content[0].text).toBe("color: Blue\nwhy: Because it is calm");
 	expect(result.details.interrupted).toBe(false);
 	expect(result.details.answers).toHaveLength(2);
+});
+
+test("reports Herdr blocked state only while user input is pending", async () => {
+	const events: Array<{ name: string; payload: any }> = [];
+	const tool = registeredTool(events);
+	let answer!: (value: string | undefined) => void;
+	const execution = tool.execute("pending", { questions: [
+		{ id: "proceed", question: "Proceed?", allow_other: false },
+	] }, undefined, undefined, {
+		mode: "json",
+		ui: {
+			input: async () => new Promise<string | undefined>((resolve) => { answer = resolve; }),
+		},
+	});
+	await Promise.resolve();
+
+	expect(events.filter((event) => event.name === "herdr:blocked")).toEqual([
+		{ name: "herdr:blocked", payload: { active: true, label: "Waiting for user input" } },
+	]);
+
+	answer("yes");
+	await execution;
+	expect(events.filter((event) => event.name === "herdr:blocked")).toEqual([
+		{ name: "herdr:blocked", payload: { active: true, label: "Waiting for user input" } },
+		{ name: "herdr:blocked", payload: { active: false } },
+	]);
 });
 
 test("stops after cancellation and never stores secret text", async () => {
@@ -94,7 +124,9 @@ test("stops after cancellation and never stores secret text", async () => {
 	expect(result.content[0].text).toBe("Questionnaire interrupted");
 	expect(result.details.answers).toEqual([{ id: "token", question: "API token?", cancelled: true, secret: true }]);
 	expect(events).toEqual([
+		{ name: "herdr:blocked", payload: { active: true, label: "Waiting for user input" } },
 		{ name: "questions:waiting", payload: { requestId: "id:0", questionnaireId: "id", question: "API token?", options: [], allowOther: false, index: 1, total: 2, secret: true } },
+		{ name: "herdr:blocked", payload: { active: false } },
 		{ name: "questions:resolved", payload: { requestId: "id:0", questionnaireId: "id", index: 1, total: 2, outcome: "cancelled", source: "tui" } },
 	]);
 	expect(JSON.stringify(result)).not.toContain("actual-secret");

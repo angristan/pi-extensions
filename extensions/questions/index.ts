@@ -7,6 +7,7 @@ interface Answer { id: string; question: string; answer?: string; reference?: st
 interface Details { questions: Question[]; answers: Answer[]; interrupted: boolean }
 
 const TERMINAL_TITLE_EVENT = "terminal-title:override";
+const HERDR_BLOCKED_EVENT = "herdr:blocked";
 export const QUESTION_WAITING_EVENT = "questions:waiting";
 export const QUESTION_ANSWER_EVENT = "questions:answer";
 export const QUESTION_RESOLVED_EVENT = "questions:resolved";
@@ -273,6 +274,10 @@ export default function (pi: ExtensionAPI) {
 					let resolution: { outcome: "answered" | "cancelled"; source: "tui" | "remote" } = { outcome: "cancelled", source: "tui" };
 					try {
 						const collected = await collectAnswer(pi, requestId, question, prompt, ctx, () => {
+							// Herdr's agent-state integration treats this optional event as an
+							// authoritative wait signal. Keep the label generic so secret question
+							// text never leaves the questionnaire UI.
+							pi.events.emit(HERDR_BLOCKED_EVENT, { active: true, label: "Waiting for user input" });
 							pi.events.emit(QUESTION_WAITING_EVENT, {
 								requestId,
 								questionnaireId: toolCallId,
@@ -298,6 +303,9 @@ export default function (pi: ExtensionAPI) {
 							answers.push({ id: question.id, question: question.question, answer: collected.answer });
 						}
 					} finally {
+						// Balance every blocked report before publishing resolution. The state
+						// integration reference-counts nested waits.
+						pi.events.emit(HERDR_BLOCKED_EVENT, { active: false });
 						pi.events.emit(QUESTION_RESOLVED_EVENT, {
 							requestId,
 							questionnaireId: toolCallId,
