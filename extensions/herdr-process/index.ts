@@ -345,11 +345,19 @@ export default function herdrProcessExtension(pi: ExtensionAPI, dependencies: Ru
 			case "read": {
 				const record = requireKnownPane(params.pane_id);
 				const lines = params.lines ?? DEFAULT_READ_LINES;
-				const result = await runHerdr([
+				const recent = await runHerdr([
 					"pane", "read", record.paneId, "--source", "recent-unwrapped",
 					"--lines", String(lines), "--format", "text",
 				], signal);
-				const truncated = truncateTail(result.stdout, { maxLines: lines, maxBytes: DEFAULT_MAX_BYTES });
+				// Herdr 0.8.2 can return an empty recent snapshot while all live output
+				// still fits in the viewport. Fall back to that visible snapshot.
+				const output = recent.stdout.trim()
+					? recent.stdout
+					: (await runHerdr([
+						"pane", "read", record.paneId, "--source", "visible",
+						"--lines", String(lines), "--format", "text",
+					], signal)).stdout;
+				const truncated = truncateTail(output, { maxLines: lines, maxBytes: DEFAULT_MAX_BYTES });
 				const notice = truncated.truncated
 					? `\n\n[Showing the last ${truncated.outputLines} of ${truncated.totalLines} lines (${formatSize(truncated.outputBytes)} of ${formatSize(truncated.totalBytes)}). View the Herdr pane for complete output.]`
 					: "";
@@ -361,7 +369,7 @@ export default function herdrProcessExtension(pi: ExtensionAPI, dependencies: Ru
 
 			case "status": {
 				const record = requireKnownPane(params.pane_id);
-				const result = await runHerdr(["pane", "process-info", record.paneId], signal);
+				const result = await runHerdr(["pane", "process-info", "--pane", record.paneId], signal);
 				const payload = parseJson(result.stdout, "pane process-info");
 				return {
 					content: [{ type: "text", text: processInfoText(payload, record.paneId) }],

@@ -139,7 +139,10 @@ describe("herdr-process", () => {
 				calls.push({ command, args, options });
 				if (args[1] === "layout") return ok("not-json"); // falls back to right
 				if (args[1] === "split") return ok(JSON.stringify({ result: { pane: { pane_id: "w1:p4" } } }));
-				if (args[1] === "read") return ok("ready\nrequest complete\n");
+				if (args[1] === "read") {
+					const source = args[args.indexOf("--source") + 1];
+					return source === "visible" ? ok("ready\nrequest complete\n") : ok();
+				}
 				if (args[1] === "process-info") {
 					return ok(JSON.stringify({ result: { process_info: { foreground_processes: [
 						{ name: "bun", pid: 42, cmdline: "bun run dev" },
@@ -184,9 +187,10 @@ describe("herdr-process", () => {
 			pane_id: "w1:p4",
 		}, undefined, undefined, harness.ctx);
 
-		expect(calls.map((call) => call.args).slice(-5)).toEqual([
+		expect(calls.map((call) => call.args).slice(-6)).toEqual([
 			["pane", "read", "w1:p4", "--source", "recent-unwrapped", "--lines", "20", "--format", "text"],
-			["pane", "process-info", "w1:p4"],
+			["pane", "read", "w1:p4", "--source", "visible", "--lines", "20", "--format", "text"],
+			["pane", "process-info", "--pane", "w1:p4"],
 			["pane", "send-text", "w1:p4", "yes"],
 			["pane", "send-keys", "w1:p4", "enter"],
 			["pane", "send-keys", "w1:p4", "ctrl+c"],
