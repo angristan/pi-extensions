@@ -40,7 +40,7 @@ const parameters = {
 		action: { type: "string", enum: ["start", "list", "read", "status", "input", "interrupt"], description: "Operation to perform." },
 		command: { type: "string", minLength: 1, description: "Foreground shell command for action=start." },
 		label: { type: "string", minLength: 1, maxLength: 80, description: "Short pane label for action=start." },
-		direction: { type: "string", enum: ["right", "down"], description: "Split direction for action=start. Defaults to right for wide panes and down otherwise." },
+		direction: { type: "string", enum: ["right", "down"], description: "Split direction for action=start. The first automatic split follows pane proportions; later starts alternate direction." },
 		pane_id: { type: "string", minLength: 1, description: "Pane ID returned by action=start." },
 		lines: { type: "integer", minimum: 1, maximum: DEFAULT_MAX_LINES, description: `Recent lines for action=read. Defaults to ${DEFAULT_READ_LINES}.` },
 		text: { type: "string", description: "Text for action=input. It is not echoed in the tool result." },
@@ -253,6 +253,7 @@ export default function herdrProcessExtension(pi: ExtensionAPI, dependencies: Ru
 
 	const exec = dependencies.exec ?? ((command, args, options) => pi.exec(command, args, options));
 	const knownPanes = new Map<string, ProcessRecord>();
+	let lastDirection: "right" | "down" | undefined;
 	let toolRegistered = false;
 
 	const runHerdr = async (args: string[], signal?: AbortSignal): Promise<ExecResult> => {
@@ -263,6 +264,7 @@ export default function herdrProcessExtension(pi: ExtensionAPI, dependencies: Ru
 
 	const chooseDirection = async (requested: HerdrProcessArgs["direction"], signal?: AbortSignal): Promise<"right" | "down"> => {
 		if (requested) return requested;
+		if (lastDirection) return lastDirection === "right" ? "down" : "right";
 		try {
 			const result = await runHerdr(["pane", "layout", "--current"], signal);
 			const layout = parseJson(result.stdout, "pane layout")?.result?.layout;
@@ -271,8 +273,10 @@ export default function herdrProcessExtension(pi: ExtensionAPI, dependencies: Ru
 				?? (panes.length === 1 ? panes[0] : undefined);
 			const width = pane?.rect?.width;
 			const height = pane?.rect?.height;
-			if (typeof width === "number" && typeof height === "number") {
-				return width >= 120 && width >= height * 1.4 ? "right" : "down";
+			if (typeof width === "number" && typeof height === "number" && height > 0) {
+				// A very wide MacBook-style terminal remains useful side-by-side. A
+				// taller half-monitor terminal keeps more width when split top/bottom.
+				return width / height >= 2 ? "right" : "down";
 			}
 		} catch {
 			// Layout is an optimization only. Splitting right is Herdr's normal default.
@@ -289,6 +293,7 @@ export default function herdrProcessExtension(pi: ExtensionAPI, dependencies: Ru
 
 	const restoreKnownPanes = (ctx: any) => {
 		knownPanes.clear();
+		lastDirection = undefined;
 		const entries = typeof ctx.sessionManager?.getBranch === "function"
 			? ctx.sessionManager.getBranch()
 			: ctx.sessionManager?.getEntries?.() ?? [];
@@ -296,7 +301,10 @@ export default function herdrProcessExtension(pi: ExtensionAPI, dependencies: Ru
 			const message = entry?.type === "message" ? entry.message : undefined;
 			if (message?.role !== "toolResult" || message.toolName !== TOOL_NAME) continue;
 			const record = restoredRecord(message.details);
-			if (record) knownPanes.set(record.paneId, record);
+			if (record) {
+				knownPanes.set(record.paneId, record);
+				lastDirection = record.direction;
+			}
 		}
 	};
 
@@ -324,6 +332,7 @@ export default function herdrProcessExtension(pi: ExtensionAPI, dependencies: Ru
 
 				const record: ProcessRecord = { paneId, label, command, cwd: ctx.cwd, direction };
 				knownPanes.set(paneId, record);
+				lastDirection = direction;
 				const warning = renameWarning ? ` Pane rename warning: ${renameWarning}` : "";
 				return {
 					content: [{ type: "text", text: `Started ${label} in visible Herdr pane ${paneId}.${warning}` }],

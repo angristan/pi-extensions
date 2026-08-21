@@ -14,9 +14,12 @@ The extension activates only in a Herdr-managed Pi TUI. It adds one
 - `input` — send text and optionally Enter
 - `interrupt` — send Ctrl+C
 
-`start` keeps focus in Pi. It splits wide panes to the right and narrow panes
-down unless the caller selects a direction. The command runs at Pi's current
-working directory and stays attached to Herdr's terminal.
+`start` keeps focus in Pi. For the first automatic split, a very wide pane opens
+to the right; a taller or half-monitor pane opens below to preserve width. Each
+later process alternates direction, producing a useful mixed layout. An explicit
+direction overrides that choice and becomes the basis for the next alternation.
+The command runs at Pi's current working directory and stays attached to Herdr's
+terminal.
 
 Processes are intentionally not stopped during Pi session shutdown or reload.
 They continue while Herdr is detached and remain visible for manual control.

@@ -132,6 +132,34 @@ describe("herdr-process", () => {
 		expect(calls[1]?.args).toContain("down");
 	});
 
+	test("alternates direction after the first automatic split", async () => {
+		const calls: ExecCall[] = [];
+		let pane = 1;
+		const harness = createHarness({
+			exec: async (command, args, options) => {
+				calls.push({ command, args, options });
+				if (args[1] === "layout") {
+					return ok(JSON.stringify({ result: { layout: { panes: [{ pane_id: "w1:p1", rect: { width: 160, height: 60 } }] } } }));
+				}
+				if (args[1] === "split") return ok(JSON.stringify({ result: { pane: { pane_id: `w1:p${++pane}` } } }));
+				return ok();
+			},
+		});
+		await harness.start();
+		const tool = harness.tools.get("herdr_process");
+		for (const [label, command] of [["server", "bun run dev"], ["watcher", "bun test --watch"]]) {
+			await tool.execute("start", {
+				reasoning: `show ${label}`,
+				action: "start",
+				command,
+				label,
+			}, undefined, undefined, harness.ctx);
+		}
+		const splits = calls.filter((call) => call.args[1] === "split");
+		expect(splits.map((call) => call.args[call.args.indexOf("--direction") + 1])).toEqual(["right", "down"]);
+		expect(calls.filter((call) => call.args[1] === "layout")).toHaveLength(1);
+	});
+
 	test("reads, inspects, writes to, and interrupts a known pane", async () => {
 		const calls: ExecCall[] = [];
 		const harness = createHarness({
@@ -225,11 +253,15 @@ describe("herdr-process", () => {
 				},
 			},
 		}];
+		const calls: ExecCall[] = [];
 		const harness = createHarness({
 			entries,
-			exec: async (_command, args) => args[1] === "process-info"
-				? ok(JSON.stringify({ result: { process_info: { foreground_processes: [] } } }))
-				: ok(),
+			exec: async (command, args, options) => {
+				calls.push({ command, args, options });
+				if (args[1] === "process-info") return ok(JSON.stringify({ result: { process_info: { foreground_processes: [] } } }));
+				if (args[1] === "split") return ok(JSON.stringify({ result: { pane: { pane_id: "w1:p9" } } }));
+				return ok();
+			},
 		});
 		await harness.start();
 		const listed = await harness.tools.get("herdr_process").execute("list", {
@@ -237,11 +269,21 @@ describe("herdr-process", () => {
 			action: "list",
 		}, undefined, undefined, harness.ctx);
 		expect(listed.content[0].text).toBe("w1:p8 — api server");
-		await expect(harness.tools.get("herdr_process").execute("status", {
+		const tool = harness.tools.get("herdr_process");
+		await expect(tool.execute("status", {
 			reasoning: "check API server",
 			action: "status",
 			pane_id: "w1:p8",
 		}, undefined, undefined, harness.ctx)).resolves.toMatchObject({ details: { paneId: "w1:p8" } });
+		await tool.execute("start", {
+			reasoning: "show test watcher",
+			action: "start",
+			command: "bun test --watch",
+			label: "test watcher",
+		}, undefined, undefined, harness.ctx);
+		const split = calls.find((call) => call.args[1] === "split");
+		expect(split?.args[split.args.indexOf("--direction") + 1]).toBe("down");
+		expect(calls.some((call) => call.args[1] === "layout")).toBe(false);
 	});
 
 	test("renders partial arguments before action arrives", async () => {
