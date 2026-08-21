@@ -49,6 +49,7 @@ function makeHarness(options: {
 	generationId?: string;
 	reloadError?: Error;
 	reloadHandshake?: boolean;
+	commandInvocationName?: string;
 }) {
 	const handlers = new Map<string, Array<(event: any, ctx: any) => any>>();
 	const commands = new Map<string, any>();
@@ -106,6 +107,12 @@ function makeHarness(options: {
 			handlers.set(name, list);
 		},
 		registerCommand(name: string, command: any) { commands.set(name, command); },
+		getCommands() {
+			return [...commands.keys()].map((name) => ({
+				name: name === "reload-all" ? options.commandInvocationName ?? name : name,
+				source: "extension",
+			}));
+		},
 		sendUserMessage(message: string) { sent.push(message); },
 	} as any);
 
@@ -145,7 +152,7 @@ describe("machine-local reload broadcast", () => {
 		expect(first.reloads).toBe(1);
 
 		await second.intervals.fire();
-		expect(second.sent[0]).toMatch(/^\/reload-all-apply-runtime-second generation-a$/);
+		expect(second.sent).toEqual(["/reload-all __apply runtime-second generation-a"]);
 		await second.dispatch(second.sent[0]!);
 		expect(second.reloads).toBe(1);
 
@@ -166,7 +173,7 @@ describe("machine-local reload broadcast", () => {
 		await sender.command();
 
 		await busy.intervals.fire();
-		expect(busy.sent[0]).toMatch(/^\/reload-all-apply-runtime-busy generation-b$/);
+		expect(busy.sent).toEqual(["/reload-all __apply runtime-busy generation-b"]);
 		await busy.dispatch(busy.sent[0]!);
 		expect(busy.reloads).toBe(1);
 	});
@@ -188,11 +195,28 @@ describe("machine-local reload broadcast", () => {
 		expect(harness.intervals.timers.size).toBe(0);
 	});
 
+	test("does not inject the private form when the command name collides", async () => {
+		const runtimeDirectory = temporaryRuntime();
+		const sender = makeHarness({ runtimeDirectory, key: "sender", pid: 351, generationId: "generation-collision" });
+		const collided = makeHarness({
+			runtimeDirectory,
+			key: "collided",
+			pid: 352,
+			commandInvocationName: "reload-all:1",
+		});
+		await sender.emit("session_start");
+		await collided.emit("session_start");
+		await sender.command();
+		await collided.intervals.fire();
+
+		expect(collided.sent).toEqual([]);
+	});
+
 	test("requires the private apply command to match a pending generation", async () => {
 		const harness = makeHarness({ runtimeDirectory: temporaryRuntime(), key: "target", pid: 401 });
 		await harness.emit("session_start");
 
-		await harness.dispatch("/reload-all-apply-runtime-target invented-generation");
+		await harness.dispatch("/reload-all __apply runtime-target invented-generation");
 		expect(harness.reloads).toBe(0);
 	});
 
@@ -210,8 +234,8 @@ describe("machine-local reload broadcast", () => {
 		refused.clock.value += 25;
 		await refused.intervals.fire();
 		expect(refused.sent).toEqual([
-			"/reload-all-apply-runtime-refused generation-refused",
-			"/reload-all-apply-runtime-refused generation-refused",
+			"/reload-all __apply runtime-refused generation-refused",
+			"/reload-all __apply runtime-refused generation-refused",
 		]);
 	});
 
@@ -228,8 +252,8 @@ describe("machine-local reload broadcast", () => {
 		failing.clock.value += 25;
 		await failing.intervals.fire();
 		expect(failing.sent).toEqual([
-			"/reload-all-apply-runtime-failing generation-c",
-			"/reload-all-apply-runtime-failing generation-c",
+			"/reload-all __apply runtime-failing generation-c",
+			"/reload-all __apply runtime-failing generation-c",
 		]);
 	});
 });

@@ -15,7 +15,7 @@ import { basename, join } from "node:path";
 
 const CHILD_ENV = "PI_SUBAGENT_CHILD";
 const COMMAND = "reload-all";
-const INTERNAL_COMMAND_PREFIX = "reload-all-apply";
+const INTERNAL_APPLY = "__apply";
 const POLL_INTERVAL_MS = 1_000;
 const HEARTBEAT_INTERVAL_MS = 5_000;
 const QUEUE_RETRY_AFTER_MS = 5_000;
@@ -192,7 +192,6 @@ export function createReloadAllExtension(dependencies: RuntimeDependencies = {})
 		const now = dependencies.now ?? Date.now;
 		const newGenerationId = dependencies.newGenerationId ?? randomUUID;
 		const runtimeNonce = (dependencies.newRuntimeNonce ?? randomUUID)();
-		const internalCommand = `${INTERNAL_COMMAND_PREFIX}-${runtimeNonce}`;
 		const getProcessIdentity = dependencies.processIdentity ?? currentProcessIdentity;
 		const isTargetProcessAlive = dependencies.isTargetProcessAlive ?? targetProcessIsAlive;
 		const startInterval = dependencies.setInterval ?? ((callback, delayMs) => setInterval(callback, delayMs));
@@ -295,10 +294,17 @@ export function createReloadAllExtension(dependencies: RuntimeDependencies = {})
 		const queueApply = (generationId: string) => {
 			if (!activeCtx || reloadInProgress) return;
 			if (queuedGeneration === generationId && now() - queuedAt < queueRetryAfterMs) return;
+			// Never submit the private apply form unless Pi confirms that the public
+			// extension command resolves exactly. This prevents a command collision
+			// from turning coordination metadata into an accidental model prompt.
+			const commandAvailable = pi.getCommands().some((command) =>
+				command.name === COMMAND && command.source === "extension"
+			);
+			if (!commandAvailable) return;
 			queuedGeneration = generationId;
 			queuedAt = now();
 			try {
-				pi.sendUserMessage(`/${internalCommand} ${generationId}`, {
+				pi.sendUserMessage(`/${COMMAND} ${INTERNAL_APPLY} ${runtimeNonce} ${generationId}`, {
 					expandPromptTemplates: true,
 				});
 			} catch {
@@ -326,19 +332,17 @@ export function createReloadAllExtension(dependencies: RuntimeDependencies = {})
 		const registerCommand = () => {
 			if (commandRegistered) return;
 			commandRegistered = true;
-			pi.registerCommand(internalCommand, {
-				description: "Apply a validated machine-local reload generation",
-				handler: async (args, ctx) => {
-					queuedGeneration = undefined;
-					const generationId = args.trim();
-					if (!generationId || /\s/.test(generationId) || pendingGeneration !== generationId) return;
-					await applyGeneration(generationId, ctx);
-				},
-			});
 			pi.registerCommand(COMMAND, {
 				description: "Reload every top-level Pi TUI on this machine after it becomes idle",
 				handler: async (args, ctx) => {
 					const fields = args.trim().split(/\s+/).filter(Boolean);
+					if (fields[0] === INTERNAL_APPLY) {
+						queuedGeneration = undefined;
+						const generationId = fields.length === 3 && fields[1] === runtimeNonce ? fields[2] : undefined;
+						if (!generationId || pendingGeneration !== generationId) return;
+						await applyGeneration(generationId, ctx);
+						return;
+					}
 					if (fields.length > 0) {
 						ctx.ui.notify(`Usage: /${COMMAND}`, "warning");
 						return;
