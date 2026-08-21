@@ -128,7 +128,7 @@ function resultText(result: any): string {
 		.join("\n") ?? "";
 }
 
-function actionVerb(action: HerdrAction, settled: boolean): string {
+function actionVerb(action: HerdrAction | undefined, settled: boolean): string {
 	const verbs: Record<HerdrAction, [running: string, complete: string]> = {
 		start: ["Starting", "Started"],
 		list: ["Listing", "Listed"],
@@ -137,31 +137,34 @@ function actionVerb(action: HerdrAction, settled: boolean): string {
 		input: ["Sending input", "Sent input"],
 		interrupt: ["Interrupting", "Interrupted"],
 	};
-	return verbs[action][settled ? 1 : 0];
+	const pair = action ? verbs[action] : undefined;
+	return pair?.[settled ? 1 : 0] ?? (settled ? "Used Herdr process" : "Using Herdr process");
 }
 
-function targetLabel(args: HerdrProcessArgs, details?: HerdrProcessDetails): string | undefined {
-	if (args.action === "start") return details?.label ?? args.label;
-	if (args.action === "list") return undefined;
+function targetLabel(args: Partial<HerdrProcessArgs>, details?: HerdrProcessDetails): string | undefined {
+	const action = args.action ?? details?.action;
+	if (action === "start") return details?.label ?? args.label;
+	if (!action || action === "list") return undefined;
 	return details?.paneId ?? args.pane_id;
 }
 
 function renderHeadline(
-	action: HerdrAction,
-	reasoning: string,
+	action: HerdrAction | undefined,
+	reasoning: string | undefined,
 	settled: boolean,
 	isError: boolean,
 	theme: Theme,
 ): string {
 	const color = !settled ? "accent" : isError ? "error" : "success";
 	const mark = theme.fg(color, "•");
-	const verb = isError ? `${actionVerb(action, false)} failed` : actionVerb(action, settled);
+	const verb = isError ? (action ? `${actionVerb(action, false)} failed` : "Herdr process failed") : actionVerb(action, settled);
 	const intent = normalizeToolReasoning(reasoning);
 	return `${mark} ${theme.bold(verb)}${intent ? ` ${theme.fg("accent", intent)}` : ""}`;
 }
 
-function renderCall(args: HerdrProcessArgs, theme: Theme, context: ToolRenderContext): Component {
+function renderCall(rawArgs: Partial<HerdrProcessArgs> | undefined, theme: Theme, context: ToolRenderContext): Component {
 	if (!context.isPartial) return new Container();
+	const args = rawArgs ?? {};
 	return new ProcessLines(() => {
 		const lines = [renderHeadline(args.action, args.reasoning, false, false, theme)];
 		const target = targetLabel(args);
@@ -177,19 +180,21 @@ function renderResult(
 	context: ToolRenderContext,
 ): Component {
 	if (options.isPartial) return new Container();
-	const args = context.args as HerdrProcessArgs | undefined;
-	if (!args) return new Container();
+	const args = context.args && typeof context.args === "object"
+		? context.args as Partial<HerdrProcessArgs>
+		: {};
 	const details = result?.details as HerdrProcessDetails | undefined;
+	const action = args.action ?? details?.action;
 	const text = resultText(result);
 
 	return new ProcessLines((width) => {
-		const lines = [renderHeadline(args.action, args.reasoning, true, Boolean(context.isError), theme)];
+		const lines = [renderHeadline(action, args.reasoning, true, Boolean(context.isError), theme)];
 		const target = targetLabel(args, details);
 		if (target) {
 			const pane = details?.paneId && details.paneId !== target ? ` · ${details.paneId}` : "";
 			lines.push(`  └ ${theme.fg("dim", `${target}${pane}`)}`);
 		}
-		if (context.isError || args.action === "read" || args.action === "status" || args.action === "list") {
+		if (context.isError || action === "read" || action === "status" || action === "list") {
 			lines.push(...renderCommandOutput(text, width, { maxRows: options.expanded ? undefined : 8 }));
 		}
 		return lines;

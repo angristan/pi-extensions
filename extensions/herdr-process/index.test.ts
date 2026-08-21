@@ -240,6 +240,20 @@ describe("herdr-process", () => {
 		}, undefined, undefined, harness.ctx)).resolves.toMatchObject({ details: { paneId: "w1:p8" } });
 	});
 
+	test("renders partial arguments before action arrives", async () => {
+		const harness = createHarness();
+		await harness.start();
+		const tool = harness.tools.get("herdr_process");
+		expect(tool.renderCall({}, theme, { isPartial: true }).render(120)).toEqual(["• Using Herdr process"]);
+		expect(tool.renderCall(undefined, theme, { isPartial: true }).render(120)).toEqual(["• Using Herdr process"]);
+		expect(tool.renderResult(
+			{ content: [{ type: "text", text: "render failure" }] },
+			{ expanded: false, isPartial: false },
+			theme,
+			{ args: {}, isError: true },
+		).render(120).join("\n")).toContain("Herdr process failed");
+	});
+
 	test("renders running and settled process rows", async () => {
 		const harness = createHarness();
 		await harness.start();
