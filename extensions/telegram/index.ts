@@ -13,9 +13,9 @@ import {
 	sendTelegramMarkdownMessage,
 	sendTelegramMessage,
 	sendTelegramQuestion,
-	waitForTelegramAnswer,
 	type SentTelegramQuestion,
 } from "./bot-api";
+import { waitForSharedTelegramAnswer } from "./coordinator";
 
 export { sendTelegramMessage } from "./bot-api";
 
@@ -387,7 +387,7 @@ export function createTelegramExtension(dependencies: RuntimeDependencies = {}) 
 	const sendMarkdownMessage = dependencies.sendMarkdownMessage ?? sendTelegramMarkdownMessage;
 	const sendRenderedMessage = dependencies.sendRenderedMessage ?? sendTelegramHtmlMessage;
 	const sendQuestion = dependencies.sendQuestion ?? sendTelegramQuestion;
-	const waitForAnswer = dependencies.waitForAnswer ?? waitForTelegramAnswer;
+	const waitForAnswer = dependencies.waitForAnswer ?? waitForSharedTelegramAnswer;
 	const resolveQuestion = dependencies.resolveQuestion ?? resolveTelegramQuestion;
 	const setTimer = dependencies.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
 	const clearTimer = dependencies.clearTimer ?? ((timer) => clearTimeout(timer));

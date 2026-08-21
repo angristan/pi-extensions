@@ -19,14 +19,14 @@ export interface SentTelegramQuestion {
 	messageId: number;
 }
 
-interface TelegramMessage {
+export interface TelegramMessage {
 	message_id?: unknown;
 	text?: unknown;
 	chat?: { id?: unknown };
 	reply_to_message?: { message_id?: unknown };
 }
 
-interface TelegramUpdate {
+export interface TelegramUpdate {
 	update_id?: unknown;
 	message?: TelegramMessage;
 	callback_query?: {
@@ -195,6 +195,52 @@ async function acknowledgeCallback(
 	}
 }
 
+export async function getTelegramUpdates(
+	credentials: TelegramCredentials,
+	offset: number | undefined,
+	signal: AbortSignal,
+	fetchImpl: typeof fetch = fetch,
+): Promise<TelegramUpdate[]> {
+	const updates = await telegramRequest<TelegramUpdate[]>(credentials, "getUpdates", {
+		...(offset === undefined ? {} : { offset }),
+		timeout: LONG_POLL_TIMEOUT_SECONDS,
+		allowed_updates: ["message", "callback_query"],
+	}, signal, fetchImpl, LONG_POLL_REQUEST_TIMEOUT_MS);
+	if (!Array.isArray(updates)) throw new Error("Telegram API returned invalid updates.");
+	return updates;
+}
+
+export async function matchTelegramAnswerUpdate(
+	credentials: TelegramCredentials,
+	sent: SentTelegramQuestion,
+	question: TelegramQuestion,
+	update: TelegramUpdate,
+	signal: AbortSignal,
+	fetchImpl: typeof fetch = fetch,
+): Promise<{ consumed: boolean; answer?: string }> {
+	const callback = update.callback_query;
+	if (callback && chatMatches(callback.message, sent)) {
+		if (typeof callback.id !== "string") return { consumed: true };
+		const match = typeof callback.data === "string" ? /^option:(\d+)$/.exec(callback.data) : undefined;
+		const optionIndex = match ? Number(match[1]) : -1;
+		const option = Number.isInteger(optionIndex) ? question.options[optionIndex] : undefined;
+		if (option !== undefined) {
+			await acknowledgeCallback(credentials, callback.id, `Selected: ${buttonLabel(option)}`, signal, fetchImpl);
+			return { consumed: true, answer: option };
+		}
+		await acknowledgeCallback(credentials, callback.id, "This option is no longer available.", signal, fetchImpl);
+		return { consumed: true };
+	}
+
+	const message = update.message;
+	if (!replyMatches(message, sent)) return { consumed: false };
+	if (typeof message?.text !== "string") return { consumed: true };
+	const answer = message.text.trim();
+	if (!answer || answer.length > 4_000) return { consumed: true };
+	if (question.options.length > 0 && !question.allowOther) return { consumed: true };
+	return { consumed: true, answer };
+}
+
 export async function waitForTelegramAnswer(
 	credentials: TelegramCredentials,
 	sent: SentTelegramQuestion,
@@ -204,33 +250,11 @@ export async function waitForTelegramAnswer(
 ): Promise<string> {
 	let offset: number | undefined;
 	while (!signal.aborted) {
-		const updates = await telegramRequest<TelegramUpdate[]>(credentials, "getUpdates", {
-			...(offset === undefined ? {} : { offset }),
-			timeout: LONG_POLL_TIMEOUT_SECONDS,
-			allowed_updates: ["message", "callback_query"],
-		}, signal, fetchImpl, LONG_POLL_REQUEST_TIMEOUT_MS);
-		if (!Array.isArray(updates)) throw new Error("Telegram API returned invalid updates.");
-
+		const updates = await getTelegramUpdates(credentials, offset, signal, fetchImpl);
 		for (const update of updates) {
 			if (Number.isInteger(update.update_id)) offset = Math.max(offset ?? 0, (update.update_id as number) + 1);
-			const callback = update.callback_query;
-			if (callback && chatMatches(callback.message, sent) && typeof callback.id === "string") {
-				const match = typeof callback.data === "string" ? /^option:(\d+)$/.exec(callback.data) : undefined;
-				const optionIndex = match ? Number(match[1]) : -1;
-				const option = Number.isInteger(optionIndex) ? question.options[optionIndex] : undefined;
-				if (option !== undefined) {
-					await acknowledgeCallback(credentials, callback.id, `Selected: ${buttonLabel(option)}`, signal, fetchImpl);
-					return option;
-				}
-				await acknowledgeCallback(credentials, callback.id, "This option is no longer available.", signal, fetchImpl);
-			}
-
-			const message = update.message;
-			if (!replyMatches(message, sent) || typeof message?.text !== "string") continue;
-			const answer = message.text.trim();
-			if (!answer || answer.length > 4_000) continue;
-			if (question.options.length > 0 && !question.allowOther) continue;
-			return answer;
+			const matched = await matchTelegramAnswerUpdate(credentials, sent, question, update, signal, fetchImpl);
+			if (matched.answer !== undefined) return matched.answer;
 		}
 	}
 	throw signal.reason ?? new Error("Telegram answer polling was cancelled.");

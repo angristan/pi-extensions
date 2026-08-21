@@ -98,9 +98,13 @@ config file.
 - Secret prompts never expose their question text or accept Telegram answers;
   their redacted notification updates to `Answered securely in Pi` when done.
 - Answer polling uses Telegram `getUpdates`; the bot must not have a webhook.
-- Telegram permits only one active `getUpdates` consumer per bot. Avoid waiting
-  for Telegram answers from multiple Pi processes at the same time; a conflict
-  leaves the local TUI prompt usable and reports an error.
+- Pi processes under one user account on a machine coordinate through an
+  owner-only runtime spool, so only one process polls a given bot token and
+  answers still route to the Pi
+  session whose Telegram message received the reply. If that process exits,
+  another waiting process takes ownership and continues from the saved offset.
+- Coordination is machine-local. Two devices using the same bot token can still
+  conflict; use one bot per device or a shared cross-device receiver.
 
 ## Commands
 
