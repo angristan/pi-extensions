@@ -84,6 +84,24 @@ describe("auto-session-title context", () => {
 		});
 	});
 
+	test("makes a new request authoritative and keeps cwd metadata weak", () => {
+		const context = buildTitleContext([
+			{ type: "message", message: { role: "user", content: "would this be helpful? https://github.com/upstash/context7" } },
+			{ type: "message", message: { role: "assistant", content: "Context7 is useful as a supplemental Pi documentation source." } },
+		]);
+		const prompt = JSON.parse(buildTitlePrompt(undefined, undefined, context));
+
+		expect(prompt).toMatchObject({
+			is_new_session: true,
+			current_user_request: "would this be helpful? https://github.com/upstash/context7",
+			current_assistant_outcome: "Context7 is useful as a supplemental Pi documentation source.",
+			previous_session_title: null,
+			working_directory_hint: null,
+		});
+		expect(prompt.project).toBeUndefined();
+		expect(Object.keys(prompt).at(-1)).toBe("working_directory_hint");
+	});
+
 	test("keeps provisional first prompts out of completed assistant context", () => {
 		const context = buildTitleContext([], "Start improving session titles");
 		expect(context.currentUserRequest).toBe("Start improving session titles");

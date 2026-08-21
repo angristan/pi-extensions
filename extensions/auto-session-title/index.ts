@@ -1,7 +1,8 @@
 import { complete } from "@earendil-works/pi-ai/compat";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { homedir } from "node:os";
+import { basename, join, resolve } from "node:path";
 import { isAppleTitleModel, requestAppleTitleCompletion } from "./apple";
 import {
 	buildTitleContext,
@@ -19,6 +20,16 @@ import { requestTitleCompletion } from "./request";
 
 export function titleModelConfigPath(): string {
 	return join(getAgentDir(), "auto-session-title.json");
+}
+
+/**
+ * The cwd basename can disambiguate an established repository, but `$HOME` is
+ * a user directory, not a project. Keep this input optional and low-authority.
+ */
+export function titleWorkingDirectoryHint(cwd: string, homeDirectory = homedir()): string | undefined {
+	const resolvedCwd = resolve(cwd);
+	if (resolvedCwd === resolve(homeDirectory)) return undefined;
+	return basename(resolvedCwd) || undefined;
 }
 
 const TITLE_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -128,25 +139,31 @@ turn_summary:
 - If the assistant outcome is absent, summarize the user request as provisional intent.
 
 focus_summary:
-- Describe the durable session-level project, objective, or deliverable, not merely the latest subtopic.
-- Use session_anchor as evidence of the original objective. Use previous_focus, recent_turn_summaries, bootstrap_prior_turns, and the current turn to maintain or deliberately revise it.
+- If is_new_session is true, current_user_request and current_assistant_outcome are authoritative. Derive the focus from their concrete subject and requested action, even when the user phrases it indirectly, casually, or mostly as a URL.
+- On a new session, do not invent a broader project, workflow, or objective that the current request and outcome do not establish.
+- working_directory_hint is weak location metadata only. It may be a username, home directory, shared folder, or unrelated checkout. Never infer the session focus from it when the request or outcome identifies a subject.
+- If is_new_session is false, use session_anchor as evidence of the original objective. Use previous_focus, recent_turn_summaries, bootstrap_prior_turns, and the current turn to maintain or deliberately revise it.
 - bootstrap_prior_turns is present only when an older session has no rolling summary state; use those turns to recover the durable objective.
-- Preserve the core subject when the current turn explains, evaluates, or implements one component, technology, protocol, or design detail within it.
-- A component remains subordinate even when discussed for several turns. Repetition alone does not make it the session's primary subject.
-- Change the focus only when the user explicitly pivots to a different primary deliverable, or sustained work establishes an independent new objective rather than a detail of the existing one.
+- Once prior session state establishes a durable objective, preserve its core subject when the current turn covers one component, technology, protocol, or design detail within it.
+- A component of an established objective remains subordinate even when discussed for several turns. Repetition alone does not make it the session's primary subject.
+- Change established focus only when the user explicitly pivots to a different primary deliverable, or sustained work establishes an independent new objective rather than a detail of the existing one.
 - If previous_focus overfits a recent detail, recover the broader recurring objective from session_anchor and recent_turn_summaries.
 - Use 600 characters maximum.
 
 title:
-- First determine focus_summary, then title that complete durable focus at the same scope. Do not title only one item mentioned inside it.
+- First determine focus_summary, then title the complete focus at the same scope.
+- If is_new_session is true, name the concrete subject of the current request. Do not broaden it to a generic project or workflow.
+- A package, repository, product, article, or tool being evaluated is the primary subject of a new session, not a subordinate tool-choice discussion.
+- Never use working_directory_hint in the title unless the current request or outcome explicitly establishes that same named project as the subject.
 - Return one specific noun phrase in title case, using 3 words maximum.
 - Omit leading task verbs such as Update, Fix, Add, Implement, Create, or Investigate.
 - Do not use quotes, markdown, prefixes, commentary, or sentence-ending punctuation.
 - Use previous_session_title only as a tie-breaker between equally accurate titles. Never preserve it when it names only a component of focus_summary.
-- Do not rename a session after a clarification, architecture question, implementation detail, tool choice, or other subordinate discussion.
+- If is_new_session is false, do not rename after a clarification, architecture question, implementation detail, tool choice, or other subordinate discussion.
 - Replace a stale over-specific title when session_anchor and recent turns reveal the broader recurring objective. When previous_session_title and focus_summary differ in scope, ignore title continuity.
 
 Examples:
+- New session, request "would this be helpful? https://github.com/upstash/context7", outcome evaluating Context7 for Pi: "Context7 Evaluation", never a title derived from working_directory_hint.
 - A session building Meridian Sync remains "Meridian Sync" while discussing its revision DAG, RPC layer, and notification WebSockets.
 - A broad request that becomes sustained work on an independent Pi footer deliverable can become "Compact Pi Footer".
 - Previous "API Auth Refactor" plus one unrelated shell question remains "API Auth Refactor".`;
@@ -346,7 +363,7 @@ export default function (pi: ExtensionAPI, requestDependencies: TitleRequestDepe
 
 		// Each candidate receives the same bounded, tool-free request. Availability,
 		// auth, request, and invalid-response failures advance to the next model.
-		const prompt = buildTitlePrompt(basename(ctx.cwd), continuityTitle, context);
+		const prompt = buildTitlePrompt(titleWorkingDirectoryHint(ctx.cwd), continuityTitle, context);
 		const request = await requestTitleWithFallback(ctx, models, TITLE_SYSTEM_PROMPT, prompt, sessionId, signal, requestDependencies);
 		if (!request || signal.aborted) return;
 		const generated = parseTitleModelResponse(request.response);

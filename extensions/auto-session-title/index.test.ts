@@ -1,18 +1,27 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { appleHelperBinaryPath, isAppleTitleModel, requestAppleTitleCompletion } from "./apple";
-import autoSessionTitle, { loadTitleModelConfig, loadTitleModelConfigs, normalizeTitle, requestTitleWithFallback, sessionTitleIsManual, TITLE_SYSTEM_PROMPT, titleModelConfigPath } from "./index";
+import autoSessionTitle, { loadTitleModelConfig, loadTitleModelConfigs, normalizeTitle, requestTitleWithFallback, sessionTitleIsManual, TITLE_SYSTEM_PROMPT, titleModelConfigPath, titleWorkingDirectoryHint } from "./index";
 import { requestTitleCompletion } from "./request";
 
 describe("auto-session-title model requests", () => {
-	test("titles the durable project instead of its latest component", () => {
-		expect(TITLE_SYSTEM_PROMPT).toContain("A component remains subordinate even when discussed for several turns");
-		expect(TITLE_SYSTEM_PROMPT).toContain("title that complete durable focus at the same scope");
+	test("prioritizes a new request while preserving established session focus", () => {
+		expect(TITLE_SYSTEM_PROMPT).toContain("current_user_request and current_assistant_outcome are authoritative");
+		expect(TITLE_SYSTEM_PROMPT).toContain("Never infer the session focus from it when the request or outcome identifies a subject");
+		expect(TITLE_SYSTEM_PROMPT).toContain("A package, repository, product, article, or tool being evaluated is the primary subject of a new session");
+		expect(TITLE_SYSTEM_PROMPT).toContain('outcome evaluating Context7 for Pi: "Context7 Evaluation"');
+		expect(TITLE_SYSTEM_PROMPT).toContain("A component of an established objective remains subordinate even when discussed for several turns");
 		expect(TITLE_SYSTEM_PROMPT).toContain("Never preserve it when it names only a component of focus_summary");
 		expect(TITLE_SYSTEM_PROMPT).toContain('A session building Meridian Sync remains "Meridian Sync" while discussing its revision DAG, RPC layer, and notification WebSockets');
+	});
+
+	test("omits home and root directories from title hints", () => {
+		expect(titleWorkingDirectoryHint("/home/alex", "/home/alex")).toBeUndefined();
+		expect(titleWorkingDirectoryHint("/", "/home/alex")).toBeUndefined();
+		expect(titleWorkingDirectoryHint("/home/alex/src/pi-extensions", "/home/alex")).toBe("pi-extensions");
 	});
 
 	test("does not feed a provisional title into the first settled request", async () => {
@@ -45,7 +54,7 @@ describe("auto-session-title model requests", () => {
 				appendEntry(customType: string, data: unknown) { entries.push({ type: "custom", customType, data }); },
 			};
 			const ctx = {
-				cwd: "/home/alex",
+				cwd: homedir(),
 				hasUI: false,
 				modelRegistry: {
 					find: (provider: string, model: string) => ({ provider, id: model }),
@@ -88,8 +97,16 @@ describe("auto-session-title model requests", () => {
 			handlers.get("agent_settled")?.({}, ctx);
 			while (entries.filter((entry) => entry.customType === "auto-session-title-state-v2").length < 1) await Bun.sleep(1);
 
-			expect(prompts[0].previous_session_title).toBeNull();
-			expect(prompts[1].previous_session_title).toBeNull();
+			expect(prompts[0]).toMatchObject({
+				is_new_session: true,
+				previous_session_title: null,
+				working_directory_hint: null,
+			});
+			expect(prompts[1]).toMatchObject({
+				is_new_session: true,
+				previous_session_title: null,
+				working_directory_hint: null,
+			});
 			expect(appliedTitles).toEqual(["Alex Project"]);
 
 			entries.push(
@@ -100,7 +117,11 @@ describe("auto-session-title model requests", () => {
 			handlers.get("agent_settled")?.({}, ctx);
 			while (prompts.length < 3) await Bun.sleep(1);
 
-			expect(prompts[2].previous_session_title).toBe("Alex Project");
+			expect(prompts[2]).toMatchObject({
+				is_new_session: false,
+				previous_session_title: "Alex Project",
+				working_directory_hint: null,
+			});
 		} finally {
 			if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
 			else process.env.PI_CODING_AGENT_DIR = previous;

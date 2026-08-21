@@ -195,16 +195,21 @@ export function titleContextHasContent(context: TitleContext): boolean {
 	);
 }
 
-export function buildTitlePrompt(project: string, previousTitle: string | undefined, context: TitleContext): string {
+export function buildTitlePrompt(workingDirectoryHint: string | undefined, previousTitle: string | undefined, context: TitleContext): string {
+	const isNewSession = !context.sessionAnchor
+		&& !context.previousFocus
+		&& context.recentTurnSummaries.length === 0
+		&& context.bootstrapPriorTurns.length === 0;
 	const prompt = JSON.stringify({
-		project: clip(project, 200),
-		previous_session_title: previousTitle ? clip(redactEphemeralTitlePaths(previousTitle), 72) ?? null : null,
+		is_new_session: isNewSession,
+		current_user_request: context.currentUserRequest ?? null,
+		current_assistant_outcome: context.currentAssistantOutcome ?? null,
 		session_anchor: context.sessionAnchor ?? null,
 		previous_focus: context.previousFocus ?? null,
 		recent_turn_summaries: context.recentTurnSummaries,
 		bootstrap_prior_turns: context.bootstrapPriorTurns,
-		current_user_request: context.currentUserRequest ?? null,
-		current_assistant_outcome: context.currentAssistantOutcome ?? null,
+		previous_session_title: previousTitle ? clip(redactEphemeralTitlePaths(previousTitle), 72) ?? null : null,
+		working_directory_hint: clip(workingDirectoryHint, 200) ?? null,
 	});
 	if (prompt.length > MAX_TITLE_CONTEXT_CHARS) throw new Error(`Title context exceeded ${MAX_TITLE_CONTEXT_CHARS} characters.`);
 	return prompt;

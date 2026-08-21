@@ -3,10 +3,12 @@
 Automatically gives Pi sessions short, descriptive titles.
 
 The extension creates a provisional title from the first prompt, then refreshes
-it after each completed turn. The first completed-turn refresh does not treat
-the provisional title as prior session evidence. A rolling focus summary keeps
-the title aligned with the session's main objective instead of the latest
-implementation detail. Titles contain one to three words.
+it after each completed turn. On a new session, the concrete subject of the
+request and outcome takes priority; the working-directory basename is only a
+weak hint and `$HOME` is omitted. The first completed-turn refresh does not
+treat the provisional title as prior session evidence. A rolling focus summary
+keeps later titles aligned with the established session objective instead of the
+latest implementation detail. Titles contain one to three words.
 
 Manual renames pause automatic updates. Run `/title-refresh` to resume them.
 
