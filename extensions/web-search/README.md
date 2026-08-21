@@ -51,10 +51,14 @@ Future calls try Exa again without a cross-request cooldown.
 
 Exa supports anonymous access, with `EXA_API_KEY` available for higher service
 limits. When configured, the key is sent in the `x-api-key` request header and
-never placed in the MCP URL. Anonymous retries are independent in each process,
-so jitter reduces collisions between concurrent sessions without shared state.
-Firecrawl is credential-gated to avoid flaky shared-IP keyless limits;
-set `FIRECRAWL_API_KEY` before it appears in routes.
+never placed in the MCP URL. Set `PI_EXA_ANONYMOUS_FALLBACK=1` to retry once
+without the key when Exa returns HTTP 402 because the account credits or API-key
+spending budget are exhausted. HTTP 429 remains a transient rate limit and uses
+the normal keyed retry policy. If anonymous access is also unavailable, routing
+continues to the next provider. Anonymous retries are independent in each
+process, so jitter reduces collisions between concurrent sessions without
+shared state. Firecrawl is credential-gated to avoid flaky shared-IP keyless
+limits; set `FIRECRAWL_API_KEY` before it appears in routes.
 
 Mistral continues to read its API key and base URL from the `mistral` provider in
 `$PI_CODING_AGENT_DIR/models.json` (defaults to `~/.pi/agent/models.json`), with

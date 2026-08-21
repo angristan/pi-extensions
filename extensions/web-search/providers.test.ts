@@ -178,6 +178,92 @@ describe("provider normalization", () => {
 		}
 	});
 
+	test("falls back anonymously after a keyed Exa budget is exhausted", async () => {
+		const previousFetch = globalThis.fetch;
+		const previousApiKey = process.env.EXA_API_KEY;
+		const previousFallback = process.env.PI_EXA_ANONYMOUS_FALLBACK;
+		const requestApiKeys: Array<string | null> = [];
+		globalThis.fetch = (async (_input, init) => {
+			requestApiKeys.push(new Headers(init?.headers).get("x-api-key"));
+			if (requestApiKeys.length === 1) {
+				return new Response(JSON.stringify({ error: "API key spending budget exceeded" }), { status: 402 });
+			}
+			return new Response(JSON.stringify({
+				jsonrpc: "2.0",
+				result: { content: [{ type: "text", text: "Title: Docs\nURL: https://example.com/docs\nHighlights:\nAnonymous result." }] },
+			}), { headers: { "Content-Type": "application/json" } });
+		}) as typeof fetch;
+		try {
+			process.env.EXA_API_KEY = "test-exa-key";
+			process.env.PI_EXA_ANONYMOUS_FALLBACK = "1";
+			const result = await searchExaWeb({ query: "budget fallback" });
+			expect(requestApiKeys).toEqual(["test-exa-key", null]);
+			expect(result.results[0]?.snippets).toEqual(["Anonymous result."]);
+		} finally {
+			globalThis.fetch = previousFetch;
+			if (previousApiKey === undefined) delete process.env.EXA_API_KEY;
+			else process.env.EXA_API_KEY = previousApiKey;
+			if (previousFallback === undefined) delete process.env.PI_EXA_ANONYMOUS_FALLBACK;
+			else process.env.PI_EXA_ANONYMOUS_FALLBACK = previousFallback;
+		}
+	});
+
+	test("falls back anonymously after an MCP tool reports exhausted credits", async () => {
+		const previousFetch = globalThis.fetch;
+		const previousApiKey = process.env.EXA_API_KEY;
+		const previousFallback = process.env.PI_EXA_ANONYMOUS_FALLBACK;
+		const requestApiKeys: Array<string | null> = [];
+		globalThis.fetch = (async (_input, init) => {
+			requestApiKeys.push(new Headers(init?.headers).get("x-api-key"));
+			if (requestApiKeys.length === 1) {
+				return new Response(JSON.stringify({
+					jsonrpc: "2.0",
+					result: { content: [{ type: "text", text: "web_search_exa error (402): Account credits exhausted" }], isError: true },
+				}), { headers: { "Content-Type": "application/json" } });
+			}
+			return new Response(JSON.stringify({
+				jsonrpc: "2.0",
+				result: { content: [{ type: "text", text: "Title: Docs\nURL: https://example.com/docs\nHighlights:\nAnonymous result." }] },
+			}), { headers: { "Content-Type": "application/json" } });
+		}) as typeof fetch;
+		try {
+			process.env.EXA_API_KEY = "test-exa-key";
+			process.env.PI_EXA_ANONYMOUS_FALLBACK = "true";
+			const result = await searchExaWeb({ query: "tool budget fallback" });
+			expect(requestApiKeys).toEqual(["test-exa-key", null]);
+			expect(result.results[0]?.snippets).toEqual(["Anonymous result."]);
+		} finally {
+			globalThis.fetch = previousFetch;
+			if (previousApiKey === undefined) delete process.env.EXA_API_KEY;
+			else process.env.EXA_API_KEY = previousApiKey;
+			if (previousFallback === undefined) delete process.env.PI_EXA_ANONYMOUS_FALLBACK;
+			else process.env.PI_EXA_ANONYMOUS_FALLBACK = previousFallback;
+		}
+	});
+
+	test("does not use anonymous fallback unless explicitly enabled", async () => {
+		const previousFetch = globalThis.fetch;
+		const previousApiKey = process.env.EXA_API_KEY;
+		const previousFallback = process.env.PI_EXA_ANONYMOUS_FALLBACK;
+		let calls = 0;
+		globalThis.fetch = (async () => {
+			calls++;
+			return new Response(JSON.stringify({ error: "API key spending budget exceeded" }), { status: 402 });
+		}) as typeof fetch;
+		try {
+			process.env.EXA_API_KEY = "test-exa-key";
+			delete process.env.PI_EXA_ANONYMOUS_FALLBACK;
+			await expect(searchExaWeb({ query: "budget failure" })).rejects.toThrow("Exa HTTP 402");
+			expect(calls).toBe(1);
+		} finally {
+			globalThis.fetch = previousFetch;
+			if (previousApiKey === undefined) delete process.env.EXA_API_KEY;
+			else process.env.EXA_API_KEY = previousApiKey;
+			if (previousFallback === undefined) delete process.env.PI_EXA_ANONYMOUS_FALLBACK;
+			else process.env.PI_EXA_ANONYMOUS_FALLBACK = previousFallback;
+		}
+	});
+
 	test("throws MCP tool error results instead of treating them as empty success", async () => {
 		const previousFetch = globalThis.fetch;
 		globalThis.fetch = (async () => new Response(JSON.stringify({

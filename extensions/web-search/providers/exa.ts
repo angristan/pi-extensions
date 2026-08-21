@@ -18,13 +18,20 @@ const RATE_LIMIT_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 32_000] 
 const RATE_LIMIT_RETRY_BUDGET_MS = 30_000;
 const RATE_LIMIT_JITTER_MS = 500;
 
-function requestHeaders(): Record<string, string> {
+function configuredApiKey(): string | undefined {
+	return process.env.EXA_API_KEY?.trim() || undefined;
+}
+
+function allowsAnonymousFallback(): boolean {
+	return /^(?:1|true|yes|on)$/i.test(process.env.PI_EXA_ANONYMOUS_FALLBACK?.trim() ?? "");
+}
+
+function requestHeaders(apiKey: string | undefined): Record<string, string> {
 	const headers: Record<string, string> = {
 		Accept: "application/json, text/event-stream",
 		"Content-Type": "application/json",
 	};
-	const key = process.env.EXA_API_KEY?.trim();
-	if (key) headers["x-api-key"] = key;
+	if (apiKey) headers["x-api-key"] = apiKey;
 	return headers;
 }
 
@@ -48,7 +55,7 @@ function mcpToolError(text: string): WebProviderError {
 	const knownStatus = Number.isInteger(status) ? status : undefined;
 	return new WebProviderError(`Exa MCP tool error: ${detail}`, {
 		status: knownStatus,
-		retriable: knownStatus === undefined || knownStatus === 408 || knownStatus === 429 || knownStatus >= 500,
+		retriable: knownStatus === undefined || knownStatus === 402 || knownStatus === 408 || knownStatus === 429 || knownStatus >= 500,
 	});
 }
 
@@ -79,7 +86,19 @@ async function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void
 
 async function callExa(tool: string, args: Record<string, unknown>, options: ProviderOptions = {}): Promise<{ text: string; elapsedMs: number }> {
 	const started = performance.now();
-	for (let attempt = 0; ; attempt++) {
+	let apiKey = configuredApiKey();
+	let mayFallbackAnonymously = Boolean(apiKey) && allowsAnonymousFallback();
+	let rateLimitAttempt = 0;
+
+	const useAnonymousFallback = (status: number | undefined): boolean => {
+		if (status !== 402 || !mayFallbackAnonymously) return false;
+		apiKey = undefined;
+		mayFallbackAnonymously = false;
+		rateLimitAttempt = 0;
+		return true;
+	};
+
+	for (;;) {
 		const remainingBudgetMs = RATE_LIMIT_RETRY_BUDGET_MS - (performance.now() - started);
 		if (remainingBudgetMs <= 0) throw new WebProviderError("Exa retry budget exhausted");
 		const requestTimeoutMs = Math.max(1, Math.min(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, Math.floor(remainingBudgetMs)));
@@ -87,7 +106,7 @@ async function callExa(tool: string, args: Record<string, unknown>, options: Pro
 		try {
 			response = await fetch(endpoint(tool), {
 				method: "POST",
-				headers: requestHeaders(),
+				headers: requestHeaders(apiKey),
 				body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method: "tools/call", params: { name: tool, arguments: args } }),
 				signal: combineSignals(options.signal, requestTimeoutMs),
 			});
@@ -96,8 +115,10 @@ async function callExa(tool: string, args: Record<string, unknown>, options: Pro
 			throw new WebProviderError(`Exa request failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
 		}
 		const raw = await response.text();
-		if (response.status === 429 && attempt < RATE_LIMIT_RETRY_DELAYS_MS.length) {
-			const delayMs = retryAfterMs(response) ?? RATE_LIMIT_RETRY_DELAYS_MS[attempt]!;
+		if (useAnonymousFallback(response.status)) continue;
+		if (response.status === 429 && rateLimitAttempt < RATE_LIMIT_RETRY_DELAYS_MS.length) {
+			const delayMs = retryAfterMs(response) ?? RATE_LIMIT_RETRY_DELAYS_MS[rateLimitAttempt]!;
+			rateLimitAttempt++;
 			const jitterMs = Math.floor(Math.random() * (RATE_LIMIT_JITTER_MS + 1));
 			const totalDelayMs = delayMs + jitterMs;
 			const remainingBudgetMs = RATE_LIMIT_RETRY_BUDGET_MS - (performance.now() - started);
@@ -109,7 +130,7 @@ async function callExa(tool: string, args: Record<string, unknown>, options: Pro
 		if (!response.ok) {
 			throw new WebProviderError(`Exa HTTP ${response.status}: ${raw.slice(0, 300) || response.statusText}`, {
 				status: response.status,
-				retriable: response.status === 429 || response.status >= 500,
+				retriable: response.status === 402 || response.status === 429 || response.status >= 500,
 			});
 		}
 		let payload: any;
@@ -118,13 +139,21 @@ async function callExa(tool: string, args: Record<string, unknown>, options: Pro
 		} catch (error) {
 			throw new WebProviderError("Exa returned invalid JSON", { cause: error });
 		}
-		if (payload?.error) throw new WebProviderError(`Exa MCP error: ${JSON.stringify(payload.error).slice(0, 500)}`);
+		if (payload?.error) {
+			const error = mcpToolError(JSON.stringify(payload.error));
+			if (useAnonymousFallback(error.status)) continue;
+			throw error;
+		}
 		const text = (payload?.result?.content ?? [])
 			.filter((part: any) => typeof part?.text === "string")
 			.map((part: any) => part.text)
 			.join("\n")
 			.trim();
-		if (payload?.result?.isError === true) throw mcpToolError(text);
+		if (payload?.result?.isError === true) {
+			const error = mcpToolError(text);
+			if (useAnonymousFallback(error.status)) continue;
+			throw error;
+		}
 		return { text, elapsedMs: performance.now() - started };
 	}
 }
