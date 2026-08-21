@@ -15,6 +15,99 @@ describe("auto-session-title model requests", () => {
 		expect(TITLE_SYSTEM_PROMPT).toContain('A session building Meridian Sync remains "Meridian Sync" while discussing its revision DAG, RPC layer, and notification WebSockets');
 	});
 
+	test("does not feed a provisional title into the first settled request", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "pi-auto-title-provisional-test-"));
+		const previous = process.env.PI_CODING_AGENT_DIR;
+		try {
+			process.env.PI_CODING_AGENT_DIR = directory;
+			writeFileSync(join(directory, "auto-session-title.json"), JSON.stringify({
+				provider: "test",
+				model: "titles",
+				thinkingLevel: "off",
+			}));
+
+			const handlers = new Map<string, (...args: any[]) => any>();
+			const entries: any[] = [];
+			const prompts: any[] = [];
+			const appliedTitles: string[] = [];
+			let sessionName: string | undefined;
+			let leafId: string | undefined;
+			const pi = {
+				on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
+				registerCommand() {},
+				registerFlag() {},
+				getFlag() { return false; },
+				getSessionName() { return sessionName; },
+				setSessionName(name: string) {
+					sessionName = name;
+					appliedTitles.push(name);
+				},
+				appendEntry(customType: string, data: unknown) { entries.push({ type: "custom", customType, data }); },
+			};
+			const ctx = {
+				cwd: "/home/alex",
+				hasUI: false,
+				modelRegistry: {
+					find: (provider: string, model: string) => ({ provider, id: model }),
+					getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test" }),
+				},
+				sessionManager: {
+					getBranch: () => entries,
+					getEntries: () => entries,
+					getSessionId: () => "session-1",
+					getLeafId: () => leafId,
+				},
+				ui: { notify() {} },
+			};
+			autoSessionTitle(pi as any, {
+				requestCompletion: async (_complete, _model, _auth, _systemPrompt, prompt) => {
+					prompts.push(JSON.parse(prompt));
+					return prompts.length < 3
+						? JSON.stringify({
+							turn_summary: prompts.length === 1 ? "Evaluate Context7." : "Evaluated Context7 for Pi.",
+							focus_summary: "Evaluate Context7 for Pi.",
+							title: "Alex Project",
+						})
+						: JSON.stringify({
+							turn_summary: "Compared Context7 installation options.",
+							focus_summary: "Evaluate Context7 for Pi.",
+							title: "Context7 Evaluation",
+						});
+				},
+			});
+			handlers.get("session_start")?.({ reason: "startup" }, ctx);
+
+			handlers.get("before_agent_start")?.({ prompt: "Would Context7 help Pi?" }, ctx);
+			while (sessionName !== "Alex Project") await Bun.sleep(1);
+
+			entries.push(
+				{ type: "message", message: { role: "user", content: "Would Context7 help Pi?" } },
+				{ type: "message", message: { role: "assistant", content: "Yes, as a supplemental documentation source." } },
+			);
+			leafId = "assistant-1";
+			handlers.get("agent_settled")?.({}, ctx);
+			while (entries.filter((entry) => entry.customType === "auto-session-title-state-v2").length < 1) await Bun.sleep(1);
+
+			expect(prompts[0].previous_session_title).toBeNull();
+			expect(prompts[1].previous_session_title).toBeNull();
+			expect(appliedTitles).toEqual(["Alex Project"]);
+
+			entries.push(
+				{ type: "message", message: { role: "user", content: "Compare the installation options." } },
+				{ type: "message", message: { role: "assistant", content: "Compared the skill and extension options." } },
+			);
+			leafId = "assistant-2";
+			handlers.get("agent_settled")?.({}, ctx);
+			while (prompts.length < 3) await Bun.sleep(1);
+
+			expect(prompts[2].previous_session_title).toBe("Alex Project");
+		} finally {
+			if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = previous;
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
 	test("rejects generated filesystem path titles", () => {
 		const path = "/var/folders/sp/fywhcyx14lq17414yv54gyqh0000gn/T/pi-clipboard-1a6dda4b-2944-4d05-9635-7b7194354361.png";
 		expect(normalizeTitle(path)).toBeUndefined();

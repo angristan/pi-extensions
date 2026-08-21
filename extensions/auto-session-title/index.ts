@@ -299,6 +299,7 @@ export default function (pi: ExtensionAPI, requestDependencies: TitleRequestDepe
 	let lastTitledLeafId: string | undefined;
 	let managedTitle: string | undefined;
 	let programmaticTitle: string | undefined;
+	let provisionalTitle: string | undefined;
 	let manualTitleLocked = false;
 	let lastAttemptAt: string | undefined;
 	let lastQueueReason: string | undefined;
@@ -331,19 +332,21 @@ export default function (pi: ExtensionAPI, requestDependencies: TitleRequestDepe
 	const generateTitle = async (
 		ctx: any,
 		sessionId: string,
-		previousTitle: string | undefined,
+		continuityTitle: string | undefined,
+		currentTitle: string | undefined,
 		context: TitleContext,
 		persistState: boolean,
+		isProvisional: boolean,
 		basedOnLeafId: string | undefined,
 		generation: number,
 		signal: AbortSignal,
 	): Promise<string | undefined> => {
 		const models = loadTitleModelConfigs();
-		debug("requesting title", { models: models.map(titleModelName), sessionId, previousTitle, currentUser: context.currentUserRequest?.slice(0, 80) });
+		debug("requesting title", { models: models.map(titleModelName), sessionId, continuityTitle, currentTitle, currentUser: context.currentUserRequest?.slice(0, 80) });
 
 		// Each candidate receives the same bounded, tool-free request. Availability,
 		// auth, request, and invalid-response failures advance to the next model.
-		const prompt = buildTitlePrompt(basename(ctx.cwd), previousTitle, context);
+		const prompt = buildTitlePrompt(basename(ctx.cwd), continuityTitle, context);
 		const request = await requestTitleWithFallback(ctx, models, TITLE_SYSTEM_PROMPT, prompt, sessionId, signal, requestDependencies);
 		if (!request || signal.aborted) return;
 		const generated = parseTitleModelResponse(request.response);
@@ -395,7 +398,13 @@ export default function (pi: ExtensionAPI, requestDependencies: TitleRequestDepe
 			debug("summary state persisted", { turnSummary: state.turnSummary, focusSummary: state.focusSummary });
 		}
 
-		if (!titlesEquivalent(title, previousTitle)) {
+		// The provisional title is useful UI while the first turn runs, but it was
+		// generated from incomplete evidence. Keep it out of the first settled
+		// request's continuity input, then promote or replace it after that request.
+		if (isProvisional) provisionalTitle = title;
+		else if (persistState) provisionalTitle = undefined;
+
+		if (!titlesEquivalent(title, currentTitle)) {
 			setManagedTitle(title);
 			lastAppliedTitle = title;
 			return title;
@@ -445,13 +454,28 @@ export default function (pi: ExtensionAPI, requestDependencies: TitleRequestDepe
 		lastError = undefined;
 		if (options.force) manualTitleLocked = false;
 		lastTitledLeafId = leafId;
-		const previousTitle = pi.getSessionName() || managedTitle;
+		const currentTitle = pi.getSessionName() || managedTitle;
+		const currentTitleIsProvisional = !options.provisionalUser
+			&& Boolean(provisionalTitle)
+			&& titlesEquivalent(currentTitle, provisionalTitle);
+		const continuityTitle = currentTitleIsProvisional ? undefined : currentTitle;
 		const generation = ++requestGeneration;
 		activeRequest?.abort();
 		const controller = new AbortController();
 		activeRequest = controller;
 		if (options.notify) ctx.ui.notify("Refreshing session title…", "info");
-		void generateTitle(ctx, sessionId, previousTitle, context, persistState, leafId, generation, controller.signal)
+		void generateTitle(
+			ctx,
+			sessionId,
+			continuityTitle,
+			currentTitle,
+			context,
+			persistState,
+			Boolean(options.provisionalUser),
+			leafId,
+			generation,
+			controller.signal,
+		)
 			.then((title) => {
 				if (!options.notify || generation !== requestGeneration) return;
 				ctx.ui.notify(title ? `Session title updated: ${title}` : "Title refresh completed without a change.", "info");
@@ -490,6 +514,7 @@ export default function (pi: ExtensionAPI, requestDependencies: TitleRequestDepe
 				`current: ${pi.getSessionName() ?? "(none)"}`,
 				`managed: ${managedTitle ?? "(none)"}`,
 				`programmatic: ${programmaticTitle ?? "(none)"}`,
+				`provisional: ${provisionalTitle ?? "(none)"}`,
 				`manual lock: ${manualTitleLocked ? "yes" : "no"}`,
 				`automatic updates: ${automaticUpdatesDisabled() ? `disabled (--${DISABLE_AUTO_TITLE_FLAG})` : "enabled"}`,
 				`request active: ${activeRequest ? "yes" : "no"}`,
@@ -516,6 +541,7 @@ export default function (pi: ExtensionAPI, requestDependencies: TitleRequestDepe
 		lastTitledLeafId = undefined;
 		managedTitle = pi.getSessionName();
 		programmaticTitle = undefined;
+		provisionalTitle = undefined;
 		restoreSummaryState(ctx);
 		manualTitleLocked = sessionTitleIsManual(managedTitle, latestSummaryState?.title);
 		debug("session start", { title: managedTitle, manualTitleLocked, focusSummary: lastFocusSummary, entries: ctx.sessionManager.getEntries().length });
@@ -545,6 +571,7 @@ export default function (pi: ExtensionAPI, requestDependencies: TitleRequestDepe
 		lastTitledLeafId = undefined;
 		managedTitle = pi.getSessionName();
 		programmaticTitle = undefined;
+		provisionalTitle = undefined;
 		restoreSummaryState(ctx);
 		manualTitleLocked = sessionTitleIsManual(managedTitle, latestSummaryState?.title);
 	});
@@ -566,6 +593,7 @@ export default function (pi: ExtensionAPI, requestDependencies: TitleRequestDepe
 		}
 
 		managedTitle = event.name;
+		provisionalTitle = undefined;
 		manualTitleLocked = true;
 		cancelRequest();
 		debug("manual title lock", event.name);
@@ -575,6 +603,7 @@ export default function (pi: ExtensionAPI, requestDependencies: TitleRequestDepe
 		lastTitledLeafId = undefined;
 		managedTitle = undefined;
 		programmaticTitle = undefined;
+		provisionalTitle = undefined;
 		manualTitleLocked = false;
 		lastTurnSummary = undefined;
 		lastFocusSummary = undefined;
