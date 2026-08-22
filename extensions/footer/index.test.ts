@@ -179,6 +179,46 @@ test("renders extension badges beside the model", () => {
 	handlers.get("session_shutdown")?.({}, ctx);
 });
 
+test("reapplies the idle session title after startup settles", () => {
+	const handlers = new Map<string, (event: any, ctx: any) => void>();
+	const titles: string[] = [];
+	let startupRefresh: (() => void) | undefined;
+	footer({
+		on: (name: string, handler: (event: any, ctx: any) => void) => { handlers.set(name, handler); },
+		events: { on: () => {} },
+		getThinkingLevel: () => "high",
+		exec: async () => ({ code: 1, stdout: "", stderr: "" }),
+	} as any, {
+		scheduleStartupTitleRefresh: (callback) => {
+			startupRefresh = callback;
+			return () => {};
+		},
+	});
+	const ctx = {
+		mode: "tui",
+		cwd: "/tmp/project",
+		sessionManager: {
+			getSessionName: () => "Current session",
+			getSessionId: () => "session-id",
+			getEntries: () => [],
+		},
+		ui: {
+			setTitle: (title: string) => titles.push(title),
+			setFooter: () => {},
+		},
+	};
+
+	handlers.get("session_start")?.({}, ctx);
+	expect(titles.at(-1)).toBe("Current session");
+
+	// Pi applies its default title after session_start during initial binding.
+	ctx.ui.setTitle("π - Current session - project");
+	startupRefresh?.();
+	expect(titles.at(-1)).toBe("Current session");
+
+	handlers.get("session_shutdown")?.({}, ctx);
+});
+
 test("keeps an attention title until its owner clears it", () => {
 	const handlers = new Map<string, (event: any, ctx: any) => void>();
 	const eventHandlers = new Map<string, (event: unknown) => void>();

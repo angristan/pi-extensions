@@ -21,6 +21,7 @@ priority over the spinner.
 - Context % with a 12k-token baseline so small sessions don't show 0%
 - Cumulative input, output, cache, and cost totals, including child agents
 - Cost from token usage × provider pricing (input/output/cache)
+- Session-only window title while idle, including after startup or session restore
 - Window-title spinner (OSC 0) while the agent is running
 - Softened Catppuccin-Mocha-derived palette that adapts to the active theme
 - Purple `fast` status beside the model when the bundled OpenAI Codex Fast mode is enabled

@@ -9,6 +9,7 @@ const SEPARATOR = " │ ";
 const CONTEXT_BASELINE_TOKENS = 12_000;
 const COMMAND_TIMEOUT_MS = 2_500;
 const TITLE_SPINNER_INTERVAL_MS = 200;
+const TITLE_STARTUP_REFRESH_MS = 1_000;
 const TITLE_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 export const FOOTER_MODEL_BADGE_EVENT = "footer:model-badge";
@@ -16,6 +17,10 @@ export const FOOTER_MODEL_BADGE_EVENT = "footer:model-badge";
 interface FooterModelBadgeEvent {
 	source: string;
 	text?: string;
+}
+
+interface RuntimeDependencies {
+	scheduleStartupTitleRefresh?: (callback: () => void) => () => void;
 }
 
 // The default palette is Catppuccin Mocha, used as a fallback when no theme is
@@ -323,7 +328,7 @@ function extensionStatusAccent(key: string): StatusSegment["accent"] {
 	return "usage";
 }
 
-export default function (pi: ExtensionAPI) {
+export default function (pi: ExtensionAPI, dependencies: RuntimeDependencies = {}) {
 	let activeCtx: any;
 	let requestRender: (() => void) | undefined;
 	// Extension action methods are unavailable while the module is loading.
@@ -334,6 +339,7 @@ export default function (pi: ExtensionAPI) {
 	let agentActive = false;
 	let titleFrame = 0;
 	let titleTimer: ReturnType<typeof setInterval> | undefined;
+	let cancelStartupTitleRefresh: (() => void) | undefined;
 	const terminalTitleOverrides = new Map<string, string>();
 	const modelBadges = new Map<string, string>();
 	let cachedUsageSessionId: string | undefined;
@@ -458,6 +464,23 @@ export default function (pi: ExtensionAPI) {
 		if (!titleTimer) return;
 		clearInterval(titleTimer);
 		titleTimer = undefined;
+	};
+
+	const scheduleStartupTitleRefresh = dependencies.scheduleStartupTitleRefresh ?? ((callback: () => void) => {
+		const timer = setTimeout(callback, TITLE_STARTUP_REFRESH_MS);
+		timer.unref?.();
+		return () => clearTimeout(timer);
+	});
+
+	const deferStartupTitleRefresh = () => {
+		cancelStartupTitleRefresh?.();
+		cancelStartupTitleRefresh = scheduleStartupTitleRefresh(() => {
+			cancelStartupTitleRefresh = undefined;
+			// Pi applies its default terminal title after session_start handlers finish.
+			// Reapply the session-only title once startup has settled so restored idle
+			// sessions do not remain as "π - <session> - <cwd>" in terminal-title UIs.
+			renderTitle();
+		});
 	};
 
 	const startTitleAnimation = () => {
@@ -605,6 +628,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", (_event, ctx) => {
 		install(ctx);
+		deferStartupTitleRefresh();
 	});
 	pi.on("session_info_changed", (_event, ctx) => {
 		activeCtx = ctx;
@@ -659,6 +683,8 @@ export default function (pi: ExtensionAPI) {
 	});
 	pi.on("session_shutdown", (_event, ctx) => {
 		gitLookupGeneration += 1;
+		cancelStartupTitleRefresh?.();
+		cancelStartupTitleRefresh = undefined;
 		stopTitleAnimation();
 		agentActive = false;
 		titleFrame = 0;
