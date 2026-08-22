@@ -2,6 +2,7 @@ import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:chil
 import { existsSync } from "node:fs";
 import { basename } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { registerProcessExitReaper } from "../../shared/process-exit-reaper.js";
 
 const RPC_TIMEOUT_MS = 30_000;
 const STOP_GRACE_MS = 1_000;
@@ -37,7 +38,7 @@ export interface AgentClientOptions {
 export type AgentClientFactory = (options: AgentClientOptions) => AgentClient;
 
 const liveChildPids = new Set<number>();
-let exitReaperArmed = false;
+let unregisterExitReaper: (() => void) | undefined;
 
 function killProcessGroup(pid: number | undefined, signal: NodeJS.Signals): void {
 	if (!pid) return;
@@ -55,13 +56,23 @@ function killProcessGroup(pid: number | undefined, signal: NodeJS.Signals): void
 	}
 }
 
+function reapLiveChildren(): void {
+	for (const pid of liveChildPids) killProcessGroup(pid, "SIGKILL");
+	liveChildPids.clear();
+	unregisterExitReaper?.();
+	unregisterExitReaper = undefined;
+}
+
 function armExitReaper(): void {
-	if (exitReaperArmed) return;
-	exitReaperArmed = true;
-	process.on("exit", () => {
-		for (const pid of liveChildPids) killProcessGroup(pid, "SIGKILL");
-		liveChildPids.clear();
-	});
+	if (unregisterExitReaper) return;
+	unregisterExitReaper = registerProcessExitReaper(reapLiveChildren);
+}
+
+function untrackChildPid(pid: number | undefined): void {
+	if (pid) liveChildPids.delete(pid);
+	if (liveChildPids.size > 0) return;
+	unregisterExitReaper?.();
+	unregisterExitReaper = undefined;
 }
 
 function boundedStderr(current: string, chunk: string): string {
@@ -183,7 +194,7 @@ export class RpcProcessClient implements AgentClient {
 		child.stdin.on("error", (error) => this.fail(new Error(`Agent stdin failed: ${error.message}`)));
 		child.once("error", (error) => this.fail(new Error(`Agent process failed: ${error.message}`)));
 		child.once("close", (code, signal) => {
-			if (child.pid) liveChildPids.delete(child.pid);
+			untrackChildPid(child.pid);
 			const error = new Error(`Agent process exited (code=${code} signal=${signal})${this.stderr ? `: ${this.stderr.trim()}` : ""}`);
 			this.fail(error);
 		});
@@ -237,7 +248,7 @@ export class RpcProcessClient implements AgentClient {
 			closed = await forcedClose;
 		}
 		if (!closed) throw new Error(`Agent process ${child.pid ?? "unknown"} did not exit after SIGKILL`);
-		if (child.pid) liveChildPids.delete(child.pid);
+		untrackChildPid(child.pid);
 		this.process = undefined;
 		this.rejectPending(new Error("Agent client stopped"));
 	}

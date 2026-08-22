@@ -959,6 +959,22 @@ describe("terminal tools", () => {
 		component.dispose?.();
 	});
 
+	test("does not retain a process exit listener after a job completes", async () => {
+		const listenersBefore = process.listenerCount("exit");
+		const harness = createHarness();
+		await startHarness(harness);
+
+		await harness.tools.get("bash").execute("call", {
+			command: "true",
+			description: "short-lived command",
+			reasoning: "verify reload cleanup",
+			"yield-time_ms": 250,
+		}, undefined, undefined, harness.ctx);
+		await shutdownHarness(harness);
+
+		expect(process.listenerCount("exit")).toBe(listenersBefore);
+	});
+
 	test("last-resort reaper SIGKILLs a trap-TERM orphan on hard exit", async () => {
 		// Regression: when pi exits without completing session_shutdown (crash or
 		// emergencyTerminalExit), a running job that ignores SIGTERM was

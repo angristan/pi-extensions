@@ -131,7 +131,7 @@ a duplicate transcript entry.
 - Pi's normal SIGINT, SIGTERM, and SIGHUP shutdown path remains in control and gives `session_shutdown` time to complete that escalation.
 - If a non-PTY shell wrapper exits while descendants remain in its process group, the terminal stays active until the group exits and session shutdown still terminates it.
 - PTY wrapper and child process groups are both terminated to prevent orphans.
-- A synchronous `process.on('exit')` reaper is retained only as a last resort for hard exits that bypass or interrupt graceful session cleanup. It does not install signal listeners or suppress default signal behavior.
+- A process-global synchronous `exit` reaper is shared across extension reloads and tracks callbacks only while child PIDs are live. It remains a last resort for hard exits and does not install signal listeners or suppress default signal behavior.
 - Yielded command lifecycle changes update the shared overlay and any open live viewer without emitting desktop notifications or mutating historical transcript rows.
 
 ## Dependencies

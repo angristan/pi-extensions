@@ -34,6 +34,7 @@ import {
 	type BackgroundTerminalService,
 } from "./service.js";
 import { isPtySupported, spawnTerminal } from "./terminal-process.js";
+import { registerProcessExitReaper } from "../../shared/process-exit-reaper.js";
 
 export { BoundedOutput, CursorOutput } from "./output.js";
 
@@ -85,7 +86,7 @@ function bashSessionEnvironment(ctx: any, getThinkingLevel: () => unknown): Node
 // behavior and could race Pi's shutdown handler, so this fallback intentionally
 // runs only from the synchronous process `exit` event.
 const liveJobPids = new Set<number>();
-let lastResortReaperArmed = false;
+let unregisterLastResortReaper: (() => void) | undefined;
 
 function reapLiveJobPidsSync(): void {
 	for (const pid of liveJobPids) {
@@ -99,24 +100,28 @@ function reapLiveJobPidsSync(): void {
 		}
 	}
 	liveJobPids.clear();
+	unregisterLastResortReaper?.();
+	unregisterLastResortReaper = undefined;
 }
 
 function armLastResortReaper(): void {
-	if (lastResortReaperArmed) return;
-	lastResortReaperArmed = true;
+	if (unregisterLastResortReaper) return;
 	// This hook must remain synchronous. SIGKILL cannot be handled, so cleanup
 	// after the parent itself receives SIGKILL is inherently impossible.
-	process.on("exit", reapLiveJobPidsSync);
+	unregisterLastResortReaper = registerProcessExitReaper(reapLiveJobPidsSync);
 }
 
 function trackJobPid(pid: number | undefined): void {
-	if (!Number.isInteger(pid) || pid <= 0) return;
+	if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return;
 	liveJobPids.add(pid);
 	armLastResortReaper();
 }
 
 function untrackJobPid(pid: number | undefined): void {
-	if (Number.isInteger(pid)) liveJobPids.delete(pid!);
+	if (typeof pid === "number" && Number.isInteger(pid)) liveJobPids.delete(pid);
+	if (liveJobPids.size > 0) return;
+	unregisterLastResortReaper?.();
+	unregisterLastResortReaper = undefined;
 }
 // Model-controllable output budget, mirroring codex's `max_output_tokens`.
 // Default 10000 tokens; pi doesn't tokenize, so we map tokens -> bytes at

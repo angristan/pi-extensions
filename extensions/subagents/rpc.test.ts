@@ -65,6 +65,31 @@ process.stdin.on("data", (chunk) => {
 	await client.stop();
 });
 
+test("does not retain a process exit listener after a child stops", async () => {
+	const listenersBefore = process.listenerCount("exit");
+	const directory = await mkdtemp(join(tmpdir(), "pi-subagent-rpc-reaper-"));
+	directories.push(directory);
+	const script = join(directory, "reaper-rpc.mjs");
+	await writeFile(script, `
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  const newline = buffer.indexOf("\\n");
+  if (newline < 0) return;
+  const message = JSON.parse(buffer.slice(0, newline));
+  process.stdout.write(JSON.stringify({ type: "response", id: message.id, command: message.type, success: true, data: { isStreaming: false } }) + "\\n");
+});
+setInterval(() => {}, 1000);
+`, "utf8");
+
+	const client = new RpcProcessClient({ command: process.execPath, args: [script], cwd: directory });
+	await client.start();
+	await client.stop();
+
+	expect(process.listenerCount("exit")).toBe(listenersBefore);
+});
+
 test("stops a live child when RPC startup is rejected", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "pi-subagent-rpc-startup-"));
 	directories.push(directory);

@@ -100,6 +100,7 @@ Each child runs as `pi --mode rpc` with its own session file.
 - Provider quota and rate-limit failures become `paused` and can be resumed.
 - Other terminal errors become `failed`.
 - `/reload`, quit, and session replacement checkpoint open children and stop their processes.
+- Hard-exit cleanup uses one process-global reaper across reloads and retains callbacks only while child PIDs are live.
 - Resuming the same parent session restores open children in a hibernated state.
 - `close` deletes the managed child session and prevents later restoration.
 - Child dialogs are cancelled because the RPC process has no direct interactive UI.
