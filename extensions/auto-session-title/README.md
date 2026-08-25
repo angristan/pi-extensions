@@ -49,8 +49,9 @@ ordered model list in `~/.pi/agent/auto-session-title.json`, or under
 }
 ```
 
-Models are tried in order. Missing models, unavailable authentication, request
-errors, and invalid title responses advance to the next model. Pi shows a small
+Models are tried in order through Pi's model registry, including custom providers
+and credential-resolved endpoints. Missing models, unavailable authentication,
+request errors, and invalid title responses advance to the next model. Pi shows a small
 warning when a fallback first becomes active, then suppresses repeated warnings
 while the same fallback route remains active. `/title-status` shows the selected
 model and latest fallback.

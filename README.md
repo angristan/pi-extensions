@@ -5,9 +5,9 @@ extensions: nicer tool-block rendering, context telemetry, goal/plan tracking,
 background jobs, image sidecars, working timers, and quality-of-life features for
 the terminal UI.
 
-These are generic extensions with no third-party npm dependencies. They ship
-together because a few share rendering helpers and runtime services, as shown
-below.
+These are generic extensions with one third-party runtime dependency, `marked`,
+used for Telegram message formatting. They ship together because a few share
+rendering helpers and runtime services, as shown below.
 
 ## Install
 
@@ -22,8 +22,8 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 ### Requirements
 
 - [pi](https://github.com/earendil-works/pi-coding-agent) installed
-- No npm dependencies — everything resolves against pi's bundled packages
-  (`typebox`, `@earendil-works/pi-tui`, `@earendil-works/pi-ai`)
+- Pi-provided packages resolve against Pi's bundled modules; `marked` is installed
+  with this package
 
 ## Extensions
 
@@ -131,8 +131,8 @@ MIT
 ## Dependencies
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent).
-- **Runtime npm packages:** None; extensions use Pi's bundled modules and Node/Bun APIs.
-- **Development npm packages:** Pi's extension APIs and `typebox`, pinned in `package.json` and `bun.lock` for reproducible tests.
+- **Runtime npm packages:** [`marked`](https://www.npmjs.com/package/marked) for Telegram formatting; Pi APIs resolve from Pi's bundled modules.
+- **Development npm packages:** Pi 0.84.3 extension APIs and TypeBox 1.3.7, pinned in `package.json` and `bun.lock` for reproducible tests and also declared as unbundled peers.
 - **System/services:** Only where noted in each extension README.
 
 An arrow means the extension on the left directly imports the extension on the

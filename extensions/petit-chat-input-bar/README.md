@@ -39,6 +39,9 @@ changes, …). It hides itself automatically when:
 - the terminal is narrower than 32 cols or shorter than 10 rows, or
 - the editor border can't be located (e.g. a full-screen overlay is open).
 
+Hidden sprites are removed from the renderer and recreated when the editor returns.
+This keeps regular/fullscreen TUI mode switching available.
+
 The feet row is composited on top of the editor's border line so the artwork
 stays intact while visually resting on it. The border's live ANSI color (which
 changes with thinking level / bash mode) is sampled and preserved through the

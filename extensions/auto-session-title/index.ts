@@ -1,4 +1,3 @@
-import { complete } from "@earendil-works/pi-ai/compat";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -42,7 +41,7 @@ export interface TitleModelConfig {
 	thinkingLevel: TitleThinkingLevel;
 }
 
-export type TitleModelFailureCode = "unavailable" | "authentication" | "request" | "invalid-response";
+export type TitleModelFailureCode = "unavailable" | "request" | "invalid-response";
 
 export interface TitleModelFailure {
 	config: TitleModelConfig;
@@ -242,16 +241,12 @@ export async function requestTitleWithFallback(
 					failures.push({ config, code: "unavailable", reason: "model unavailable" });
 					continue;
 				}
-				const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-				if (signal.aborted) return;
-				if (!auth.ok) {
-					failures.push({ config, code: "authentication", reason: `authentication unavailable: ${failureReason(auth.error)}` });
-					continue;
-				}
+				const completeRequest = dependencies.completeRequest
+					?? ((selectedModel: any, context: any, options: any) =>
+						ctx.modelRegistry.complete(selectedModel, context, options));
 				response = await requestCompletion(
-					dependencies.completeRequest ?? complete,
+					completeRequest,
 					model,
-					auth,
 					systemPrompt,
 					prompt,
 					sessionId,

@@ -3,7 +3,7 @@
 exports[`web search renderer collapsed results use shared engine attribution and semantic colors 1`] = `
 [
   "<green>•</> <bold>Searched</> <dim>“</dim><accent>Kimi pricing</accent><dim>”</dim>",
-  "  └ <green>6 results</><dim> · </dim><muted>2026-04-01 → 2026-04-30</muted><dim> · </dim><muted>via Mistral/Brave</muted><dim> · </dim><muted>1.2s</muted>",
+  "  └ <green>6 results</><dim> · </dim><muted>2026-04-01 → 2026-04-30</muted><dim> · </dim><muted>via Mistral/Brave</muted><dim> · </dim><muted>1s</muted>",
   "    <muted>1.</muted> <text>Result 1</text> <dim>·</dim> <muted>2026-04-21</muted>",
   "       <link:https://www.example1.com/article><mdLink>https://www.example1.com/article</mdLink></link>",
   "    <muted>2.</muted> <text>Result 2</text> <dim>·</dim> <muted>2026-04-21</muted>",
@@ -21,7 +21,7 @@ exports[`web search renderer collapsed results use shared engine attribution and
 exports[`web search renderer expanded mixed-engine results retain per-result attribution 1`] = `
 [
   "<green>•</> <bold>Searched</> <dim>“</dim><accent>mixed sources</accent><dim>”</dim>",
-  "  └ <green>2 results</><dim> · </dim><muted>via Mistral</muted><dim> · </dim><muted><1s</muted>",
+  "  └ <green>2 results</><dim> · </dim><muted>via Mistral</muted><dim> · </dim><muted>500ms</muted>",
   "    <muted>1.</muted> <text>Result 1</text>",
   "       <link:https://www.example1.com/article><mdLink>https://www.example1.com/article</mdLink></link>",
   "       <dim>via Brave<dim> · </dim>2026-04-21</dim>",
@@ -36,7 +36,7 @@ exports[`web search renderer expanded mixed-engine results retain per-result att
 exports[`web search renderer empty results remain distinct from failures 1`] = `
 [
   "<green>•</> <bold>Searched</> <dim>“</dim><accent>no matches</accent><dim>”</dim>",
-  "  └ <green>No results</><dim> · </dim><muted>via Mistral</muted><dim> · </dim><muted><1s</muted>",
+  "  └ <green>No results</><dim> · </dim><muted>via Mistral</muted><dim> · </dim><muted>250ms</muted>",
 ]
 `;
 
@@ -64,7 +64,7 @@ exports[`web search renderer bot challenges render as blocked rather than opened
 exports[`web search renderer expanded open content strips terminal controls 1`] = `
 [
   "<green>•</> <bold>Opened</> <link:https://example.com/docs><mdLink>https://example.com/docs</mdLink></link>",
-  "  └ <green>1 line · 32 B</> · <1s",
+  "  └ <green>1 line · 32 B</> · 250ms",
   "",
   "    <dim>Readable red content</dim>",
 ]

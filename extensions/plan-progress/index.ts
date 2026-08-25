@@ -294,12 +294,16 @@ function renderPlanBody(
 	return visibleBody.map((line) => truncateToWidth(line, width, ""));
 }
 
-export default function (pi: ExtensionAPI) {
+interface PlanProgressDependencies {
+	registerOverlayCard?: typeof registerOverlayCard;
+}
+
+export default function (pi: ExtensionAPI, dependencies: PlanProgressDependencies = {}) {
 	let state: PlanState = { items: [] };
 	let activeCtx: any;
 	let planOverlayActive = false;
 
-	const overlayCard = registerOverlayCard({
+	const overlayCard = (dependencies.registerOverlayCard ?? registerOverlayCard)({
 		id: "plan-progress",
 		order: 10,
 		width: OVERLAY_WIDTH,

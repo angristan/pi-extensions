@@ -80,6 +80,16 @@ interface ToolRenderResultOptions {
 	isPartial: boolean;
 }
 
+interface WebSearchDependencies {
+	keyHint?: typeof keyHint;
+	hyperlink?: typeof hyperlink;
+}
+
+interface WebRenderDependencies {
+	keyHint: typeof keyHint;
+	hyperlink: typeof hyperlink;
+}
+
 // Tree prefixes matching better-native-pi's transcript hierarchy exactly.
 const LEAD = "";
 const BRANCH = `${LEAD}  └ `;
@@ -298,6 +308,7 @@ function renderSearchResult(
 	{ expanded, isPartial }: ToolRenderResultOptions,
 	theme: Theme,
 	context: ToolRenderContext,
+	dependencies: WebRenderDependencies,
 ) {
 	// The result slot stays empty while streaming so the running call slot
 	// owns the row; it replaces it once settled to avoid duplicating the verb.
@@ -330,7 +341,7 @@ function renderSearchResult(
 			const url = resultUrl(item);
 			const label = sourceUrl(item);
 			const title = sanitizeSearchText(item.title ?? resultWebsite(item) ?? "Untitled result", 600);
-			const renderedUrl = url ? hyperlink(theme.fg("mdLink", label), url) : theme.fg("text", label);
+			const renderedUrl = url ? dependencies.hyperlink(theme.fg("mdLink", label), url) : theme.fg("text", label);
 			const website = resultWebsite(item);
 			const titleIsUrl = url ? urlsMatchForDisplay(title, url) : false;
 			const renderedTitle = titleIsUrl ? renderedUrl : renderResultTitle(title, website, theme);
@@ -363,17 +374,17 @@ function renderSearchResult(
 		const shown = shownResults.length;
 		const remaining = Math.max(0, details.resultCount - shown);
 		if (remaining > 0) {
-			lines.push(`${INDENT}${theme.fg("muted", `… ${remaining} more · ${keyHint("app.tools.expand", "to expand")}`)}`);
+			lines.push(`${INDENT}${theme.fg("muted", `… ${remaining} more · ${dependencies.keyHint("app.tools.expand", "to expand")}`)}`);
 		}
 		return lines;
 	});
 	return component;
 }
 
-function renderOpenTarget(value: string, theme: Theme): string {
+function renderOpenTarget(value: string, theme: Theme, dependencies: WebRenderDependencies): string {
 	const safe = truncateToWidth(sanitizeSearchText(value, 2_048), 110, "…");
 	const url = normalizeHttpUrl(value);
-	return url ? hyperlink(theme.fg("mdLink", safe), url) : theme.fg("toolOutput", safe);
+	return url ? dependencies.hyperlink(theme.fg("mdLink", safe), url) : theme.fg("toolOutput", safe);
 }
 
 function renderOpenCall(args: OpenUrlArgs, _theme: Theme, context: ToolRenderContext) {
@@ -390,6 +401,7 @@ function renderOpenResult(
 	{ expanded, isPartial }: ToolRenderResultOptions,
 	theme: Theme,
 	context: ToolRenderContext,
+	dependencies: WebRenderDependencies,
 ) {
 	if (isPartial) return new Container();
 	const component = reuseOrCreate(context);
@@ -406,7 +418,7 @@ function renderOpenResult(
 		const blocked = failure?.kind === "blocked";
 		const reason = failure?.message ?? storedText;
 		component.update((width) => [
-			headlineRow(false, true, blocked ? "Open blocked" : "Open failed", target ? renderOpenTarget(target, theme) : ""),
+			headlineRow(false, true, blocked ? "Open blocked" : "Open failed", target ? renderOpenTarget(target, theme, dependencies) : ""),
 			...errorRows(reason, "Unknown open error", width, theme),
 		]);
 		return component;
@@ -414,7 +426,7 @@ function renderOpenResult(
 
 	component.update(() => {
 		const lines = [
-			headlineRow(false, false, "Opened", target ? renderOpenTarget(target, theme) : ""),
+			headlineRow(false, false, "Opened", target ? renderOpenTarget(target, theme, dependencies) : ""),
 			`${BRANCH}${openSummary(details)}`,
 		];
 		if (expanded && details?.content) {
@@ -428,7 +440,11 @@ function renderOpenResult(
 	return component;
 }
 
-export default function webSearchExtension(pi: ExtensionAPI) {
+export default function webSearchExtension(pi: ExtensionAPI, overrides: WebSearchDependencies = {}) {
+	const dependencies: WebRenderDependencies = {
+		keyHint: overrides.keyHint ?? keyHint,
+		hyperlink: overrides.hyperlink ?? hyperlink,
+	};
 	pi.registerTool({
 		name: "web_search",
 		label: "Web Search",
@@ -445,7 +461,7 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 			return createSearchToolResult(await searchWeb(params, { signal }));
 		},
 		renderCall: (args: WebSearchArgs, theme: Theme, context: ToolRenderContext) => renderSearchCall(args, theme, context),
-		renderResult: renderSearchResult,
+		renderResult: (result, options, theme, context) => renderSearchResult(result, options, theme, context, dependencies),
 	});
 
 	pi.registerTool({
@@ -468,7 +484,7 @@ export default function webSearchExtension(pi: ExtensionAPI) {
 			};
 		},
 		renderCall: renderOpenCall,
-		renderResult: renderOpenResult,
+		renderResult: (result, options, theme, context) => renderOpenResult(result, options, theme, context, dependencies),
 	});
 
 	pi.registerCommand("web-status", {

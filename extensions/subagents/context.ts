@@ -3,7 +3,6 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { complete } from "@earendil-works/pi-ai/compat";
 import {
 	CURRENT_SESSION_VERSION,
 	SessionManager,
@@ -73,11 +72,9 @@ export function parentContextMessages(ctx: any): any[] {
 export async function compactContext(ctx: any, messages: any[], signal?: AbortSignal): Promise<string> {
 	if (messages.length === 0) return "";
 	if (!ctx.model) throw new Error("Cannot compact subagent context without an active model");
-	if (!ctx.modelRegistry) throw new Error("Cannot compact subagent context without a model registry");
-	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
-	if (!auth.ok) throw new Error(`Subagent context compaction authentication failed: ${auth.error}`);
+	if (!ctx.modelRegistry?.complete) throw new Error("Cannot compact subagent context without a model registry");
 	const conversation = serializeConversation(convertToLlm(messages));
-	const response = await complete(ctx.model, {
+	const response = await ctx.modelRegistry.complete(ctx.model, {
 		messages: [{
 			role: "user",
 			content: [{
@@ -87,9 +84,6 @@ export async function compactContext(ctx: any, messages: any[], signal?: AbortSi
 			timestamp: Date.now(),
 		}],
 	}, {
-		apiKey: auth.apiKey,
-		headers: auth.headers,
-		env: auth.env,
 		maxTokens: COMPACTED_CONTEXT_MAX_TOKENS,
 		signal,
 	});

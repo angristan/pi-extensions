@@ -18,7 +18,6 @@ function responseText(response: any): string {
 export async function requestTitleCompletion(
 	completeRequest: CompleteRequest,
 	model: any,
-	auth: any,
 	systemPrompt: string,
 	prompt: string,
 	sessionId: string,
@@ -38,9 +37,6 @@ export async function requestTitleCompletion(
 			}],
 		},
 		{
-			apiKey: auth.apiKey,
-			headers: auth.headers,
-			env: auth.env,
 			maxTokens: 384,
 			reasoning,
 			sessionId: `${sessionId}:title`,

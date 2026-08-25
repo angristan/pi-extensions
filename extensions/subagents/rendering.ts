@@ -1,5 +1,5 @@
 import { getMarkdownTheme, SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type MarkdownTheme } from "@earendil-works/pi-tui";
+import { Box, Container, Markdown, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type MarkdownTheme } from "@earendil-works/pi-tui";
 import { fitToolLine, formatElapsed, normalizeToolReasoning } from "../better-native-pi/core.js";
 import { BOLD, GREEN, MAGENTA, RED, RESET } from "../better-native-pi/render.js";
 import type { TranscriptEntry } from "../transcript/pager.js";
@@ -607,18 +607,28 @@ class MailboxBatchComponent implements Component {
 	invalidate(): void { this.component.invalidate(); }
 }
 
+function withOutputPadding(component: Component, outputPad: number | undefined): Component {
+	if (!outputPad) return component;
+	const box = new Box(outputPad, 0);
+	box.addChild(component);
+	return box;
+}
+
 export function registerSubagentRenderers(pi: ExtensionAPI): void {
 	pi.registerMessageRenderer(COMPLETION_MESSAGE_TYPE, (message: any, options: any, theme: any) => {
 		const data = message.details as AgentSnapshot | undefined;
-		return data ? new CompletionComponent(data, Boolean(options.expanded), theme) : new Text(String(message.content ?? ""), 0, 0);
+		const component = data ? new CompletionComponent(data, Boolean(options.expanded), theme) : new Text(String(message.content ?? ""), 0, 0);
+		return withOutputPadding(component, options.outputPad);
 	});
-	pi.registerMessageRenderer(MAILBOX_MESSAGE_TYPE, (message: any, _options: any, theme: any) => {
+	pi.registerMessageRenderer(MAILBOX_MESSAGE_TYPE, (message: any, options: any, theme: any) => {
 		const data = message.details as AgentMailboxEvent | undefined;
-		return data ? new MailboxMessageComponent(data, theme) : new Text(String(message.content ?? ""), 0, 0);
+		const component = data ? new MailboxMessageComponent(data, theme) : new Text(String(message.content ?? ""), 0, 0);
+		return withOutputPadding(component, options.outputPad);
 	});
 	pi.registerMessageRenderer(MAILBOX_BATCH_TYPE, (message: any, options: any, theme: any) => {
 		const data = message.details as ToolDetails | undefined;
-		return data ? new MailboxBatchComponent(data, Boolean(options.expanded), theme) : new Text(String(message.content ?? ""), 0, 0);
+		const component = data ? new MailboxBatchComponent(data, Boolean(options.expanded), theme) : new Text(String(message.content ?? ""), 0, 0);
+		return withOutputPadding(component, options.outputPad);
 	});
 	pi.registerEntryRenderer(MAILBOX_HISTORY_ENTRY_TYPE, (entry: any, options: any, theme: any) => {
 		const data = entry.data?.details as ToolDetails | undefined;

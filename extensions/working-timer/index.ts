@@ -194,6 +194,7 @@ export default function workingTimer(pi: ExtensionAPI, deps: RuntimeDependencies
 	});
 	pi.on("session_before_compact", (_event, ctx) => setPhase("compacting", ctx));
 	pi.on("session_compact", (event, ctx) => setPhase(event.willRetry ? "retrying" : "thinking", ctx));
+	pi.on("session_compact_failed", (event, ctx) => setPhase(event.willRetry ? "retrying" : "thinking", ctx));
 
 	pi.on("agent_settled", (_event, ctx) => stop(ctx));
 	pi.on("session_shutdown", (_event, ctx) => {

@@ -1,10 +1,5 @@
-import { expect, mock, test } from "bun:test";
-
-mock.module("../overlay-stack/index.js", () => ({
-	registerOverlayCard: () => ({ invalidate() {}, unregister() {} }),
-}));
-
-const { default: planProgress } = await import("./index");
+import { expect, test } from "bun:test";
+import planProgress from "./index";
 
 const theme = {
 	bold: (text: string) => text,
@@ -25,7 +20,9 @@ function createHarness(branch: any[] = []) {
 		on(event: string, handler: any) { (handlers[event] ??= []).push(handler); },
 		registerCommand(name: string, command: any) { commands[name] = command; },
 		registerTool(tool: any) { tools.push(tool); },
-	} as any);
+	} as any, {
+		registerOverlayCard: () => ({ invalidate() {}, unregister() {} }),
+	});
 	const ctx = {
 		sessionManager: {
 			getBranch: () => branch,

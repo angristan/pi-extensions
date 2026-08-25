@@ -389,10 +389,13 @@ describe("terminal tools", () => {
 		expect(bash.parameters.properties["yield-time_ms"]).toMatchObject({ minimum: 250, maximum: 30_000 });
 		expect(bash.description).toContain("long-running commands yield a managed terminal ID");
 		expect(bash.description).toContain("prompts and REPLs");
-		expect(bash.promptGuidelines).toEqual([
-			"Inspect PI_* environment variables for current model and session details.",
+		expect(bash.promptGuidelines).toHaveLength(2);
+		expect(bash.promptGuidelines.some((guideline: string) =>
+			guideline.includes("inspect PI_* environment variables for current model and session details"),
+		)).toBe(true);
+		expect(bash.promptGuidelines).toContain(
 			"Run long-lived commands in the foreground and let bash yield a managed terminal ID; do not use shell self-backgrounding such as &, nohup, disown, or setsid.",
-		]);
+		);
 		for (const name of ["job_output", "terminal_write"]) {
 			const tool = harness.tools.get(name);
 			expect(Object.keys(tool.parameters.properties)[0]).toBe("reasoning");

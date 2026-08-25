@@ -1,84 +1,12 @@
-import { describe, expect, mock, test } from "bun:test";
-import * as codingAgent from "@earendil-works/pi-coding-agent";
+import { describe, expect, test } from "bun:test";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSearchToolResult, type RagResult } from "./client";
+import webSearchExtension from "./index";
 
-class Container {
-	render(): string[] {
-		return [];
-	}
-}
-
-mock.module("@earendil-works/pi-coding-agent", () => ({
-	...codingAgent,
-	keyHint: (_binding: string, description: string) => `Ctrl+O ${description}`,
-}));
-
-mock.module("typebox", () => ({
-	Type: {
-		Array: (items: unknown, options: Record<string, unknown>) => ({ ...options, items }),
-		Integer: (options: unknown) => options,
-		Object: (shape: unknown) => shape,
-		Optional: (value: unknown) => value,
-		String: (options: unknown) => options,
-		Unsafe: (schema: unknown) => schema,
-	},
-}));
-const testVisibleWidth = (text: string) => text
-	.replace(/\x1b\[[0-9;]*m/g, "")
-	.replace(/<[^>]+>/g, "")
-	.length;
-
-mock.module("@earendil-works/pi-tui", () => ({
-	Container,
-	hyperlink: (text: string, url: string) => `<link:${url}>${text}</link>`,
-	truncateToWidth: (text: string, width: number, suffix = "…") => testVisibleWidth(text) <= width ? text : `${text.slice(0, Math.max(0, width - suffix.length))}${suffix}`,
-	visibleWidth: testVisibleWidth,
-	wrapTextWithAnsi: (text: string, width: number) => {
-		if (testVisibleWidth(text) <= width) return [text];
-		const match = /^(<error>)(.*)(<\/error>)$/.exec(text);
-		const style = (value: string) => match ? `${match[1]}${value}${match[3]}` : value;
-		let remaining = match?.[2] ?? text;
-		const lines: string[] = [];
-		while (remaining.length > width) {
-			const space = remaining.lastIndexOf(" ", width);
-			const split = space > 0 ? space : width;
-			lines.push(style(remaining.slice(0, split)));
-			remaining = remaining.slice(split).trimStart();
-		}
-		lines.push(style(remaining));
-		return lines;
-	},
-}));
-function mockGrepSummary(result: any) {
-	const text = result?.content?.find((part: any) => part?.type === "text")?.text ?? "";
-	if (/^No matches found/.test(text.trim())) return { matches: 0, files: 0, lowerBound: false };
-	const entries = text.split("\n").map((line: string) => line.match(/^(.+):\d+:/)).filter(Boolean) as RegExpMatchArray[];
-	const limit = Number.isInteger(result?.details?.matchLimitReached) ? result.details.matchLimitReached : undefined;
-	const matches = Math.max(entries.length, limit ?? 0);
-	return matches > 0 ? { matches, files: new Set(entries.map((match) => match[1])).size, lowerBound: Boolean(limit) } : undefined;
-}
-mock.module("../better-native-pi/core.js", () => ({
-	fitToolLine: (line: string) => line,
-	formatElapsed: (elapsedMs: number) => elapsedMs < 1_000 ? "<1s" : `${Math.round(elapsedMs / 100) / 10}s`,
-	formatPlainGrepMatchSummary: (summary: any) => `${summary.matches}${summary.lowerBound ? "+" : ""} matches${summary.files !== undefined ? ` in ${summary.files} files` : ""}`,
-	grepMatchSummaryFromResult: mockGrepSummary,
-}));
-mock.module("../better-native-pi/render.js", () => ({
-	BOLD: "<bold>",
-	CYAN: "<cyan>",
-	DIM: "<dim>",
-	GREEN: "<green>",
-	MAGENTA: "<magenta>",
-	RED: "<red>",
-	RESET: "</>",
-	nonEmptyLineCount: (text: string) => text.trim().split("\n").filter(Boolean).length,
-	shortPath: (path: string) => path,
-}));
-
-const { default: webSearchExtension } = await import("./index");
+initTheme("dark", false);
 
 const tools: any[] = [];
 const commands: any[] = [];
@@ -94,7 +22,10 @@ webSearchExtension({
 		return [];
 	},
 	setActiveTools() {},
-} as any);
+} as any, {
+	keyHint: (_binding: any, description: string) => `Ctrl+O ${description}`,
+	hyperlink: (text: string, url: string) => `<link:${url}>${text}</link>`,
+});
 
 const webSearch = tools.find((tool) => tool.name === "web_search");
 const openUrl = tools.find((tool) => tool.name === "open_url");
@@ -118,6 +49,15 @@ function result(index: number, source = "brave"): RagResult {
 	};
 }
 
+function normalizeRendererControls(line: string): string {
+	return line
+		.replaceAll("\x1b[32m", "<green>")
+		.replaceAll("\x1b[35m", "<magenta>")
+		.replaceAll("\x1b[31m", "<red>")
+		.replaceAll("\x1b[1m", "<bold>")
+		.replaceAll("\x1b[0m", "</>");
+}
+
 function render(tool: any, toolResult: unknown, args: Record<string, unknown>, options: { expanded?: boolean; isError?: boolean; width?: number } = {}): string[] {
 	const component = tool.renderResult(
 		toolResult,
@@ -125,7 +65,7 @@ function render(tool: any, toolResult: unknown, args: Record<string, unknown>, o
 		theme,
 		{ args, isError: options.isError ?? false },
 	);
-	return component.render(options.width ?? 1_000);
+	return component.render(options.width ?? 1_000).map(normalizeRendererControls);
 }
 
 describe("web tool prompt guidance", () => {
@@ -145,8 +85,8 @@ describe("web tool prompt guidance", () => {
 		expect(text).toContain("cite URLs");
 		expect(text).not.toContain("ax or open_url");
 		expect(text).not.toContain("provider unset");
-		expect(openUrl.parameters.url.description).not.toContain("returned by web_search");
-		expect(Object.keys(webSearch.parameters)).toEqual([
+		expect(openUrl.parameters.properties.url.description).not.toContain("returned by web_search");
+		expect(Object.keys(webSearch.parameters.properties)).toEqual([
 			"query",
 			"startDate",
 			"endDate",
@@ -157,11 +97,11 @@ describe("web tool prompt guidance", () => {
 			"limit",
 			"provider",
 		]);
-		expect(webSearch.parameters.category.enum).toContain("news");
-		expect(webSearch.parameters.category.enum).not.toContain("github");
-		expect(webSearch.parameters.maxAgeHours.minimum).toBe(-1);
+		expect(webSearch.parameters.properties.category.enum).toContain("news");
+		expect(webSearch.parameters.properties.category.enum).not.toContain("github");
+		expect(webSearch.parameters.properties.maxAgeHours.minimum).toBe(-1);
 		for (const tool of [webSearch, openUrl]) {
-			expect(tool.parameters.provider.description).toContain("Leave unset unless a provider-specific retry is needed");
+			expect(tool.parameters.properties.provider.description).toContain("Leave unset unless a provider-specific retry is needed");
 		}
 	});
 });

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initTheme, SessionManager } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { createContextFork, forkableMessages, type CompactContext, type ContextMode } from "./context";
+import { compactContext, createContextFork, forkableMessages, type CompactContext, type ContextMode } from "./context";
 import registerSubagents, { boundedText } from "./index";
 import { isProviderLimitError } from "./lifecycle";
 import { RpcProcessClient, type AgentClient, type AgentClientFactory, type AgentClientOptions, type RpcAgentEvent } from "./rpc";
@@ -242,6 +242,26 @@ function rendered(component: any, width = 100): string[] {
 }
 
 describe("subagents", () => {
+	test("compacts inherited context through Pi's model registry", async () => {
+		const model = { provider: "test-provider", id: "test-model" };
+		const calls: any[][] = [];
+		const summary = await compactContext({
+			model,
+			modelRegistry: {
+				complete: async (...args: any[]) => {
+					calls.push(args);
+					return { content: [{ type: "text", text: "Compact delegated context" }] };
+				},
+		},
+		}, [{ role: "user", content: "Inspect the repository", timestamp: 1 }]);
+
+		expect(summary).toBe("Compact delegated context");
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.[0]).toBe(model);
+		expect(calls[0]?.[2]).toMatchObject({ maxTokens: 8_192 });
+		expect(calls[0]?.[2]).not.toHaveProperty("apiKey");
+	});
+
 	test("exposes one generic lifecycle tool without role presets", () => {
 		const harness = createHarness();
 		expect(harness.tool).toBeDefined();
@@ -638,6 +658,17 @@ describe("subagents", () => {
 		expect(expanded.join("\n")).toContain("review line 1");
 		expect(expanded.join("\n")).toContain("review line 8");
 		expect(expanded.join("\n")).not.toContain("Ctrl+O for full output");
+	});
+
+	test("message renderers honor Pi's configured output padding", () => {
+		const harness = createHarness();
+		const renderer = harness.messageRenderers.get("subagent-result")!;
+		const lines = renderer(
+			{ content: "Fallback completion" },
+			{ expanded: false, outputPad: 2 },
+			renderTheme,
+		).render(80);
+		expect(lines[0]).toStartWith("  ");
 	});
 
 	test("renders automatic completion as the same expandable tool block", async () => {

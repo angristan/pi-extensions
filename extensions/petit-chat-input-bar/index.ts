@@ -24,19 +24,25 @@ import {
 } from "./frames";
 
 const HOST_WIDGET_KEY = "petit-chat-overlay-host";
-const GEOMETRY_HOOK_KEY = Symbol.for("pi.petit-chat.current-frame-geometry");
+const GEOMETRY_HOOK_KEY = Symbol.for("pi.petit-chat.current-frame-geometry.v2");
 
 type GeometryListener = (lines: string[], termWidth: number, termHeight: number) => void;
 type CompositeOverlays = (lines: string[], termWidth: number, termHeight: number) => string[];
+type RenderFrame = (width: number) => string[];
+type GeometryHookMethod = "render" | "compositeOverlays";
 
 interface GeometryHookState {
-	original: CompositeOverlays;
-	wrapper: CompositeOverlays;
+	method: GeometryHookMethod;
+	original: CompositeOverlays | RenderFrame;
+	wrapper: CompositeOverlays | RenderFrame;
 	listeners: Set<GeometryListener>;
 	canRestore: boolean;
 }
 
 interface TuiRuntime {
+	mode?: "regular" | "fullscreen";
+	terminal?: { rows: number };
+	render?: RenderFrame;
 	compositeOverlays?: CompositeOverlays;
 	[key: symbol]: unknown;
 }
@@ -164,9 +170,15 @@ class PetitChatOverlay implements Component {
 }
 
 class PetitChatOverlayHost implements Component {
-	private readonly overlay: PetitChatOverlay;
-	private readonly handle: OverlayHandle;
-	private readonly uninstallGeometryHook: () => void;
+	private current?: {
+		overlay: PetitChatOverlay;
+		handle: OverlayHandle;
+	};
+	private readonly geometryListener: GeometryListener = (lines, width, height) => {
+		this.syncPosition(lines, width, height);
+	};
+	private geometryHookState?: GeometryHookState;
+	private uninstallGeometryHook?: () => void;
 	private readonly options: OverlayOptions = {
 		nonCapturing: true,
 		anchor: "bottom-right",
@@ -175,48 +187,93 @@ class PetitChatOverlayHost implements Component {
 		// Keep a small horizontal inset, but no bottom margin: Pi applies margins
 		// as hard clamps even when an explicit editor-relative row is provided.
 		margin: { right: 2 },
-		visible: (termWidth, termHeight) =>
-			this.geometrySupported && termWidth >= 32 && termHeight >= 10,
+		visible: (termWidth, termHeight) => termWidth >= 32 && termHeight >= 10,
 	};
 	private disposed = false;
-	private geometrySupported = false;
-	private overlayHidden = true;
+	private mode: AnimationMode;
+	private working: boolean;
+	private borderPrefix?: string;
 
 	constructor(
 		private readonly tui: TUI,
-		theme: Theme,
+		private readonly theme: Theme,
 		mode: AnimationMode,
 		working: boolean,
 	) {
-		this.overlay = new PetitChatOverlay(tui, theme, mode, working);
-		const uninstallGeometryHook = installGeometryHook(tui, (lines, width, height) => {
-			this.syncPosition(lines, width, height);
-		});
-		this.geometrySupported = uninstallGeometryHook !== undefined;
-		this.uninstallGeometryHook = uninstallGeometryHook ?? (() => {});
-		this.handle = tui.showOverlay(this.overlay, this.options);
-		this.handle.setHidden(true);
+		this.mode = mode;
+		this.working = working;
+		this.ensureGeometryHook();
 	}
 
 	render(): string[] {
-		// The host only owns the overlay lifecycle and consumes no layout rows.
+		// Pi 0.84 can replace the concrete renderer behind this stable TUI
+		// reference. Reinstall the guarded private hook on the active renderer.
+		// In regular mode this host is already inside the first unwrapped frame,
+		// so request one follow-up render for the new hook to observe it.
+		if (this.ensureGeometryHook()) this.tui.requestRender();
 		return [];
 	}
 
 	invalidate(): void {
-		this.overlay.invalidate();
+		this.current?.overlay.invalidate();
 	}
 
 	setBehavior(mode: AnimationMode, working: boolean): void {
-		this.overlay.setBehavior(mode, working);
+		this.mode = mode;
+		this.working = working;
+		this.current?.overlay.setBehavior(mode, working);
 	}
 
 	dispose(): void {
 		if (this.disposed) return;
 		this.disposed = true;
-		this.overlay.dispose();
-		this.handle.hide();
-		this.uninstallGeometryHook();
+		this.removeOverlay();
+		this.uninstallGeometryHook?.();
+		this.uninstallGeometryHook = undefined;
+		this.geometryHookState = undefined;
+	}
+
+	private ensureGeometryHook(): boolean {
+		if (this.disposed) return false;
+		const runtime = this.tui as unknown as TuiRuntime;
+		const state = runtime[GEOMETRY_HOOK_KEY] as GeometryHookState | undefined;
+		if (state?.listeners.has(this.geometryListener)) return false;
+
+		const uninstall = installGeometryHook(this.tui, this.geometryListener);
+		const installedState = runtime[GEOMETRY_HOOK_KEY] as GeometryHookState | undefined;
+		if (!uninstall || !installedState) {
+			this.uninstallGeometryHook?.();
+			this.uninstallGeometryHook = undefined;
+			this.geometryHookState = undefined;
+			return false;
+		}
+
+		// A mode switch replaces the concrete renderer behind the proxy. Detach
+		// from the discarded renderer before retaining the new registration.
+		if (this.geometryHookState !== installedState) this.uninstallGeometryHook?.();
+		this.geometryHookState = installedState;
+		this.uninstallGeometryHook = uninstall;
+		return true;
+	}
+
+	private ensureOverlay(): void {
+		if (this.current || this.disposed) return;
+
+		// hide() permanently removes an overlay. Recreate both the component and
+		// handle so no disposed overlay object crosses a hidden or mode boundary.
+		const overlay = new PetitChatOverlay(this.tui, this.theme, this.mode, this.working);
+		if (this.borderPrefix !== undefined) overlay.setBorderPrefix(this.borderPrefix);
+		const handle = this.tui.showOverlay(overlay, this.options);
+		this.current = { overlay, handle };
+	}
+
+	private removeOverlay(): void {
+		const current = this.current;
+		if (!current) return;
+		this.current = undefined;
+		current.overlay.setVisible(false);
+		current.overlay.dispose();
+		current.handle.hide();
 	}
 
 	private syncPosition(lines: string[], termWidth: number, termHeight: number): void {
@@ -224,7 +281,7 @@ class PetitChatOverlayHost implements Component {
 		// This means editor height changes—including multiline input—are reflected
 		// immediately, without a corrective render or one-frame jump.
 		if (termWidth < 32 || termHeight < 10) {
-			this.setOverlayHidden(true);
+			this.removeOverlay();
 			return;
 		}
 
@@ -253,59 +310,63 @@ class PetitChatOverlayHost implements Component {
 			}
 		}
 		if (editorTopLogicalRow === undefined) {
-			this.setOverlayHidden(true);
+			this.removeOverlay();
 			return;
 		}
 
-		this.setOverlayHidden(false);
+		this.ensureOverlay();
 		const editorTopRow = editorTopLogicalRow - viewportStart;
 		// Sample two cells from the current border itself. This preserves Pi's
 		// live ANSI color when the thinking level changes the editor border.
-		this.overlay.setBorderPrefix(sliceByColumn(lines[editorTopLogicalRow]!, 0, 2, true));
+		this.borderPrefix = sliceByColumn(lines[editorTopLogicalRow]!, 0, 2, true);
 		// Share the final cat row with the editor's horizontal border. The
 		// artwork stays intact while its feet visually sit on the line.
 		this.options.row = Math.max(0, editorTopRow - CHAT_HEIGHT + 1);
-	}
-
-	private setOverlayHidden(hidden: boolean): void {
-		if (this.overlayHidden === hidden) return;
-		this.overlayHidden = hidden;
-		this.overlay.setVisible(!hidden);
-		this.handle.setHidden(hidden);
+		this.current?.overlay.setBorderPrefix(this.borderPrefix);
+		this.current?.overlay.setVisible(true);
 	}
 }
 
 function installGeometryHook(tui: TUI, listener: GeometryListener): (() => void) | undefined {
 	const runtime = tui as unknown as TuiRuntime;
 	let state = runtime[GEOMETRY_HOOK_KEY] as GeometryHookState | undefined;
-	const resolved = state ? undefined : resolveCompositeOverlays(runtime);
+	const method: GeometryHookMethod = runtime.mode === "regular" ? "render" : "compositeOverlays";
+	const resolved = state ? undefined : resolveForwardedMethod(runtime, method);
 
-	// `compositeOverlays` is a private Pi API. Fail closed if a future Pi
-	// version removes it or changes it to a non-callable value.
+	// These renderer methods are private integration points. Fail closed if a
+	// future Pi version removes one or changes it to a non-callable value.
 	if (!state && !resolved) return undefined;
 
-	// Reuse one shared dispatcher. If another extension wraps the compositor
-	// after this one, our wrapper remains in that call chain and can be reused
-	// across reloads without adding another dormant layer.
+	// Regular mode skips compositeOverlays when no entries exist, so observe its
+	// base render instead. Fullscreen always calls the compositor. Both hooks run
+	// before overlay composition and can add/remove the entry for the same frame.
 	if (!state) {
 		const { original, canRestore } = resolved!;
 		const listeners = new Set<GeometryListener>();
-		const wrapper: CompositeOverlays = (lines, termWidth, termHeight) => {
+		const notify = (lines: string[], termWidth: number, termHeight: number) => {
 			for (const current of [...listeners]) {
 				try {
 					current(lines, termWidth, termHeight);
 				} catch {
-					// This code runs inside Pi's render loop, outside the normal
-					// extension error boundary. Disable a failing listener so the
-					// original compositor always remains usable.
+					// This runs inside Pi's render loop, outside the normal extension
+					// error boundary. Disable a failing listener to protect rendering.
 					listeners.delete(current);
 				}
 			}
-			return original.call(runtime, lines, termWidth, termHeight);
 		};
-		state = { original, wrapper, listeners, canRestore };
+		const wrapper: CompositeOverlays | RenderFrame = method === "render"
+			? ((width: number) => {
+				const lines = (original as RenderFrame).call(runtime, width);
+				notify(lines, width, runtime.terminal?.rows ?? 0);
+				return lines;
+			})
+			: ((lines: string[], termWidth: number, termHeight: number) => {
+				notify(lines, termWidth, termHeight);
+				return (original as CompositeOverlays).call(runtime, lines, termWidth, termHeight);
+			});
+		state = { method, original, wrapper, listeners, canRestore };
 		runtime[GEOMETRY_HOOK_KEY] = state;
-		runtime.compositeOverlays = wrapper;
+		runtime[method] = wrapper as RenderFrame & CompositeOverlays;
 	}
 
 	state.listeners.add(listener);
@@ -317,32 +378,36 @@ function installGeometryHook(tui: TUI, listener: GeometryListener): (() => void)
 		// read returns a new function, so wrapper identity cannot be checked.
 		// Keep the empty shared dispatcher installed for safe reuse on reload.
 		if (!installedState.canRestore) return;
-		if (runtime.compositeOverlays !== installedState.wrapper) return;
+		if (runtime[installedState.method] !== installedState.wrapper) return;
 
-		runtime.compositeOverlays = installedState.original;
+		runtime[installedState.method] = installedState.original as RenderFrame & CompositeOverlays;
 		if (runtime[GEOMETRY_HOOK_KEY] === installedState) {
 			delete runtime[GEOMETRY_HOOK_KEY];
 		}
 	};
 }
 
-function resolveCompositeOverlays(
+function resolveForwardedMethod(
 	runtime: TuiRuntime,
-): { original: CompositeOverlays; canRestore: boolean } | undefined {
-	const current = runtime.compositeOverlays;
+	method: GeometryHookMethod,
+): { original: CompositeOverlays | RenderFrame; canRestore: boolean } | undefined {
+	const current = runtime[method];
 	if (typeof current !== "function") return undefined;
 
 	// Normal TUI objects return a stable method and can be restored by identity.
-	if (runtime.compositeOverlays === current) return { original: current, canRestore: true };
+	if (runtime[method] === current) return { original: current, canRestore: true };
 
 	// Pi's stable TUI reference returns a fresh forwarding closure on every get.
 	// Capturing it would recurse after the wrapper becomes the current method.
 	// Resolve the concrete class method through the Proxy's forwarded prototype.
 	let prototype = Object.getPrototypeOf(runtime);
 	while (prototype) {
-		const descriptor = Object.getOwnPropertyDescriptor(prototype, "compositeOverlays");
+		const descriptor = Object.getOwnPropertyDescriptor(prototype, method);
 		if (typeof descriptor?.value === "function") {
-			return { original: descriptor.value as CompositeOverlays, canRestore: false };
+			return {
+				original: descriptor.value as CompositeOverlays | RenderFrame,
+				canRestore: false,
+			};
 		}
 		prototype = Object.getPrototypeOf(prototype);
 	}

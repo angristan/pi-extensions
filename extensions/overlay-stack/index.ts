@@ -192,58 +192,90 @@ class OverlayStackComponent implements Component {
 }
 
 class OverlayStackHost implements Component {
-	private readonly stack: OverlayStackComponent;
-	private readonly options: OverlayOptions;
-	private readonly handle: OverlayHandle;
+	private current?: {
+		stack: OverlayStackComponent;
+		handle: OverlayHandle;
+	};
 	private readonly stopRegistrySubscription: () => void;
 	private disposed = false;
+	private hidden = false;
 
 	constructor(
 		private readonly tui: TUI,
-		theme: Theme,
+		private readonly theme: Theme,
 		private readonly onDispose: () => void,
 	) {
-		this.stack = new OverlayStackComponent(theme);
-		this.options = {
-			nonCapturing: true,
-			anchor: "top-right",
-			width: 1,
-			maxHeight: "80%",
-			margin: { top: 1, right: 2 },
-			visible: (terminalWidth, terminalHeight) => {
-				this.stack.setViewport(terminalWidth, terminalHeight);
-				this.options.width = this.stack.preferredWidth();
-				return this.stack.canRender();
-			},
-		};
-		this.handle = tui.showOverlay(this.stack, this.options);
 		this.stopRegistrySubscription = subscribeToRegistry(() => this.refresh());
+		this.reconcileOverlay();
 	}
 
 	refresh() {
-		this.stack.invalidate();
+		this.current?.stack.invalidate();
+		this.reconcileOverlay();
 		this.tui.requestRender();
 	}
 
 	setHidden(hidden: boolean) {
-		this.handle.setHidden(hidden);
+		this.hidden = hidden;
+		this.reconcileOverlay();
 		this.tui.requestRender();
 	}
 
 	render(): string[] {
+		// The stable TUI reference follows Pi when it replaces the renderer.
+		// Reconcile on every host render so a removed overlay is recreated on
+		// the active renderer, never retained as a hidden entry on the old one.
+		this.reconcileOverlay();
 		return [];
 	}
 
 	invalidate() {
-		this.stack.invalidate();
+		this.current?.stack.invalidate();
 	}
 
 	dispose() {
 		if (this.disposed) return;
 		this.disposed = true;
 		this.stopRegistrySubscription();
-		this.handle.hide();
+		this.removeOverlay();
 		this.onDispose();
+	}
+
+	private reconcileOverlay(): void {
+		if (this.disposed) return;
+
+		const terminalWidth = this.tui.terminal.columns;
+		const terminalHeight = this.tui.terminal.rows;
+		const stack = this.current?.stack ?? new OverlayStackComponent(this.theme);
+		stack.setViewport(terminalWidth, terminalHeight);
+		if (this.hidden || !stack.canRender()) {
+			this.removeOverlay();
+			return;
+		}
+		if (this.current) return;
+
+		// hide() permanently removes an overlay. Always pair a new handle with
+		// a fresh component, as required by the TUI overlay lifecycle.
+		const options: OverlayOptions = {
+			nonCapturing: true,
+			anchor: "top-right",
+			width: stack.preferredWidth(),
+			maxHeight: "80%",
+			margin: { top: 1, right: 2 },
+			visible: (width, height) => {
+				stack.setViewport(width, height);
+				options.width = stack.preferredWidth();
+				return stack.canRender();
+			},
+		};
+		this.current = { stack, handle: this.tui.showOverlay(stack, options) };
+	}
+
+	private removeOverlay(): void {
+		const current = this.current;
+		if (!current) return;
+		this.current = undefined;
+		current.handle.hide();
 	}
 }
 

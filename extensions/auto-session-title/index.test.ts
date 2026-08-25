@@ -58,7 +58,6 @@ describe("auto-session-title model requests", () => {
 				hasUI: false,
 				modelRegistry: {
 					find: (provider: string, model: string) => ({ provider, id: model }),
-					getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test" }),
 				},
 				sessionManager: {
 					getBranch: () => entries,
@@ -69,7 +68,7 @@ describe("auto-session-title model requests", () => {
 				ui: { notify() {} },
 			};
 			autoSessionTitle(pi as any, {
-				requestCompletion: async (_complete, _model, _auth, _systemPrompt, prompt) => {
+				requestCompletion: async (_complete, _model, _systemPrompt, prompt) => {
 					prompts.push(JSON.parse(prompt));
 					return prompts.length < 3
 						? JSON.stringify({
@@ -219,7 +218,6 @@ describe("auto-session-title model requests", () => {
 		const ctx = {
 			modelRegistry: {
 				find: (provider: string, model: string) => ({ provider, id: model }),
-				getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test" }),
 			},
 		};
 
@@ -272,7 +270,6 @@ describe("auto-session-title model requests", () => {
 				hasUI: true,
 				modelRegistry: {
 					find: (provider: string, model: string) => ({ provider, id: model }),
-					getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test" }),
 				},
 				sessionManager: {
 					getBranch: () => [],
@@ -463,15 +460,36 @@ describe("auto-session-title model requests", () => {
 		});
 	});
 
-	test("routes Codex Luna through Pi's provider-aware completion API", async () => {
+	test("routes configured title models through Pi's model registry", async () => {
+		const model = { provider: "test", id: "title-model" };
+		const calls: any[][] = [];
+		const result = await requestTitleWithFallback(
+			{
+				modelRegistry: {
+					find: () => model,
+					complete: async (...args: any[]) => {
+						calls.push(args);
+						return { content: [{ type: "text", text: '{"title":"Registry Title"}' }], stopReason: "stop" };
+					},
+				},
+			},
+			[{ provider: "test", model: "title-model", thinkingLevel: "high" }],
+			"title system prompt",
+			"title context",
+			"session-1",
+			new AbortController().signal,
+		);
+
+		expect(result?.response).toBe('{"title":"Registry Title"}');
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.[0]).toBe(model);
+		expect(calls[0]?.[2]).toMatchObject({ reasoning: "high", sessionId: "session-1:title" });
+	});
+
+	test("builds bounded title completion requests", async () => {
 		const model = {
 			provider: "openai-codex",
 			id: "gpt-5.6-luna",
-		};
-		const auth = {
-			apiKey: "test-token",
-			headers: { "x-test": "header" },
-			env: { TEST_ENV: "value" },
 		};
 		let invocation: any[] | undefined;
 		const response = await requestTitleCompletion(
@@ -483,7 +501,6 @@ describe("auto-session-title model requests", () => {
 				};
 			},
 			model,
-			auth,
 			"title system prompt",
 			"title context",
 			"session-1",
@@ -498,9 +515,6 @@ describe("auto-session-title model requests", () => {
 			messages: [{ role: "user", content: [{ type: "text", text: "title context" }] }],
 		});
 		expect(invocation?.[2]).toMatchObject({
-			apiKey: "test-token",
-			headers: { "x-test": "header" },
-			env: { TEST_ENV: "value" },
 			maxTokens: 384,
 			reasoning: "xhigh",
 			sessionId: "session-1:title",

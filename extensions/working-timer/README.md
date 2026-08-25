@@ -18,7 +18,8 @@ compaction and retry, and queued continuations, then resets when pi fully
 settles.
 
 Pi's dedicated retry and compaction loaders keep their native messages. The
-elapsed timer resumes when the normal working row returns.
+elapsed timer resumes when the normal working row returns, including after a
+failed or cancelled compaction.
 
 ## Config
 

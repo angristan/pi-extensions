@@ -125,7 +125,10 @@ test("updates phase text and restores Pi's working message when settled", () => 
 	expect(stripTestStyles(messages.at(-1))).toStartWith("Thinking (0s");
 	handlers.get("session_before_compact")?.({}, ctx);
 	expect(stripTestStyles(messages.at(-1))).toStartWith("Compacting (0s");
-	handlers.get("session_compact")?.({ willRetry: true }, ctx);
+	handlers.get("session_compact_failed")?.({ willRetry: false }, ctx);
+	expect(stripTestStyles(messages.at(-1))).toStartWith("Thinking (0s");
+	handlers.get("session_before_compact")?.({}, ctx);
+	handlers.get("session_compact_failed")?.({ willRetry: true }, ctx);
 	expect(stripTestStyles(messages.at(-1))).toStartWith("Retrying (0s");
 	expect(stripTestStyles(messages.filter(Boolean).join("\n"))).not.toContain("...");
 

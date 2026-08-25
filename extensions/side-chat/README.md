@@ -19,7 +19,7 @@ reply into it only when useful.
 ```
 
 - Requires interactive TUI mode
-- Uses the active model (not a separate/cheaper one)
+- Uses the active model through Pi's provider-aware model registry (not a separate/cheaper one)
 - Context head/tail serialized to fit the model's window
 - Runs at `reasoning: "low"`, capped at 4096 output tokens
 - Independent abort; cancelled on session switch/shutdown

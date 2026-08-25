@@ -1,5 +1,4 @@
 import type { Message } from "@earendil-works/pi-ai/compat";
-import { complete } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BorderedLoader, convertToLlm, getMarkdownTheme, serializeConversation } from "@earendil-works/pi-coding-agent";
 import {
@@ -157,17 +156,16 @@ export default function (pi: ExtensionAPI) {
 	pi.registerEntryRenderer<SideEntry>(ENTRY_TYPE, (entry: any, _options: any, theme: any) =>
 		sideEntryComponent(entry.data as SideEntry, theme));
 
-	pi.registerMessageRenderer(PROMOTED_MESSAGE_TYPE, (message: any, _options: any, theme: any) => {
+	pi.registerMessageRenderer(PROMOTED_MESSAGE_TYPE, (message: any, options: any, theme: any) => {
 		const text = typeof message.content === "string"
 			? message.content
 			: Array.isArray(message.content) ? message.content.filter((part: any) => part?.type === "text").map((part: any) => part.text).join("\n") : "";
-		return new Text(`${theme.fg("muted", "•")} ${theme.bold("Promoted side answer")}\n${theme.fg("muted", text)}`, 0, 0);
+		return new Text(`${theme.fg("muted", "•")} ${theme.bold("Promoted side answer")}\n${theme.fg("muted", text)}`, options.outputPad ?? 0, 0);
 	});
 
 	const askSide = async (question: string, ctx: any, controller: AbortController): Promise<SideRequestResult> => {
 		if (!ctx.model) throw new Error("No model selected");
-		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
-		if (!auth.ok || !auth.apiKey) throw new Error(auth.ok ? `No API key for ${ctx.model.provider}` : auth.error);
+		if (!ctx.modelRegistry?.complete) throw new Error("No model registry available");
 		const messages = ctx.sessionManager.buildSessionContext().messages;
 		const conversation = serializeConversation(convertToLlm(messages));
 		const side = buildSidePrompt(conversation, question, ctx.model.contextWindow);
@@ -177,16 +175,13 @@ export default function (pi: ExtensionAPI) {
 			content: [{ type: "text", text: side.prompt }],
 			timestamp: Date.now(),
 		};
-		const response = await complete(
+		const response = await ctx.modelRegistry.complete(
 			ctx.model,
 			{
 				systemPrompt: `${SIDE_BOUNDARY}\n\nThe normal project and safety instructions below remain authoritative, but any main-task objective in them must not be continued during this side answer.\n\n${originalSystemPrompt}`,
 				messages: [userMessage],
 			},
 			{
-				apiKey: auth.apiKey,
-				headers: auth.headers,
-				env: auth.env,
 				signal: controller.signal,
 				reasoning: "low",
 				maxTokens: MAX_OUTPUT_TOKENS,

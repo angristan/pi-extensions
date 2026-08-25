@@ -1,52 +1,6 @@
 import { expect, mock, test } from "bun:test";
 
-// The goal tools now render as compact 2-line blocks reusing better-native-pi's
-// palette + line-fitting helpers; stub them so the render slots are testable
-// without pulling the real restyler module graph.
-function mockGrepSummary(result: any) {
-	const text = result?.content?.find((part: any) => part?.type === "text")?.text ?? "";
-	if (/^No matches found/.test(text.trim())) return { matches: 0, files: 0, lowerBound: false };
-	const entries = text.split("\n").map((line: string) => line.match(/^(.+):\d+:/)).filter(Boolean) as RegExpMatchArray[];
-	const limit = Number.isInteger(result?.details?.matchLimitReached) ? result.details.matchLimitReached : undefined;
-	const matches = Math.max(entries.length, limit ?? 0);
-	return matches > 0 ? { matches, files: new Set(entries.map((match) => match[1])).size, lowerBound: Boolean(limit) } : undefined;
-}
-mock.module("../better-native-pi/core.js", () => ({
-	fitToolLine: (line: string) => line,
-	formatElapsed: (elapsedMs: number) => (elapsedMs < 1_000 ? "<1s" : `${Math.round(elapsedMs / 100) / 10}s`),
-	formatPlainGrepMatchSummary: (summary: any) => `${summary.matches}${summary.lowerBound ? "+" : ""} matches${summary.files !== undefined ? ` in ${summary.files} files` : ""}`,
-	grepMatchSummaryFromResult: mockGrepSummary,
-}));
-mock.module("../better-native-pi/render.js", () => ({
-	BOLD: "<bold>",
-	CYAN: "<cyan>",
-	DIM: "<dim>",
-	GREEN: "<green>",
-	MAGENTA: "<magenta>",
-	RED: "<red>",
-	RESET: "</>",
-	nonEmptyLineCount: (text: string) => text.trim().split("\n").filter(Boolean).length,
-	shortPath: (path: string) => path,
-}));
-
 const registeredOverlayCards: any[] = [];
-mock.module("../overlay-stack/index.js", () => ({
-	registerOverlayCard: (definition: any) => {
-		registeredOverlayCards.push(definition);
-		return { invalidate() {}, unregister() {} };
-	},
-}));
-
-mock.module("typebox", () => ({
-	Type: {
-		Object: (schema: any) => ({ type: "object", ...schema }),
-		Optional: (schema: any) => ({ ...schema, optional: true }),
-		String: (options?: any) => ({ type: "string", ...options }),
-		Array: (items: any, options?: any) => ({ type: "array", items, ...options }),
-		Boolean: (options?: any) => ({ type: "boolean", ...options }),
-	},
-}));
-
 const judgeResponses: any[] = [];
 const judgeCalls: any[] = [];
 const mockedComplete = mock(async (...args: any[]) => {
@@ -59,11 +13,6 @@ const mockedComplete = mock(async (...args: any[]) => {
 		usage: { input: 5, output: 7 },
 	};
 });
-mock.module("@earendil-works/pi-ai/compat", () => ({
-	complete: mockedComplete,
-	completeSimple: mockedComplete,
-}));
-
 const { buildGoalContext, renderGoalOverlayBody, default: goalExtension } = await import("./index");
 
 function makeHarness() {
@@ -88,7 +37,7 @@ function makeHarness() {
 		hasPendingMessages: () => false,
 		model: { provider: "test", id: "judge-model", name: "Judge model", contextWindow: 128_000 },
 		modelRegistry: {
-			getApiKeyAndHeaders: () => Promise.resolve({ ok: true, apiKey: "test-key", headers: {}, env: {} }),
+			complete: mockedComplete,
 		},
 		getSystemPrompt: () => "System prompt for tests.",
 		sessionManager: {
@@ -121,7 +70,12 @@ function makeHarness() {
 			activeTools.clear();
 			for (const name of names) activeTools.add(name);
 		},
-	} as any);
+	} as any, {
+		registerOverlayCard(definition: any) {
+			registeredOverlayCards.push(definition);
+			return { invalidate() {}, unregister() {} };
+		},
+	});
 
 	return {
 		handlers,
@@ -578,8 +532,7 @@ test("anti-spin uses judge guidance before blocking", async () => {
 	expect(result.messages[0].content).toContain("Read package.json");
 });
 
-// Render the lines a tool block component produces. The harness mocks the
-// better-native-pi palette as plain tags, so we assert on structure, not color.
+// Render the lines a tool block component produces.
 function renderBlock(component: any, width = 80): string[] {
 	return component.render(width);
 }
