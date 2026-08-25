@@ -32,9 +32,9 @@ function scheduler() {
 		clearInterval(timer: ReturnType<typeof setInterval>) {
 			timers.delete(timer as any);
 		},
-		async fire() {
+		async fire(waitMs = 10) {
 			for (const callback of [...timers.values()]) callback();
-			await Bun.sleep(10);
+			await Bun.sleep(waitMs);
 		},
 	};
 }
@@ -50,10 +50,12 @@ function makeHarness(options: {
 	reloadError?: Error;
 	reloadHandshake?: boolean;
 	commandInvocationName?: string;
+	waitForIdle?: () => Promise<void>;
 }) {
 	const handlers = new Map<string, Array<(event: any, ctx: any) => any>>();
 	const commands = new Map<string, any>();
 	const sent: string[] = [];
+	const sentOptions: any[] = [];
 	const notices: string[] = [];
 	const confirmations: Array<{ title: string; message: string }> = [];
 	const clock = { value: 1_000 };
@@ -63,7 +65,10 @@ function makeHarness(options: {
 	const ctx = {
 		mode: options.mode ?? "tui",
 		isIdle: () => idle,
-		waitForIdle: async () => { idle = true; },
+		waitForIdle: async () => {
+			await options.waitForIdle?.();
+			idle = true;
+		},
 		reload: async () => {
 			if (options.reloadError) throw options.reloadError;
 			reloads += 1;
@@ -91,7 +96,6 @@ function makeHarness(options: {
 		runtimeDirectory: options.runtimeDirectory,
 		pollIntervalMs: 5,
 		heartbeatIntervalMs: 20,
-		queueRetryAfterMs: 20,
 		now: () => clock.value,
 		newGenerationId: () => options.generationId ?? "generation-1",
 		newRuntimeNonce: () => `runtime-${options.key}`,
@@ -113,12 +117,16 @@ function makeHarness(options: {
 				source: "extension",
 			}));
 		},
-		sendUserMessage(message: string) { sent.push(message); },
+		sendUserMessage(message: string, sendOptions?: any) {
+			sent.push(message);
+			sentOptions.push(sendOptions);
+		},
 	} as any);
 
 	return {
 		commands,
 		sent,
+		sentOptions,
 		notices,
 		confirmations,
 		intervals,
@@ -164,17 +172,36 @@ describe("machine-local reload broadcast", () => {
 		expect(restored.reloads).toBe(0);
 	});
 
-	test("dispatches early but waits inside the command for idle", async () => {
+	test("queues one follow-up and reloads once after hundreds of busy polls", async () => {
 		const runtimeDirectory = temporaryRuntime();
 		const sender = makeHarness({ runtimeDirectory, key: "sender", pid: 201, generationId: "generation-b" });
-		const busy = makeHarness({ runtimeDirectory, key: "busy", pid: 202, idle: false });
+		let releaseIdle!: () => void;
+		const idleGate = new Promise<void>((resolve) => { releaseIdle = resolve; });
+		const busy = makeHarness({
+			runtimeDirectory,
+			key: "busy",
+			pid: 202,
+			idle: false,
+			waitForIdle: () => idleGate,
+		});
 		await sender.emit("session_start");
 		await busy.emit("session_start");
 		await sender.command();
 
 		await busy.intervals.fire();
 		expect(busy.sent).toEqual(["/reload-all __apply runtime-busy generation-b"]);
-		await busy.dispatch(busy.sent[0]!);
+		expect(busy.sentOptions).toEqual([{ deliverAs: "followUp", expandPromptTemplates: true }]);
+		const applying = busy.dispatch(busy.sent[0]!);
+		await Bun.sleep(0);
+
+		for (let poll = 0; poll < 742; poll += 1) {
+			busy.clock.value += 25;
+			await busy.intervals.fire(0);
+		}
+		expect(busy.sent).toHaveLength(1);
+
+		releaseIdle();
+		await applying;
 		expect(busy.reloads).toBe(1);
 	});
 

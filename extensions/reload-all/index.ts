@@ -18,7 +18,6 @@ const COMMAND = "reload-all";
 const INTERNAL_APPLY = "__apply";
 const POLL_INTERVAL_MS = 1_000;
 const HEARTBEAT_INTERVAL_MS = 5_000;
-const QUEUE_RETRY_AFTER_MS = 5_000;
 const MAX_STATE_FILE_BYTES = 64 * 1024;
 
 interface ReloadGeneration {
@@ -52,7 +51,6 @@ interface RuntimeDependencies {
 	runtimeDirectory?: string;
 	pollIntervalMs?: number;
 	heartbeatIntervalMs?: number;
-	queueRetryAfterMs?: number;
 	now?: () => number;
 	newGenerationId?: () => string;
 	newRuntimeNonce?: () => string;
@@ -188,7 +186,6 @@ export function createReloadAllExtension(dependencies: RuntimeDependencies = {})
 		const generationPath = join(root, "generation.json");
 		const pollIntervalMs = dependencies.pollIntervalMs ?? POLL_INTERVAL_MS;
 		const heartbeatIntervalMs = dependencies.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS;
-		const queueRetryAfterMs = dependencies.queueRetryAfterMs ?? QUEUE_RETRY_AFTER_MS;
 		const now = dependencies.now ?? Date.now;
 		const newGenerationId = dependencies.newGenerationId ?? randomUUID;
 		const runtimeNonce = (dependencies.newRuntimeNonce ?? randomUUID)();
@@ -208,7 +205,6 @@ export function createReloadAllExtension(dependencies: RuntimeDependencies = {})
 		let reloadInProgress = false;
 		let pendingGeneration: string | undefined;
 		let queuedGeneration: string | undefined;
-		let queuedAt = 0;
 		let lastHeartbeatAt = 0;
 		let targetMutation = Promise.resolve();
 
@@ -249,41 +245,7 @@ export function createReloadAllExtension(dependencies: RuntimeDependencies = {})
 			return live;
 		};
 
-		const applyGeneration = async (generationId: string, ctx: any): Promise<void> => {
-			if (!active || reloadInProgress || ctx.mode !== "tui") return;
-			await ctx.waitForIdle();
-			if (!active || reloadInProgress) return;
-			const generation = await readJson<ReloadGeneration>(generationPath);
-			if (!validGeneration(generation) || generation.id !== generationId) return;
-			if (target?.appliedGeneration === generationId) return;
-
-			await mutateTarget((current) => ({
-				...current,
-				updatedAt: now(),
-				requestedGeneration: generationId,
-				requestRuntimeNonce: runtimeNonce,
-			}));
-			reloadInProgress = true;
-			try {
-				await ctx.reload();
-			} catch (error) {
-				reloadInProgress = false;
-				await mutateTarget((current) => {
-					if (current.requestRuntimeNonce !== runtimeNonce) return current;
-					const { requestedGeneration: _requested, requestRuntimeNonce: _requester, ...rest } = current;
-					return { ...rest, updatedAt: now() };
-				});
-				throw error;
-			}
-
-			// Interactive Pi may refuse a reload during manual compaction while still
-			// resolving ctx.reload(). A new extension runtime proves success by
-			// completing this request with its own nonce during session_start.
-			const afterReload = targetPath ? await readJson<ReloadTarget>(targetPath) : undefined;
-			if (validTarget(afterReload)
-				&& afterReload.appliedGeneration === generationId
-				&& afterReload.runtimeNonce !== runtimeNonce) return;
-			reloadInProgress = false;
+		const clearReloadRequest = async (): Promise<void> => {
 			await mutateTarget((current) => {
 				if (current.requestRuntimeNonce !== runtimeNonce) return current;
 				const { requestedGeneration: _requested, requestRuntimeNonce: _requester, ...rest } = current;
@@ -291,9 +253,49 @@ export function createReloadAllExtension(dependencies: RuntimeDependencies = {})
 			});
 		};
 
+		const applyGeneration = async (generationId: string, ctx: any): Promise<void> => {
+			if (!active || reloadInProgress || ctx.mode !== "tui") return;
+
+			// Claim the generation before waiting. Multiple private commands can already
+			// be queued by an older extension version; only the first may cross the idle
+			// boundary and reload this runtime.
+			reloadInProgress = true;
+			let requestRecorded = false;
+			try {
+				await ctx.waitForIdle();
+				if (!active) return;
+				const generation = await readJson<ReloadGeneration>(generationPath);
+				if (!validGeneration(generation) || generation.id !== generationId) return;
+				if (target?.appliedGeneration === generationId) return;
+
+				await mutateTarget((current) => ({
+					...current,
+					updatedAt: now(),
+					requestedGeneration: generationId,
+					requestRuntimeNonce: runtimeNonce,
+				}));
+				requestRecorded = true;
+				await ctx.reload();
+
+				// Interactive Pi may refuse a reload during manual compaction while still
+				// resolving ctx.reload(). A new extension runtime proves success by
+				// completing this request with its own nonce during session_start.
+				const afterReload = targetPath ? await readJson<ReloadTarget>(targetPath) : undefined;
+				if (validTarget(afterReload)
+					&& afterReload.appliedGeneration === generationId
+					&& afterReload.runtimeNonce !== runtimeNonce) return;
+				await clearReloadRequest();
+				requestRecorded = false;
+			} catch (error) {
+				if (requestRecorded) await clearReloadRequest();
+				throw error;
+			} finally {
+				reloadInProgress = false;
+			}
+		};
+
 		const queueApply = (generationId: string) => {
-			if (!activeCtx || reloadInProgress) return;
-			if (queuedGeneration === generationId && now() - queuedAt < queueRetryAfterMs) return;
+			if (!activeCtx || reloadInProgress || queuedGeneration === generationId) return;
 			// Never submit the private apply form unless Pi confirms that the public
 			// extension command resolves exactly. This prevents a command collision
 			// from turning coordination metadata into an accidental model prompt.
@@ -302,9 +304,9 @@ export function createReloadAllExtension(dependencies: RuntimeDependencies = {})
 			);
 			if (!commandAvailable) return;
 			queuedGeneration = generationId;
-			queuedAt = now();
 			try {
 				pi.sendUserMessage(`/${COMMAND} ${INTERNAL_APPLY} ${runtimeNonce} ${generationId}`, {
+					deliverAs: "followUp",
 					expandPromptTemplates: true,
 				});
 			} catch {
