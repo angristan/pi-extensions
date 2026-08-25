@@ -132,7 +132,7 @@ MIT
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent).
 - **Runtime npm packages:** [`marked`](https://www.npmjs.com/package/marked) for Telegram formatting; Pi APIs resolve from Pi's bundled modules.
-- **Development npm packages:** Pi 0.84.3 extension APIs and TypeBox 1.3.7, pinned in `package.json` and `bun.lock` for reproducible tests and also declared as unbundled peers.
+- **Development npm packages:** Pi 0.84 extension APIs and TypeBox 1.3.7. Pi uses a compatible `^0.84.0` development range so git-package installs work with npm release-age policies; `bun.lock` keeps repository tests reproducible. Pi-provided packages are also declared as unbundled peers.
 - **System/services:** Only where noted in each extension README.
 
 An arrow means the extension on the left directly imports the extension on the
