@@ -32,7 +32,7 @@ function emitBus(busHandlers: Record<string, BusHandler[]>, name: string, payloa
 	for (const handler of busHandlers[name] ?? []) handler(payload);
 }
 
-test("collects answers with numbered, semantically colored prompts", async () => {
+test("collects answers without replacing the session title", async () => {
 	const events: Array<{ name: string; payload: any }> = [];
 	const tool = registeredTool(events);
 	const selected: string[] = [];
@@ -60,19 +60,16 @@ test("collects answers with numbered, semantically colored prompts", async () =>
 		"<accent><b>Question 1/2</b></accent><dim> · </dim><text>Pick a color</text>",
 		"<accent><b>Question 2/2</b></accent><dim> · </dim><text>Why?</text>",
 	]);
-	expect(titles).toEqual(["❓ Input needed · Question 1/2", "❓ Input needed · Question 2/2", "pi"]);
+	expect(titles).toEqual([]);
 	expect(events).toEqual([
-		{ name: "terminal-title:override", payload: { source: "questions", title: "❓ Input needed · Question 1/2" } },
 		{ name: "herdr:blocked", payload: { active: true, label: "Waiting for user input" } },
 		{ name: "questions:waiting", payload: { requestId: "id:0", questionnaireId: "id", question: "Pick a color", options: ["Red", "Blue"], allowOther: false, index: 1, total: 2, secret: false } },
 		{ name: "herdr:blocked", payload: { active: false } },
 		{ name: "questions:resolved", payload: { requestId: "id:0", questionnaireId: "id", index: 1, total: 2, outcome: "answered", source: "tui" } },
-		{ name: "terminal-title:override", payload: { source: "questions", title: "❓ Input needed · Question 2/2" } },
 		{ name: "herdr:blocked", payload: { active: true, label: "Waiting for user input" } },
 		{ name: "questions:waiting", payload: { requestId: "id:1", questionnaireId: "id", question: "Why?", options: [], allowOther: false, index: 2, total: 2, secret: false } },
 		{ name: "herdr:blocked", payload: { active: false } },
 		{ name: "questions:resolved", payload: { requestId: "id:1", questionnaireId: "id", index: 2, total: 2, outcome: "answered", source: "tui" } },
-		{ name: "terminal-title:override", payload: { source: "questions", title: undefined } },
 	]);
 	expect(result.content[0].text).toBe("color: Blue\nwhy: Because it is calm");
 	expect(result.details.interrupted).toBe(false);

@@ -19,10 +19,10 @@ you pick:     ▶ new branch
 Supports multiple questions in one call, "other" free-text answers, and
 secret inputs. Every prompt shows its position and total (`Question 2/3`) with
 accented progress, a subdued separator, and readable theme-text question copy.
-The terminal title switches to `❓ Input needed` while a response is pending.
-When running inside Herdr, its agent-state integration also receives balanced
-`herdr:blocked` events, so the pane and sidebar show **blocked** instead of
-**working** until the prompt is answered or cancelled. The status label is
+The terminal title stays on the session name while a response is pending.
+When running inside Herdr, its agent-state integration receives balanced
+`herdr:blocked` events, so the pane and sidebar show the question status instead
+of **working** until the prompt is answered or cancelled. The status label is
 generic and never contains question text.
 
 Secret responses use a masked TUI field. The model and transcript receive only
@@ -46,5 +46,5 @@ leaves Pi.
 ## Dependencies
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** None; `footer` optionally keeps the attention title pinned while its activity spinner runs.
+- **Depends on extensions:** None.
 - **Used by extensions:** `telegram` and Herdr's agent-state integration, through runtime events.

@@ -6,7 +6,6 @@ interface Question { id: string; question: string; options?: string[]; allow_oth
 interface Answer { id: string; question: string; answer?: string; reference?: string; provided?: boolean; cancelled?: boolean; secret?: boolean }
 interface Details { questions: Question[]; answers: Answer[]; interrupted: boolean }
 
-const TERMINAL_TITLE_EVENT = "terminal-title:override";
 const HERDR_BLOCKED_EVENT = "herdr:blocked";
 export const QUESTION_WAITING_EVENT = "questions:waiting";
 export const QUESTION_ANSWER_EVENT = "questions:answer";
@@ -82,21 +81,6 @@ function numberedPrompt(question: string, index: number, total: number, theme?: 
 		theme.fg("dim", " · "),
 		theme.fg("text", question),
 	].join("");
-}
-
-function setAttentionTitle(pi: ExtensionAPI, ctx: any, index: number, total: number): void {
-	if (ctx.mode !== "tui") return;
-	const title = `❓ Input needed · Question ${index + 1}/${total}`;
-	ctx.ui.setTitle(title);
-	pi.events.emit(TERMINAL_TITLE_EVENT, { source: "questions", title });
-}
-
-function clearAttentionTitle(pi: ExtensionAPI, ctx: any): void {
-	if (ctx.mode !== "tui") return;
-	// The footer extension restores its contextual title when it receives the
-	// clear event. "pi" is the safe standalone fallback when no owner exists.
-	ctx.ui.setTitle("pi");
-	pi.events.emit(TERMINAL_TITLE_EVENT, { source: "questions", title: undefined });
 }
 
 class MaskedInput extends Input {
@@ -266,57 +250,52 @@ export default function (pi: ExtensionAPI) {
 			const questions: Question[] = Array.isArray(params.questions) ? params.questions : [];
 			const answers: Answer[] = [];
 			let interrupted = false;
-			try {
-				for (const [index, question] of questions.entries()) {
-					const prompt = numberedPrompt(question.question, index, questions.length, ctx.mode === "tui" ? ctx.ui.theme : undefined);
-					const requestId = `${toolCallId}:${index}`;
-					setAttentionTitle(pi, ctx, index, questions.length);
-					let resolution: { outcome: "answered" | "cancelled"; source: "tui" | "remote" } = { outcome: "cancelled", source: "tui" };
-					try {
-						const collected = await collectAnswer(pi, requestId, question, prompt, ctx, () => {
-							// Herdr's agent-state integration treats this optional event as an
-							// authoritative wait signal. Keep the label generic so secret question
-							// text never leaves the questionnaire UI.
-							pi.events.emit(HERDR_BLOCKED_EVENT, { active: true, label: "Waiting for user input" });
-							pi.events.emit(QUESTION_WAITING_EVENT, {
-								requestId,
-								questionnaireId: toolCallId,
-								question: question.question,
-								options: Array.isArray(question.options) ? [...question.options] : [],
-								allowOther: question.allow_other !== false,
-								index: index + 1,
-								total: questions.length,
-								secret: question.secret === true,
-							});
-						});
-						resolution = { outcome: collected.cancelled ? "cancelled" : "answered", source: collected.source };
-						if (collected.cancelled) {
-							interrupted = true;
-							answers.push({ id: question.id, question: question.question, cancelled: true, secret: question.secret });
-							break;
-						}
-						if (question.secret) {
-							const reference = secretReference();
-							secrets.set(reference, collected.answer ?? "");
-							answers.push({ id: question.id, question: question.question, reference, provided: true, secret: true });
-						} else {
-							answers.push({ id: question.id, question: question.question, answer: collected.answer });
-						}
-					} finally {
-						// Balance every blocked report before publishing resolution. The state
-						// integration reference-counts nested waits.
-						pi.events.emit(HERDR_BLOCKED_EVENT, { active: false });
-						pi.events.emit(QUESTION_RESOLVED_EVENT, {
+			for (const [index, question] of questions.entries()) {
+				const prompt = numberedPrompt(question.question, index, questions.length, ctx.mode === "tui" ? ctx.ui.theme : undefined);
+				const requestId = `${toolCallId}:${index}`;
+				let resolution: { outcome: "answered" | "cancelled"; source: "tui" | "remote" } = { outcome: "cancelled", source: "tui" };
+				try {
+					const collected = await collectAnswer(pi, requestId, question, prompt, ctx, () => {
+						// Herdr's agent-state integration treats this optional event as an
+						// authoritative wait signal. Keep the label generic so secret question
+						// text never leaves the questionnaire UI.
+						pi.events.emit(HERDR_BLOCKED_EVENT, { active: true, label: "Waiting for user input" });
+						pi.events.emit(QUESTION_WAITING_EVENT, {
 							requestId,
 							questionnaireId: toolCallId,
+							question: question.question,
+							options: Array.isArray(question.options) ? [...question.options] : [],
+							allowOther: question.allow_other !== false,
 							index: index + 1,
 							total: questions.length,
-							...resolution,
+							secret: question.secret === true,
 						});
+					});
+					resolution = { outcome: collected.cancelled ? "cancelled" : "answered", source: collected.source };
+					if (collected.cancelled) {
+						interrupted = true;
+						answers.push({ id: question.id, question: question.question, cancelled: true, secret: question.secret });
+						break;
 					}
+					if (question.secret) {
+						const reference = secretReference();
+						secrets.set(reference, collected.answer ?? "");
+						answers.push({ id: question.id, question: question.question, reference, provided: true, secret: true });
+					} else {
+						answers.push({ id: question.id, question: question.question, answer: collected.answer });
+					}
+				} finally {
+					// Balance every blocked report before publishing resolution. The state
+					// integration reference-counts nested waits.
+					pi.events.emit(HERDR_BLOCKED_EVENT, { active: false });
+					pi.events.emit(QUESTION_RESOLVED_EVENT, {
+						requestId,
+						questionnaireId: toolCallId,
+						index: index + 1,
+						total: questions.length,
+						...resolution,
+					});
 				}
-			} finally {
-				if (questions.length > 0) clearAttentionTitle(pi, ctx);
 			}
 			const details: Details = { questions, answers, interrupted };
 			const response = answers.filter(hasAnswer).map((answer) => `${answer.id}: ${answer.secret ? answer.reference : answer.answer}`).join("\n");
