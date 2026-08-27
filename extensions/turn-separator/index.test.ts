@@ -10,6 +10,7 @@ test("adds a labeled separator only after an assistant step performs tool work",
 	const eventHandlers = new Map<string, (event: unknown) => void>();
 	turnSeparator({
 		on: (name: string, handler: any) => handlers.set(name, handler),
+		registerCommand: () => {},
 		registerEntryRenderer: (_name: string, value: any) => { renderer = value; },
 		appendEntry: (type: string, data: any) => entries.push({ type, data }),
 		events: {
@@ -18,7 +19,7 @@ test("adds a labeled separator only after an assistant step performs tool work",
 				return () => eventHandlers.delete(name);
 			},
 		},
-	} as any);
+	} as any, { loadEnabled: () => true, saveEnabled: async () => {} });
 	handlers.get("session_start")?.();
 	handlers.get("message_start")?.({ message: { role: "assistant" } });
 	handlers.get("message_start")?.({ message: { role: "toolResult" } });
@@ -41,4 +42,46 @@ test("adds a labeled separator only after an assistant step performs tool work",
 
 	handlers.get("message_start")?.({ message: { role: "assistant" } });
 	expect(entries).toHaveLength(1);
+});
+
+test("is off by default and can be enabled independently", async () => {
+	const handlers = new Map<string, (...args: any[]) => any>();
+	const commands = new Map<string, any>();
+	const eventHandlers = new Map<string, (event: unknown) => void>();
+	const entries: any[] = [];
+	const notifications: string[] = [];
+	let savedEnabled: boolean | undefined;
+	turnSeparator({
+		on: (name: string, handler: any) => handlers.set(name, handler),
+		registerCommand: (name: string, command: any) => commands.set(name, command),
+		registerEntryRenderer: () => {},
+		appendEntry: (type: string, data: any) => entries.push({ type, data }),
+		events: {
+			on: (name: string, handler: (event: unknown) => void) => {
+				eventHandlers.set(name, handler);
+				return () => eventHandlers.delete(name);
+			},
+		},
+	} as any, {
+		loadEnabled: () => false,
+		saveEnabled: async (enabled) => { savedEnabled = enabled; },
+	});
+	const ctx = { ui: { notify: (message: string) => notifications.push(message) } };
+
+	handlers.get("session_start")?.();
+	handlers.get("message_start")?.({ message: { role: "assistant" } });
+	handlers.get("tool_execution_start")?.({});
+	handlers.get("message_start")?.({ message: { role: "assistant" } });
+	expect(entries).toHaveLength(0);
+
+	await commands.get("turn-separator").handler("on", ctx);
+	expect(savedEnabled).toBe(true);
+	expect(notifications.at(-1)).toBe("Turn separators enabled.");
+
+	handlers.get("message_start")?.({ message: { role: "assistant" } });
+	eventHandlers.get(RESPONSE_TIMING_EVENT)?.({ outputTokens: 10, ttftMs: 250, tokensPerSecond: 20 });
+	handlers.get("tool_execution_start")?.({});
+	handlers.get("message_start")?.({ message: { role: "assistant" } });
+	expect(entries).toHaveLength(1);
+	expect(entries[0].data).toMatchObject({ ttftMs: 250, tokensPerSecond: 20 });
 });

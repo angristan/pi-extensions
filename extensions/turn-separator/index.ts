@@ -10,8 +10,11 @@
  * a tiny right margin because terminals can wrap full-width styled rows into a
  * stray `──` line.
  */
-import { truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth, type AutocompleteItem, type Component } from "@earendil-works/pi-tui";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { readFileSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import {
 	formatLatency,
 	formatTokensPerSecond,
@@ -20,6 +23,7 @@ import {
 } from "../turn-stats/index.js";
 
 const ENTRY_TYPE = "turn-separator";
+const COMMAND = "turn-separator";
 /** Only label steps longer than this (seconds); short steps get a bare rule. */
 const LABEL_THRESHOLD_SECONDS = 60;
 
@@ -27,6 +31,29 @@ interface SeparatorData {
 	elapsedSeconds?: number;
 	ttftMs?: number;
 	tokensPerSecond?: number;
+}
+
+interface RuntimeDependencies {
+	loadEnabled?: () => boolean;
+	saveEnabled?: (enabled: boolean) => Promise<void>;
+}
+
+export function turnSeparatorConfigPath(): string {
+	return join(getAgentDir(), "turn-separator.json");
+}
+
+export function loadTurnSeparatorEnabled(path = turnSeparatorConfigPath()): boolean {
+	try {
+		return JSON.parse(readFileSync(path, "utf8"))?.enabled === true;
+	} catch {
+		return false;
+	}
+}
+
+async function saveTurnSeparatorEnabled(enabled: boolean): Promise<void> {
+	const path = turnSeparatorConfigPath();
+	await mkdir(dirname(path), { recursive: true });
+	await writeFile(path, `${JSON.stringify({ enabled }, null, 2)}\n`, "utf8");
 }
 
 /** A dim `─` rule, optionally labeled at both edges, with wrap-safe slack. */
@@ -99,7 +126,7 @@ function formatElapsed(seconds: number): string {
 	return `${Math.round(seconds)}s`;
 }
 
-export default function turnSeparator(pi: ExtensionAPI) {
+export default function turnSeparator(pi: ExtensionAPI, deps: RuntimeDependencies = {}) {
 	pi.registerEntryRenderer<SeparatorData>(ENTRY_TYPE, (entry: any, _options: any, theme: any) => {
 		const dim = (s: string) =>
 			typeof theme?.fg === "function" ? theme.fg("dim", s) : s;
@@ -113,22 +140,56 @@ export default function turnSeparator(pi: ExtensionAPI) {
 
 	// Track the previous step's work + timing so we can emit a separator before
 	// a new assistant message only when the prior step did concrete work.
+	const loadEnabled = () => deps.loadEnabled?.() ?? loadTurnSeparatorEnabled();
+	const saveEnabled = deps.saveEnabled ?? saveTurnSeparatorEnabled;
+	let enabled = loadEnabled();
 	let prevStepDidWork = false;
 	let prevStepStartedAt: number | undefined;
 	let currentStepStartedAt: number | undefined;
 	let latestResponseTiming: ResponseTimingEvent | undefined;
-	const stopResponseTimingListener = pi.events.on(RESPONSE_TIMING_EVENT, (event: unknown) => {
-		latestResponseTiming = responseTimingFromEvent(event);
-	});
-
-	pi.on("session_start", () => {
+	const resetRuntimeState = () => {
 		prevStepDidWork = false;
 		prevStepStartedAt = undefined;
 		currentStepStartedAt = undefined;
 		latestResponseTiming = undefined;
+	};
+	const stopResponseTimingListener = pi.events.on(RESPONSE_TIMING_EVENT, (event: unknown) => {
+		if (enabled) latestResponseTiming = responseTimingFromEvent(event);
+	});
+
+	pi.registerCommand(COMMAND, {
+		description: "Enable, disable, or inspect tool-loop separators",
+		getArgumentCompletions: (prefix: string): AutocompleteItem[] | null => {
+			const items = ["on", "off", "toggle", "status"]
+				.filter((value) => value.startsWith(prefix))
+				.map((value) => ({ value, label: value }));
+			return items.length > 0 ? items : null;
+		},
+		handler: async (args, ctx) => {
+			const action = args.trim().toLowerCase() || "toggle";
+			if (action === "status") {
+				ctx.ui.notify(`Turn separators are ${enabled ? "on" : "off"}.`, "info");
+				return;
+			}
+			if (action !== "on" && action !== "off" && action !== "toggle") {
+				ctx.ui.notify(`Usage: /${COMMAND} on|off|toggle|status`, "warning");
+				return;
+			}
+			const nextEnabled = action === "toggle" ? !enabled : action === "on";
+			await saveEnabled(nextEnabled);
+			enabled = nextEnabled;
+			resetRuntimeState();
+			ctx.ui.notify(`Turn separators ${enabled ? "enabled" : "disabled"}.`, "info");
+		},
+	});
+
+	pi.on("session_start", () => {
+		enabled = loadEnabled();
+		resetRuntimeState();
 	});
 
 	pi.on("message_start", (event) => {
+		if (!enabled) return;
 		// Only assistant messages trigger a separator (tool results and user
 		// messages are not separator points).
 		if (event.message.role !== "assistant") return;
@@ -152,6 +213,7 @@ export default function turnSeparator(pi: ExtensionAPI) {
 	// Any tool execution marks the current step as having done concrete work,
 	// so the next assistant message gets a separator before it.
 	pi.on("tool_execution_start", () => {
+		if (!enabled) return;
 		prevStepDidWork = true;
 		// Anchor the step's start to the first tool call if we never saw a
 		// message_start (defensive: should not normally happen).
@@ -160,6 +222,6 @@ export default function turnSeparator(pi: ExtensionAPI) {
 
 	pi.on("session_shutdown", () => {
 		stopResponseTimingListener();
-		latestResponseTiming = undefined;
+		resetRuntimeState();
 	});
 }

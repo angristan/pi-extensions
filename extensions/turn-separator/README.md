@@ -1,7 +1,7 @@
 # turn-separator
 
-A dim `─` rule between assistant messages that follow tool work, so each step
-of a multi-step turn is visually separated in the transcript.
+An opt-in dim `─` rule between assistant messages that follow tool work, so
+each step of a multi-step turn is visually separated in the transcript.
 
 When a new assistant message starts AND the preceding step performed concrete
 work (ran a tool), a custom (non-LLM) entry is appended. The preceding provider
@@ -18,7 +18,17 @@ Older entries without metrics still render as bare or elapsed-labeled rules.
 The rule intentionally leaves a tiny right margin to avoid terminal wrap
 artifacts that can show up as stray `──` rows.
 
-No config, always on. No rule before the very first assistant message.
+The feature is off by default and can be changed without affecting final
+`turn-stats` telemetry:
+
+- `/turn-separator on`
+- `/turn-separator off`
+- `/turn-separator toggle`
+- `/turn-separator status`
+
+The choice is persisted in `~/.pi/agent/turn-separator.json`. There is no rule
+before the first assistant message, and disabling the feature does not hide
+historical separators already stored in the transcript.
 
 ## Dependencies
 

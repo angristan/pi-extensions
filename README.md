@@ -38,7 +38,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | [`hyperlinks`](extensions/hyperlinks/) | Render local file paths as clickable OSC 8 terminal hyperlinks, and expose the helper to other extensions |
 | [`overlay-stack`](extensions/overlay-stack/) | Composes independent top-right overlay cards and toggles them with `Ctrl+Shift+O` or `/overlay` |
 | [`petit-chat-input-bar`](extensions/petit-chat-input-bar/) | A tiny animated companion sprite above the editor, with smart and manual modes |
-| [`turn-separator`](extensions/turn-separator/) | Dim rule between tool loops with right-aligned per-response TTFT/TPS and long-step timing |
+| [`turn-separator`](extensions/turn-separator/) | Optional, default-off rule between tool loops with per-response TTFT/TPS |
 | [`turn-stats`](extensions/turn-stats/) | Full-turn average timing and token-usage entries plus per-response timing events |
 | [`working-timer`](extensions/working-timer/) | Adds phase text, elapsed time, and an optional spinner style to pi's built-in working row |
 
