@@ -4,17 +4,14 @@ Per-turn timing and token-usage entries appended to the transcript after each
 agent run.
 
 After the agent settles, appends a dim separator line and a compact completion
-row showing wall-clock duration + clock time, throughput (ttft, tps), token
-usage (in/out/cache), and cost — sourced from real usage, not estimated.
+row showing wall-clock duration + clock time, average throughput (`avg ttft`,
+`avg tps`), token usage (in/out/cache), and cost — sourced from real usage, not
+estimated.
 
-```
-──────────────────────────────────────────────────────────────────────────────
-◷ 2m 04s 23:47 │ ttft 480ms tps 42.1 │ ↓4210 (3940 cached) ↑318 │ cache 94% │ $0.21
-```
-
-Throughput renders the **last finalized provider response** (not an average),
-since ttft/tps are inherently per-request. Token usage and cost sum across the
-whole run.
+Final TTFT is the arithmetic mean of measured provider-response TTFTs. Final TPS
+is weighted as total output tokens divided by total generation time; it is not
+an average of per-response rates, which would let tiny responses dominate.
+Token usage and cost sum across the whole run.
 
 Each finalized provider response also publishes a `turn-stats:response` event
 with its output token count, TTFT, and TPS. The `turn-separator` extension uses

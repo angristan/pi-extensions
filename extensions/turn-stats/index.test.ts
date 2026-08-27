@@ -1,10 +1,20 @@
 import { expect, test } from "bun:test";
-import turnStats, { formatDuration, RESPONSE_TIMING_EVENT } from "./index";
+import turnStats, { aggregateResponseTimings, formatDuration, RESPONSE_TIMING_EVENT } from "./index";
 
 test("formats user-visible run durations", () => {
 	expect(formatDuration(400)).toBe("<1s");
 	expect(formatDuration(61_000)).toBe("1m 01s");
 	expect(formatDuration(3_661_000)).toBe("1h 01m");
+});
+
+test("averages TTFT and weights TPS by generation time", () => {
+	const summary = aggregateResponseTimings([
+		{ requestStartedAt: 0, firstTokenAt: 100, endedAt: 1_100, outputTokens: 100, ttftMs: 100, tokensPerSecond: 100 },
+		{ requestStartedAt: 2_000, firstTokenAt: 2_400, endedAt: 4_400, outputTokens: 100, ttftMs: 400, tokensPerSecond: 50 },
+	]);
+
+	expect(summary).toMatchObject({ responseCount: 2, averageTtftMs: 250 });
+	expect(summary?.tokensPerSecond).toBeCloseTo(66.667, 3);
 });
 
 test("records timing and aggregate usage when the full run settles", () => {
@@ -50,7 +60,8 @@ test("records timing and aggregate usage when the full run settles", () => {
 	});
 	expect(entries[0].data.cacheHitPercent).toBeCloseTo(53.409, 3);
 	expect(entries[0].data.elapsedMs).toBeGreaterThanOrEqual(0);
-	expect(entries[0].data.timing.ttftMs).toBeGreaterThanOrEqual(0);
+	expect(entries[0].data.averageTiming).toMatchObject({ responseCount: 1 });
+	expect(entries[0].data.averageTiming.averageTtftMs).toBeGreaterThanOrEqual(0);
 	expect(emitted).toContainEqual({
 		channel: RESPONSE_TIMING_EVENT,
 		data: expect.objectContaining({ outputTokens: 20, ttftMs: expect.any(Number) }),
@@ -59,13 +70,13 @@ test("records timing and aggregate usage when the full run settles", () => {
 	const rendered = renderer({ data: {
 		endedAt: Date.now(),
 		elapsedMs: 2_000,
-		timing: { requestStartedAt: 0, ttftMs: 200, tokensPerSecond: 20 },
+		averageTiming: { responseCount: 3, averageTtftMs: 200, tokensPerSecond: 20 },
 		usage: { input: 10, output: 20, cacheRead: 30, cacheWrite: 0, cost: 0.5 },
 		cacheHitPercent: 75,
 	} }, {}, identityTheme).render(120).join("\n");
 	expect(rendered).toContain("duration 2s");
-	expect(rendered).toContain("ttft 200ms");
-	expect(rendered).toContain("tps 20/s");
+	expect(rendered).toContain("avg ttft 200ms");
+	expect(rendered).toContain("avg tps 20/s");
 	expect(rendered).toContain("hit 75%");
 	expect(rendered).toContain("$0.50");
 });

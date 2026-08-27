@@ -46,7 +46,7 @@ interface RunUsage {
 	cost: number;
 }
 
-interface ResponseTiming {
+export interface ResponseTiming {
 	requestStartedAt: number;
 	firstTokenAt?: number;
 	endedAt?: number;
@@ -55,11 +55,19 @@ interface ResponseTiming {
 	tokensPerSecond?: number;
 }
 
+export interface AggregateResponseTiming {
+	responseCount: number;
+	averageTtftMs?: number;
+	tokensPerSecond?: number;
+}
+
 interface CompletionEntry {
 	startedAt: number;
 	endedAt: number;
 	elapsedMs: number;
+	/** Legacy last-response timing, retained for restored entries. */
 	timing?: ResponseTiming;
+	averageTiming?: AggregateResponseTiming;
 	usage?: RunUsage;
 	cacheHitPercent?: number;
 }
@@ -183,6 +191,39 @@ function finalizeResponseTiming(
 	};
 }
 
+export function aggregateResponseTimings(timings: readonly ResponseTiming[]): AggregateResponseTiming | undefined {
+	if (timings.length === 0) return undefined;
+
+	let ttftTotalMs = 0;
+	let ttftCount = 0;
+	let throughputTokens = 0;
+	let generationMs = 0;
+	for (const timing of timings) {
+		if (Number.isFinite(timing.ttftMs) && timing.ttftMs! >= 0) {
+			ttftTotalMs += timing.ttftMs!;
+			ttftCount += 1;
+		}
+
+		const outputTokens = Math.max(0, timing.outputTokens ?? 0);
+		const startedAt = timing.firstTokenAt ?? timing.requestStartedAt;
+		const durationMs = timing.endedAt === undefined ? 0 : Math.max(0, timing.endedAt - startedAt);
+		if (outputTokens > 0 && durationMs > 0) {
+			throughputTokens += outputTokens;
+			generationMs += durationMs;
+		}
+	}
+
+	return {
+		responseCount: timings.length,
+		averageTtftMs: ttftCount > 0 ? ttftTotalMs / ttftCount : undefined,
+		// Weight throughput by generated tokens and generation time. Averaging
+		// individual rates would let tiny responses dominate the full-turn value.
+		tokensPerSecond: throughputTokens > 0 && generationMs > 0
+			? throughputTokens / (generationMs / 1_000)
+			: undefined,
+	};
+}
+
 /** Accumulate one persisted usage record into the running per-turn totals. */
 function accumulateUsage(run: RunUsage, source: { usage?: any }, resolvedCost = 0): void {
 	const usage = source.usage;
@@ -201,10 +242,10 @@ export default function (pi: ExtensionAPI) {
 	let startedAt: number | undefined;
 
 	// Per-run timing. `activeResponseTiming` covers the request -> first-token ->
-	// message_end lifecycle of a single provider call; `latestResponseTiming` holds
-	// the most recent finalized timing so a retry-dominating last message still wins.
+	// message_end lifecycle of one provider call. Finalized responses accumulate so
+	// the settled row can report an arithmetic mean TTFT and time-weighted TPS.
 	let activeResponseTiming: ResponseTiming | undefined;
-	let latestResponseTiming: ResponseTiming | undefined;
+	let responseTimings: ResponseTiming[] = [];
 	let runUsage: RunUsage | undefined;
 
 	pi.registerEntryRenderer<CompletionEntry>(ENTRY_TYPE, (entry: any, _options: any, theme: any) => {
@@ -222,14 +263,18 @@ export default function (pi: ExtensionAPI) {
 			`${formatClock(data.endedAt)} ${theme.fg("dim", "·")} ${theme.fg("dim", "duration")} ${formatDuration(data.elapsedMs)}`,
 		);
 
-		// ── Throughput: ttft + tps for the last finalized provider response ────────
-		// We render the last response rather than averaging because ttft/tps are
-		// inherently per-request and an average across retries would be misleading.
-		const timing = data.timing;
-		if (timing) {
+		// ── Throughput: average TTFT + weighted TPS across provider responses ───────
+		const averageTiming = data.averageTiming;
+		if (averageTiming) {
 			const bits: string[] = [];
-			if (timing.ttftMs !== undefined) bits.push(`${theme.fg("dim", "ttft")} ${formatLatency(timing.ttftMs)}`);
-			if (timing.tokensPerSecond !== undefined) bits.push(`${theme.fg("dim", "tps")} ${formatTokensPerSecond(timing.tokensPerSecond)}`);
+			if (averageTiming.averageTtftMs !== undefined) bits.push(`${theme.fg("dim", "avg ttft")} ${formatLatency(averageTiming.averageTtftMs)}`);
+			if (averageTiming.tokensPerSecond !== undefined) bits.push(`${theme.fg("dim", "avg tps")} ${formatTokensPerSecond(averageTiming.tokensPerSecond)}`);
+			if (bits.length > 0) groups.push(bits.join(theme.fg("dim", "  ")));
+		} else if (data.timing) {
+			// Restored entries written before aggregate timing keep their original labels.
+			const bits: string[] = [];
+			if (data.timing.ttftMs !== undefined) bits.push(`${theme.fg("dim", "ttft")} ${formatLatency(data.timing.ttftMs)}`);
+			if (data.timing.tokensPerSecond !== undefined) bits.push(`${theme.fg("dim", "tps")} ${formatTokensPerSecond(data.timing.tokensPerSecond)}`);
 			if (bits.length > 0) groups.push(bits.join(theme.fg("dim", "  ")));
 		}
 
@@ -266,7 +311,7 @@ export default function (pi: ExtensionAPI) {
 
 	const resetResponseTiming = () => {
 		activeResponseTiming = undefined;
-		latestResponseTiming = undefined;
+		responseTimings = [];
 	};
 
 	pi.on("session_start", () => {
@@ -286,10 +331,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("before_provider_request", () => {
 		// Mark the start of a provider request so TTFT can be measured at the next
-		// first-output event. We do not clear `latestResponseTiming` here: if this
-		// request is a retry that never streams a new first token (e.g. an immediate
-		// error), the previously finalized timing still represents the last good
-		// response and we keep it rather than showing a blank timing.
+		// first-output event.
 		activeResponseTiming = { requestStartedAt: Date.now() };
 	});
 
@@ -311,15 +353,16 @@ export default function (pi: ExtensionAPI) {
 		if (message.role === "assistant") {
 			// Finalize timing for this provider response.
 			const endedAt = Date.now();
-			latestResponseTiming = finalizeResponseTiming(
+			const finalizedTiming = finalizeResponseTiming(
 				activeResponseTiming ?? { requestStartedAt: endedAt },
 				message,
 				endedAt,
 			);
+			responseTimings.push(finalizedTiming);
 			pi.events.emit(RESPONSE_TIMING_EVENT, {
-				outputTokens: latestResponseTiming.outputTokens ?? 0,
-				ttftMs: latestResponseTiming.ttftMs,
-				tokensPerSecond: latestResponseTiming.tokensPerSecond,
+				outputTokens: finalizedTiming.outputTokens ?? 0,
+				ttftMs: finalizedTiming.ttftMs,
+				tokensPerSecond: finalizedTiming.tokensPerSecond,
 			} satisfies ResponseTimingEvent);
 			activeResponseTiming = undefined;
 		}
@@ -350,7 +393,7 @@ export default function (pi: ExtensionAPI) {
 			startedAt: effectiveStartedAt,
 			endedAt,
 			elapsedMs: Math.max(0, endedAt - effectiveStartedAt),
-			timing: latestResponseTiming,
+			averageTiming: aggregateResponseTimings(responseTimings),
 			usage,
 			cacheHitPercent,
 		} satisfies CompletionEntry);
