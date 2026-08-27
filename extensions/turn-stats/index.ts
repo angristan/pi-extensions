@@ -267,8 +267,8 @@ export default function (pi: ExtensionAPI) {
 		const averageTiming = data.averageTiming;
 		if (averageTiming) {
 			const bits: string[] = [];
-			if (averageTiming.averageTtftMs !== undefined) bits.push(`${theme.fg("dim", "avg ttft")} ${formatLatency(averageTiming.averageTtftMs)}`);
-			if (averageTiming.tokensPerSecond !== undefined) bits.push(`${theme.fg("dim", "avg tps")} ${formatTokensPerSecond(averageTiming.tokensPerSecond)}`);
+			if (averageTiming.averageTtftMs !== undefined) bits.push(`${theme.fg("dim", "ttft")} ${formatLatency(averageTiming.averageTtftMs)}`);
+			if (averageTiming.tokensPerSecond !== undefined) bits.push(`${theme.fg("dim", "tps")} ${formatTokensPerSecond(averageTiming.tokensPerSecond)}`);
 			if (bits.length > 0) groups.push(bits.join(theme.fg("dim", "  ")));
 		} else if (data.timing) {
 			// Restored entries written before aggregate timing keep their original labels.

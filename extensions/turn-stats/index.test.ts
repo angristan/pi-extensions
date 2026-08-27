@@ -75,8 +75,9 @@ test("records timing and aggregate usage when the full run settles", () => {
 		cacheHitPercent: 75,
 	} }, {}, identityTheme).render(120).join("\n");
 	expect(rendered).toContain("duration 2s");
-	expect(rendered).toContain("avg ttft 200ms");
-	expect(rendered).toContain("avg tps 20/s");
+	expect(rendered).toContain("ttft 200ms");
+	expect(rendered).toContain("tps 20/s");
+	expect(rendered).not.toContain("avg");
 	expect(rendered).toContain("hit 75%");
 	expect(rendered).toContain("$0.50");
 });

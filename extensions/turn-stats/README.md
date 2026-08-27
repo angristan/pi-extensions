@@ -4,9 +4,9 @@ Per-turn timing and token-usage entries appended to the transcript after each
 agent run.
 
 After the agent settles, appends a dim separator line and a compact completion
-row showing wall-clock duration + clock time, average throughput (`avg ttft`,
-`avg tps`), token usage (in/out/cache), and cost — sourced from real usage, not
-estimated.
+row showing wall-clock duration + clock time, average response performance
+(`ttft`, `tps`), token usage (in/out/cache), and cost — sourced from real usage,
+not estimated.
 
 Final TTFT is the arithmetic mean of measured provider-response TTFTs. Final TPS
 is weighted as total output tokens divided by total generation time; it is not
