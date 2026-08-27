@@ -7,6 +7,13 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 
 const ENTRY_TYPE = "turn-stats";
+export const RESPONSE_TIMING_EVENT = "turn-stats:response";
+
+export interface ResponseTimingEvent {
+	outputTokens: number;
+	ttftMs?: number;
+	tokensPerSecond?: number;
+}
 
 /**
  * The stats block: a dim separator followed by the stats line. The stats text is
@@ -97,7 +104,7 @@ function formatTokensCompact(value: number): string {
 }
 
 /** Human-readable latency: `340ms`, `1.20s`, `2.5s`, `3m04s`. */
-function formatLatency(milliseconds: number): string {
+export function formatLatency(milliseconds: number): string {
 	const safe = Math.max(0, milliseconds);
 	if (safe < 1_000) return `${Math.round(safe)}ms`;
 	const seconds = safe / 1_000;
@@ -109,7 +116,7 @@ function formatLatency(milliseconds: number): string {
 }
 
 /** Throughput, e.g. `42.5/s`, `120/s`. */
-function formatTokensPerSecond(value: number): string {
+export function formatTokensPerSecond(value: number): string {
 	if (!Number.isFinite(value) || value <= 0) return "0/s";
 	if (value < 10) return `${value.toFixed(1)}/s`;
 	if (value < 100) return `${value.toFixed(0)}/s`;
@@ -309,6 +316,11 @@ export default function (pi: ExtensionAPI) {
 				message,
 				endedAt,
 			);
+			pi.events.emit(RESPONSE_TIMING_EVENT, {
+				outputTokens: latestResponseTiming.outputTokens ?? 0,
+				ttftMs: latestResponseTiming.ttftMs,
+				tokensPerSecond: latestResponseTiming.tokensPerSecond,
+			} satisfies ResponseTimingEvent);
 			activeResponseTiming = undefined;
 		}
 

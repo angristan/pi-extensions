@@ -16,8 +16,12 @@ Throughput renders the **last finalized provider response** (not an average),
 since ttft/tps are inherently per-request. Token usage and cost sum across the
 whole run.
 
+Each finalized provider response also publishes a `turn-stats:response` event
+with its output token count, TTFT, and TPS. The `turn-separator` extension uses
+this event to label every tool-loop boundary without reimplementing timing.
+
 ## Dependencies
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
 - **Depends on extensions:** None.
-- **Used by extensions:** None.
+- **Used by extensions:** [`turn-separator`](../turn-separator/).

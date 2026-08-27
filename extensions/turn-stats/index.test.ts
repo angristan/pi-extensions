@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import turnStats, { formatDuration } from "./index";
+import turnStats, { formatDuration, RESPONSE_TIMING_EVENT } from "./index";
 
 test("formats user-visible run durations", () => {
 	expect(formatDuration(400)).toBe("<1s");
@@ -11,10 +11,14 @@ test("records timing and aggregate usage when the full run settles", () => {
 	const handlers = new Map<string, (...args: any[]) => any>();
 	let renderer: any;
 	const entries: any[] = [];
+	const emitted: Array<{ channel: string; data: any }> = [];
 	turnStats({
 		on: (name: string, handler: any) => handlers.set(name, handler),
 		registerEntryRenderer: (_name: string, value: any) => { renderer = value; },
 		appendEntry: (type: string, data: any) => entries.push({ type, data }),
+		events: {
+			emit: (channel: string, data: any) => emitted.push({ channel, data }),
+		},
 	} as any);
 	const ctx = { modelRegistry: { find: () => undefined } };
 	handlers.get("session_start")?.();
@@ -47,6 +51,10 @@ test("records timing and aggregate usage when the full run settles", () => {
 	expect(entries[0].data.cacheHitPercent).toBeCloseTo(53.409, 3);
 	expect(entries[0].data.elapsedMs).toBeGreaterThanOrEqual(0);
 	expect(entries[0].data.timing.ttftMs).toBeGreaterThanOrEqual(0);
+	expect(emitted).toContainEqual({
+		channel: RESPONSE_TIMING_EVENT,
+		data: expect.objectContaining({ outputTokens: 20, ttftMs: expect.any(Number) }),
+	});
 	const identityTheme = { fg: (_color: string, text: string) => text };
 	const rendered = renderer({ data: {
 		endedAt: Date.now(),
