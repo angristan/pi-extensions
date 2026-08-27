@@ -19,7 +19,7 @@ you pick:     ▶ new branch
 Supports multiple questions in one call, "other" free-text answers, and
 secret inputs. Every prompt shows its position and total (`Question 2/3`) with
 accented progress, a subdued separator, and readable theme-text question copy.
-The terminal title stays on the session name while a response is pending.
+The terminal title becomes `❓ <session name>` while a response is pending.
 When running inside Herdr, its agent-state integration receives balanced
 `herdr:blocked` events, so the pane and sidebar show the question status instead
 of **working** until the prompt is answered or cancelled. The status label is
@@ -46,5 +46,5 @@ leaves Pi.
 ## Dependencies
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
-- **Depends on extensions:** None.
+- **Depends on extensions:** None; `footer` keeps the pending title pinned while its activity spinner runs.
 - **Used by extensions:** `telegram` and Herdr's agent-state integration, through runtime events.

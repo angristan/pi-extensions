@@ -10,6 +10,7 @@ function registeredTool(
 ) {
 	let tool: any;
 	questions({
+		getSessionName: () => "Current session",
 		registerTool: (definition: any) => { tool = definition; },
 		on(name: string, handler: BusHandler) {
 			(lifecycleHandlers[name] ??= []).push(handler);
@@ -32,7 +33,7 @@ function emitBus(busHandlers: Record<string, BusHandler[]>, name: string, payloa
 	for (const handler of busHandlers[name] ?? []) handler(payload);
 }
 
-test("collects answers without replacing the session title", async () => {
+test("keeps the session name in the pending title", async () => {
 	const events: Array<{ name: string; payload: any }> = [];
 	const tool = registeredTool(events);
 	const selected: string[] = [];
@@ -60,8 +61,9 @@ test("collects answers without replacing the session title", async () => {
 		"<accent><b>Question 1/2</b></accent><dim> · </dim><text>Pick a color</text>",
 		"<accent><b>Question 2/2</b></accent><dim> · </dim><text>Why?</text>",
 	]);
-	expect(titles).toEqual([]);
+	expect(titles).toEqual(["❓ Current session", "Current session"]);
 	expect(events).toEqual([
+		{ name: "terminal-title:override", payload: { source: "questions", title: "❓ Current session" } },
 		{ name: "herdr:blocked", payload: { active: true, label: "Waiting for user input" } },
 		{ name: "questions:waiting", payload: { requestId: "id:0", questionnaireId: "id", question: "Pick a color", options: ["Red", "Blue"], allowOther: false, index: 1, total: 2, secret: false } },
 		{ name: "herdr:blocked", payload: { active: false } },
@@ -70,6 +72,7 @@ test("collects answers without replacing the session title", async () => {
 		{ name: "questions:waiting", payload: { requestId: "id:1", questionnaireId: "id", question: "Why?", options: [], allowOther: false, index: 2, total: 2, secret: false } },
 		{ name: "herdr:blocked", payload: { active: false } },
 		{ name: "questions:resolved", payload: { requestId: "id:1", questionnaireId: "id", index: 2, total: 2, outcome: "answered", source: "tui" } },
+		{ name: "terminal-title:override", payload: { source: "questions", title: undefined } },
 	]);
 	expect(result.content[0].text).toBe("color: Blue\nwhy: Because it is calm");
 	expect(result.details.interrupted).toBe(false);
