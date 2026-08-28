@@ -15,7 +15,7 @@ const mockedComplete = mock(async (...args: any[]) => {
 });
 const { buildGoalContext, renderGoalOverlayBody, default: goalExtension } = await import("./index");
 
-function makeHarness() {
+function makeHarness(options: { judgeRetryPolicy?: { enabled: boolean; maxRetries: number; baseDelayMs: number } } = {}) {
 	judgeResponses.length = 0;
 	judgeCalls.length = 0;
 	const handlers: Record<string, Array<(event: any, ctx: any) => any>> = {};
@@ -75,6 +75,7 @@ function makeHarness() {
 			registeredOverlayCards.push(definition);
 			return { invalidate() {}, unregister() {} };
 		},
+		judgeRetryPolicy: options.judgeRetryPolicy,
 	});
 
 	return {
@@ -440,6 +441,59 @@ test("terminal provider errors block the active goal instead of continuing", asy
 	expect(state.blockedAudit.evidence).toBe("429 too many requests");
 	expect(sentMessages(h, "goal-context")).toHaveLength(contextsBeforeError);
 	expect(sentMessages(h, "goal-continuation")).toHaveLength(continuationsBeforeError);
+});
+
+test("goal_complete silently retries a transient judge failure", async () => {
+	const h = makeHarness({ judgeRetryPolicy: { enabled: true, maxRetries: 1, baseDelayMs: 0 } });
+	await h.commands.goal.handler("ship the feature", h.ctx);
+	judgeResponses.push({
+		stopReason: "error",
+		errorMessage: "Your requests have exceeded rate limit.",
+		content: [],
+	});
+	queueJudge("allow");
+
+	const result = await h.tools.goal_complete.execute("call", { summary: "done" }, undefined, undefined, h.ctx);
+
+	expect(result.details).toMatchObject({ ok: true });
+	expect(latestGoalState(h).status).toBe("complete");
+	expect(judgeCalls).toHaveLength(2);
+	expect(result.content[0].text).not.toContain("could not be audited");
+});
+
+test("goal_complete surfaces one failure after transient judge retries are exhausted", async () => {
+	const h = makeHarness({ judgeRetryPolicy: { enabled: true, maxRetries: 2, baseDelayMs: 0 } });
+	await h.commands.goal.handler("ship the feature", h.ctx);
+	for (let attempt = 0; attempt < 3; attempt++) {
+		judgeResponses.push({
+			stopReason: "error",
+			errorMessage: "HTTP 429 too many requests",
+			content: [],
+		});
+	}
+
+	const result = await h.tools.goal_complete.execute("call", { summary: "done" }, undefined, undefined, h.ctx);
+
+	expect(judgeCalls).toHaveLength(3);
+	expect(result.details).toMatchObject({ ok: false, judgeError: true });
+	expect(result.content[0].text).toContain("HTTP 429 too many requests");
+	expect(latestGoalState(h).status).toBe("active");
+});
+
+test("goal_complete does not retry non-transient judge failures", async () => {
+	const h = makeHarness({ judgeRetryPolicy: { enabled: true, maxRetries: 2, baseDelayMs: 0 } });
+	await h.commands.goal.handler("ship the feature", h.ctx);
+	judgeResponses.push({
+		stopReason: "error",
+		errorMessage: "insufficient_quota: billing quota exceeded",
+		content: [],
+	});
+
+	const result = await h.tools.goal_complete.execute("call", { summary: "done" }, undefined, undefined, h.ctx);
+
+	expect(judgeCalls).toHaveLength(1);
+	expect(result.details).toMatchObject({ ok: false, judgeError: true });
+	expect(result.content[0].text).toContain("insufficient_quota");
 });
 
 test("goal_complete is vetoed when the judge says evidence is missing", async () => {

@@ -77,7 +77,9 @@ not drive normal cycles.
 - **Completion status** — the model marks the goal complete by calling
   `goal_complete` when current evidence proves every requirement is satisfied
   and no required work remains. A judge veto keeps the goal active and reports
-  missing evidence or a next action.
+  missing evidence or a next action. Transient provider failures during the
+  nested judge call retry silently with abortable backoff before an unavailable
+  judge is reported.
 - **Blocked audit** — `goal_block` records blockers while leaving the goal
   active until the same blocker has recurred across three settled agent runs.
   At most one report counts per run, including runs with a final tool-less turn.
