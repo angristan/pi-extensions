@@ -3,6 +3,11 @@ import { WebProviderError } from "./provider-error";
 import { parseExaAdvancedSearchText, parseExaSearchText, searchExaWeb } from "./providers/exa";
 import { dateFilter, parseFirecrawlItems } from "./providers/firecrawl";
 
+function restoreEnv(name: string, value: string | undefined): void {
+	if (value === undefined) delete process.env[name];
+	else process.env[name] = value;
+}
+
 describe("provider normalization", () => {
 	test("deduplicates Exa tracking variants and preserves evidence", () => {
 		const results = parseExaSearchText([
@@ -152,7 +157,7 @@ describe("provider normalization", () => {
 		}
 	});
 
-	test("sends configured Exa credentials only in the request header", async () => {
+	test("tries anonymous Exa before configured credentials", async () => {
 		const previousFetch = globalThis.fetch;
 		const previousApiKey = process.env.EXA_API_KEY;
 		let requestUrl = "";
@@ -170,7 +175,7 @@ describe("provider normalization", () => {
 			await searchExaWeb({ query: "credential transport" });
 			expect(requestUrl).toBe("https://mcp.exa.ai/mcp");
 			expect(requestUrl).not.toContain("test-exa-key");
-			expect(requestApiKey).toBe("test-exa-key");
+			expect(requestApiKey).toBeNull();
 		} finally {
 			globalThis.fetch = previousFetch;
 			if (previousApiKey === undefined) delete process.env.EXA_API_KEY;
@@ -178,89 +183,77 @@ describe("provider normalization", () => {
 		}
 	});
 
-	test("falls back anonymously after a keyed Exa budget is exhausted", async () => {
+	test("falls back to paid Exa when anonymous access is rate limited", async () => {
 		const previousFetch = globalThis.fetch;
 		const previousApiKey = process.env.EXA_API_KEY;
-		const previousFallback = process.env.PI_EXA_ANONYMOUS_FALLBACK;
 		const requestApiKeys: Array<string | null> = [];
 		globalThis.fetch = (async (_input, init) => {
 			requestApiKeys.push(new Headers(init?.headers).get("x-api-key"));
 			if (requestApiKeys.length === 1) {
-				return new Response(JSON.stringify({ error: "API key spending budget exceeded" }), { status: 402 });
+				return new Response("anonymous rate limit", { status: 429 });
 			}
 			return new Response(JSON.stringify({
 				jsonrpc: "2.0",
-				result: { content: [{ type: "text", text: "Title: Docs\nURL: https://example.com/docs\nHighlights:\nAnonymous result." }] },
+				result: { content: [{ type: "text", text: "Title: Docs\nURL: https://example.com/docs\nHighlights:\nPaid result." }] },
 			}), { headers: { "Content-Type": "application/json" } });
 		}) as typeof fetch;
 		try {
 			process.env.EXA_API_KEY = "test-exa-key";
-			process.env.PI_EXA_ANONYMOUS_FALLBACK = "1";
-			const result = await searchExaWeb({ query: "budget fallback" });
-			expect(requestApiKeys).toEqual(["test-exa-key", null]);
-			expect(result.results[0]?.snippets).toEqual(["Anonymous result."]);
+			const result = await searchExaWeb({ query: "rate-limit fallback" });
+			expect(requestApiKeys).toEqual([null, "test-exa-key"]);
+			expect(result.results[0]?.snippets).toEqual(["Paid result."]);
 		} finally {
 			globalThis.fetch = previousFetch;
 			if (previousApiKey === undefined) delete process.env.EXA_API_KEY;
 			else process.env.EXA_API_KEY = previousApiKey;
-			if (previousFallback === undefined) delete process.env.PI_EXA_ANONYMOUS_FALLBACK;
-			else process.env.PI_EXA_ANONYMOUS_FALLBACK = previousFallback;
 		}
 	});
 
-	test("falls back anonymously after an MCP tool reports exhausted credits", async () => {
+	test("falls back to paid Exa after an anonymous MCP quota error", async () => {
 		const previousFetch = globalThis.fetch;
 		const previousApiKey = process.env.EXA_API_KEY;
-		const previousFallback = process.env.PI_EXA_ANONYMOUS_FALLBACK;
 		const requestApiKeys: Array<string | null> = [];
 		globalThis.fetch = (async (_input, init) => {
 			requestApiKeys.push(new Headers(init?.headers).get("x-api-key"));
 			if (requestApiKeys.length === 1) {
 				return new Response(JSON.stringify({
 					jsonrpc: "2.0",
-					result: { content: [{ type: "text", text: "web_search_exa error (402): Account credits exhausted" }], isError: true },
+					result: { content: [{ type: "text", text: "web_search_exa error (402): Anonymous quota exhausted" }], isError: true },
 				}), { headers: { "Content-Type": "application/json" } });
 			}
 			return new Response(JSON.stringify({
 				jsonrpc: "2.0",
-				result: { content: [{ type: "text", text: "Title: Docs\nURL: https://example.com/docs\nHighlights:\nAnonymous result." }] },
+				result: { content: [{ type: "text", text: "Title: Docs\nURL: https://example.com/docs\nHighlights:\nPaid result." }] },
 			}), { headers: { "Content-Type": "application/json" } });
 		}) as typeof fetch;
 		try {
 			process.env.EXA_API_KEY = "test-exa-key";
-			process.env.PI_EXA_ANONYMOUS_FALLBACK = "true";
-			const result = await searchExaWeb({ query: "tool budget fallback" });
-			expect(requestApiKeys).toEqual(["test-exa-key", null]);
-			expect(result.results[0]?.snippets).toEqual(["Anonymous result."]);
+			const result = await searchExaWeb({ query: "tool quota fallback" });
+			expect(requestApiKeys).toEqual([null, "test-exa-key"]);
+			expect(result.results[0]?.snippets).toEqual(["Paid result."]);
 		} finally {
 			globalThis.fetch = previousFetch;
 			if (previousApiKey === undefined) delete process.env.EXA_API_KEY;
 			else process.env.EXA_API_KEY = previousApiKey;
-			if (previousFallback === undefined) delete process.env.PI_EXA_ANONYMOUS_FALLBACK;
-			else process.env.PI_EXA_ANONYMOUS_FALLBACK = previousFallback;
 		}
 	});
 
-	test("does not use anonymous fallback unless explicitly enabled", async () => {
+	test("does not retry a quota error without a configured paid key", async () => {
 		const previousFetch = globalThis.fetch;
 		const previousApiKey = process.env.EXA_API_KEY;
-		const previousFallback = process.env.PI_EXA_ANONYMOUS_FALLBACK;
 		let calls = 0;
 		globalThis.fetch = (async () => {
 			calls++;
-			return new Response(JSON.stringify({ error: "API key spending budget exceeded" }), { status: 402 });
+			return new Response(JSON.stringify({ error: "Anonymous quota exhausted" }), { status: 402 });
 		}) as typeof fetch;
 		try {
-			process.env.EXA_API_KEY = "test-exa-key";
-			delete process.env.PI_EXA_ANONYMOUS_FALLBACK;
-			await expect(searchExaWeb({ query: "budget failure" })).rejects.toThrow("Exa HTTP 402");
+			delete process.env.EXA_API_KEY;
+			await expect(searchExaWeb({ query: "quota failure" })).rejects.toThrow("Exa HTTP 402");
 			expect(calls).toBe(1);
 		} finally {
 			globalThis.fetch = previousFetch;
 			if (previousApiKey === undefined) delete process.env.EXA_API_KEY;
 			else process.env.EXA_API_KEY = previousApiKey;
-			if (previousFallback === undefined) delete process.env.PI_EXA_ANONYMOUS_FALLBACK;
-			else process.env.PI_EXA_ANONYMOUS_FALLBACK = previousFallback;
 		}
 	});
 
@@ -290,6 +283,7 @@ describe("provider normalization", () => {
 
 	test("retries Exa rate limits six times before succeeding", async () => {
 		const previousFetch = globalThis.fetch;
+		const previousApiKey = process.env.EXA_API_KEY;
 		const random = spyOn(Math, "random").mockReturnValue(0);
 		let calls = 0;
 		globalThis.fetch = (async () => {
@@ -301,17 +295,20 @@ describe("provider normalization", () => {
 			}), { headers: { "Content-Type": "application/json" } });
 		}) as typeof fetch;
 		try {
+			delete process.env.EXA_API_KEY;
 			const result = await searchExaWeb({ query: "retry test" });
 			expect(calls).toBe(7);
 			expect(result.results[0]).toMatchObject({ url: "https://example.com/docs", title: "Docs" });
 		} finally {
 			globalThis.fetch = previousFetch;
+			restoreEnv("EXA_API_KEY", previousApiKey);
 			random.mockRestore();
 		}
 	});
 
 	test("surfaces an Exa rate limit after seven attempts", async () => {
 		const previousFetch = globalThis.fetch;
+		const previousApiKey = process.env.EXA_API_KEY;
 		const random = spyOn(Math, "random").mockReturnValue(0);
 		let calls = 0;
 		globalThis.fetch = (async () => {
@@ -319,16 +316,19 @@ describe("provider normalization", () => {
 			return new Response("still rate limited", { status: 429, headers: { "Retry-After": "0" } });
 		}) as typeof fetch;
 		try {
+			delete process.env.EXA_API_KEY;
 			await expect(searchExaWeb({ query: "retry test" })).rejects.toThrow("Exa HTTP 429");
 			expect(calls).toBe(7);
 		} finally {
 			globalThis.fetch = previousFetch;
+			restoreEnv("EXA_API_KEY", previousApiKey);
 			random.mockRestore();
 		}
 	});
 
 	test("falls back immediately when Retry-After exceeds the retry budget", async () => {
 		const previousFetch = globalThis.fetch;
+		const previousApiKey = process.env.EXA_API_KEY;
 		const random = spyOn(Math, "random").mockReturnValue(0);
 		let calls = 0;
 		globalThis.fetch = (async () => {
@@ -336,10 +336,12 @@ describe("provider normalization", () => {
 			return new Response("long rate limit", { status: 429, headers: { "Retry-After": "300" } });
 		}) as typeof fetch;
 		try {
+			delete process.env.EXA_API_KEY;
 			await expect(searchExaWeb({ query: "retry test" })).rejects.toThrow("Exa HTTP 429");
 			expect(calls).toBe(1);
 		} finally {
 			globalThis.fetch = previousFetch;
+			restoreEnv("EXA_API_KEY", previousApiKey);
 			random.mockRestore();
 		}
 	});

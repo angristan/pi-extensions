@@ -22,10 +22,6 @@ function configuredApiKey(): string | undefined {
 	return process.env.EXA_API_KEY?.trim() || undefined;
 }
 
-function allowsAnonymousFallback(): boolean {
-	return /^(?:1|true|yes|on)$/i.test(process.env.PI_EXA_ANONYMOUS_FALLBACK?.trim() ?? "");
-}
-
 function requestHeaders(apiKey: string | undefined): Record<string, string> {
 	const headers: Record<string, string> = {
 		Accept: "application/json, text/event-stream",
@@ -86,14 +82,15 @@ async function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void
 
 async function callExa(tool: string, args: Record<string, unknown>, options: ProviderOptions = {}): Promise<{ text: string; elapsedMs: number }> {
 	const started = performance.now();
-	let apiKey = configuredApiKey();
-	let mayFallbackAnonymously = Boolean(apiKey) && allowsAnonymousFallback();
+	const paidApiKey = configuredApiKey();
+	let apiKey: string | undefined;
+	let mayFallbackToPaid = Boolean(paidApiKey);
 	let rateLimitAttempt = 0;
 
-	const useAnonymousFallback = (status: number | undefined): boolean => {
-		if (status !== 402 || !mayFallbackAnonymously) return false;
-		apiKey = undefined;
-		mayFallbackAnonymously = false;
+	const usePaidFallback = (status: number | undefined): boolean => {
+		if (!mayFallbackToPaid || !status || ![401, 402, 403, 429].includes(status)) return false;
+		apiKey = paidApiKey;
+		mayFallbackToPaid = false;
 		rateLimitAttempt = 0;
 		return true;
 	};
@@ -115,7 +112,7 @@ async function callExa(tool: string, args: Record<string, unknown>, options: Pro
 			throw new WebProviderError(`Exa request failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
 		}
 		const raw = await response.text();
-		if (useAnonymousFallback(response.status)) continue;
+		if (usePaidFallback(response.status)) continue;
 		if (response.status === 429 && rateLimitAttempt < RATE_LIMIT_RETRY_DELAYS_MS.length) {
 			const delayMs = retryAfterMs(response) ?? RATE_LIMIT_RETRY_DELAYS_MS[rateLimitAttempt]!;
 			rateLimitAttempt++;
@@ -141,7 +138,7 @@ async function callExa(tool: string, args: Record<string, unknown>, options: Pro
 		}
 		if (payload?.error) {
 			const error = mcpToolError(JSON.stringify(payload.error));
-			if (useAnonymousFallback(error.status)) continue;
+			if (usePaidFallback(error.status)) continue;
 			throw error;
 		}
 		const text = (payload?.result?.content ?? [])
@@ -151,7 +148,7 @@ async function callExa(tool: string, args: Record<string, unknown>, options: Pro
 			.trim();
 		if (payload?.result?.isError === true) {
 			const error = mcpToolError(text);
-			if (useAnonymousFallback(error.status)) continue;
+			if (usePaidFallback(error.status)) continue;
 			throw error;
 		}
 		return { text, elapsedMs: performance.now() - started };
