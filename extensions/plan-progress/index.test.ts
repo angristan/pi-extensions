@@ -7,6 +7,11 @@ const theme = {
 	italic: (text: string) => text,
 	strikethrough: (text: string) => text,
 };
+const ansiTheme = {
+	...theme,
+	fg: (_color: string, text: string) => `\x1b[38m${text}\x1b[39m`,
+	strikethrough: (text: string) => `\x1b[9m${text}\x1b[29m`,
+};
 
 function createHarness(branch: any[] = []) {
 	const tools: any[] = [];
@@ -75,11 +80,6 @@ test("wrapped plan result lines retain their left padding", () => {
 });
 
 test("terminates ANSI styles before overlay compositor padding", () => {
-	const ansiTheme = {
-		...theme,
-		fg: (_color: string, text: string) => `\x1b[38m${text}\x1b[39m`,
-		strikethrough: (text: string) => `\x1b[9m${text}\x1b[29m`,
-	};
 	const component = updatePlan.renderResult({
 		details: { items: [{ step: "Completed step", status: "completed" }] },
 	}, {}, ansiTheme);
@@ -107,6 +107,17 @@ async function executePlan(harness: ReturnType<typeof createHarness>, params: an
 		harness.ctx,
 	);
 }
+
+test("terminates completed-task styles before overlay card padding", async () => {
+	const harness = createHarness();
+	await executePlan(harness, {
+		plan: [{ step: "Completed step", status: "completed" }],
+	});
+
+	const completedLine = harness.overlayCardDefinition.renderBody(46, 20, ansiTheme)[0];
+	expect(completedLine).toContain("\x1b[29m");
+	expect(completedLine).toEndWith("\x1b[0m ");
+});
 
 test("narrows the overlay without reducing vertical detail", async () => {
 	const harness = createHarness();

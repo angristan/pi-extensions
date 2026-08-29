@@ -430,7 +430,7 @@ function renderPlanBody(
 		? body.slice(0, Math.max(0, maxRows - 1))
 		: body;
 	if (hiddenRows > 0) visibleBody.push(theme.fg("dim", `… ${hiddenRows} more row${hiddenRows === 1 ? "" : "s"}; /plan-status for full list`));
-	return visibleBody.map((line) => truncateToWidth(line, width, ""));
+	return visibleBody.map((line) => sealAnsiLine(truncateToWidth(line, width, ""), width));
 }
 
 interface PlanProgressDependencies {
