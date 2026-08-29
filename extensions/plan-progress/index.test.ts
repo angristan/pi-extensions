@@ -14,6 +14,7 @@ function createHarness(branch: any[] = []) {
 	const commands: Record<string, any> = {};
 	const appended: Array<{ customType: string; data: any }> = [];
 	const notifications: Array<{ message: string; level: string }> = [];
+	let overlayCardDefinition: any;
 	planProgress({
 		appendEntry(customType: string, data: any) { appended.push({ customType, data }); },
 		events: { emit() {}, on() {} },
@@ -21,7 +22,10 @@ function createHarness(branch: any[] = []) {
 		registerCommand(name: string, command: any) { commands[name] = command; },
 		registerTool(tool: any) { tools.push(tool); },
 	} as any, {
-		registerOverlayCard: () => ({ invalidate() {}, unregister() {} }),
+		registerOverlayCard: (definition: any) => {
+			overlayCardDefinition = definition;
+			return { invalidate() {}, unregister() {} };
+		},
 	});
 	const ctx = {
 		sessionManager: {
@@ -41,6 +45,7 @@ function createHarness(branch: any[] = []) {
 		ctx,
 		handlers,
 		notifications,
+		overlayCardDefinition,
 		updatePlan: tools.find((tool) => tool.name === "update_plan"),
 	};
 }
@@ -64,8 +69,8 @@ test("wrapped plan result lines retain their left padding", () => {
 		"• Updated Plan",
 		"  Alpha beta gamma",
 		"  delta",
-		"  └ ● Do more work",
-		"      now",
+		"  └─ ● Do more",
+		"       work now",
 	]);
 });
 
@@ -89,7 +94,7 @@ test("malformed plan result details render as an empty plan", () => {
 
 	expect(component.render(18)).toEqual([
 		"• Updated Plan",
-		"  └ (no steps)",
+		"  └─ (no steps)",
 	]);
 });
 
@@ -125,6 +130,68 @@ test("accepts, normalizes, and persists a valid plan update", async () => {
 	expect(result.details).toEqual(expected);
 	expect(harness.appended).toEqual([{ customType: "plan-progress", data: expected }]);
 	expect(result.content[0].text).toContain("Current step: Add tests");
+});
+
+test("derives nested group progress and collapses inactive groups in the overlay", async () => {
+	const harness = createHarness();
+	const result = await executePlan(harness, {
+		plan: [
+			{ step: "Implementation", status: "completed" },
+			{ step: "Backend", depth: 1 },
+			{ step: "Ship API", status: "completed", depth: 2 },
+			{ step: "Run invariants", status: "in_progress", depth: 2 },
+			{ step: "Write docs", status: "pending", depth: 1 },
+			{ step: "Release" },
+			{ step: "Publish", status: "pending", depth: 1 },
+		],
+	});
+
+	expect(result.details.items).toEqual([
+		{ step: "Implementation", status: "in_progress" },
+		{ step: "Backend", status: "in_progress", depth: 1 },
+		{ step: "Ship API", status: "completed", depth: 2 },
+		{ step: "Run invariants", status: "in_progress", depth: 2 },
+		{ step: "Write docs", status: "pending", depth: 1 },
+		{ step: "Release", status: "pending" },
+		{ step: "Publish", status: "pending", depth: 1 },
+	]);
+	expect(result.content[0].text).toContain("Plan updated: 1/4 tasks completed.");
+	expect(result.content[0].text).toContain("Current step: Implementation › Backend › Run invariants");
+	expect(result.content[0].text).toContain("- [>] Implementation (1/3)");
+
+	expect(harness.overlayCardDefinition.title(theme)).toBe(" Plan 1/4 ");
+	const overlay = harness.overlayCardDefinition.renderBody(80, 20, theme).join("\n");
+	expect(overlay).toContain("◆ Implementation · 1/3");
+	expect(overlay).toContain("◆ Backend · 1/2");
+	expect(overlay).toContain("◇ Release · 0/1");
+	expect(overlay).not.toContain("Publish");
+
+	await harness.commands["plan-status"].handler("", harness.ctx);
+	expect(harness.notifications.at(-1)?.message).toBe([
+		"• Updated Plan",
+		"  ├─ ◆ Implementation · 1/3",
+		"  │  ├─ ◆ Backend · 1/2",
+		"  │  │  ├─ ✓ Ship API",
+		"  │  │  └─ ● Run invariants",
+		"  │  └─ ○ Write docs",
+		"  └─ ◇ Release · 0/1",
+		"     └─ ○ Publish",
+	].join("\n"));
+});
+
+test("rejects invalid nesting and missing leaf statuses", async () => {
+	const harness = createHarness();
+
+	await expect(executePlan(harness, {
+		plan: [
+			{ step: "Group" },
+			{ step: "Too deep", status: "in_progress", depth: 2 },
+		],
+	})).rejects.toThrow("depth may increase by at most one");
+	await expect(executePlan(harness, {
+		plan: [{ step: "Leaf without status" }],
+	})).rejects.toThrow("leaf tasks require a status");
+	expect(harness.appended).toEqual([]);
 });
 
 test("rejects plans with more than one in-progress step without persisting", async () => {
@@ -201,6 +268,6 @@ test("restores the latest plan state from the active session branch", async () =
 
 	expect(harness.notifications).toEqual([{
 		level: "info",
-		message: "• Updated Plan\n  Restored state\n  └ ✓ Restored done\n  └ ● Restored active",
+		message: "• Updated Plan\n  Restored state\n  ├─ ✓ Restored done\n  └─ ● Restored active",
 	}]);
 });

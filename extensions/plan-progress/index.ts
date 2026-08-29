@@ -2,12 +2,14 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 
 type Status = "pending" | "in_progress" | "completed";
-interface PlanItem { step: string; status: Status }
+interface PlanItem { step: string; status: Status; depth?: number }
+interface DraftPlanItem { step: string; status?: Status; depth?: number }
 interface PlanState { explanation?: string; items: PlanItem[] }
 const LEGACY_OVERLAY_HOST_KEY = "plan-overlay-host";
 const LEGACY_WIDGET_KEY = "plan";
 const OVERLAY_WIDTH = 58;
 const MAX_EXPLANATION_ROWS = 3;
+const MAX_PLAN_DEPTH = 8;
 const ANSI_RESET = "\x1b[0m";
 
 import { registerOverlayCard } from "../overlay-stack/index.js";
@@ -23,9 +25,19 @@ const parameters = {
 				type: "object",
 				properties: {
 					step: { type: "string" },
-					status: { type: "string", enum: ["pending", "in_progress", "completed"] },
+					status: {
+						type: "string",
+						enum: ["pending", "in_progress", "completed"],
+						description: "Required for leaf tasks; omit for parent rows because their status is derived",
+					},
+					depth: {
+						type: "integer",
+						minimum: 0,
+						maximum: MAX_PLAN_DEPTH,
+						description: "Optional nesting depth; defaults to 0 and may increase by at most one per row",
+					},
 				},
-				required: ["step", "status"],
+				required: ["step"],
 				additionalProperties: false,
 			},
 		},
@@ -40,7 +52,8 @@ const PLAN_GUARD_MARKER = "TODO guard:";
 
 const PROMPT_GUIDELINES = [
 	"Use update_plan for meaningful multi-step work. Pass the complete current plan on every update; do not send partial patches.",
-	"Keep exactly one update_plan step in_progress while work remains. Before finalizing, call update_plan so completed work is marked completed; if anything remains pending/in_progress, explain that it is blocked, canceled, or deferred.",
+	"For nested update_plan lists, order parent rows before their children and set each child's depth to one more than its parent. Omit status on parent rows; parent status and progress are derived from leaf tasks.",
+	"Keep exactly one leaf update_plan step in_progress while work remains. Before finalizing, call update_plan so completed work is marked completed; if anything remains pending/in_progress, explain that it is blocked, canceled, or deferred.",
 ];
 
 function assertNoExtraKeys(value: Record<string, unknown>, allowed: readonly string[], where: string) {
@@ -49,22 +62,80 @@ function assertNoExtraKeys(value: Record<string, unknown>, allowed: readonly str
 	if (extras.length) throw new Error(`Invalid update_plan payload: unknown ${where} field(s): ${extras.join(", ")}.`);
 }
 
+function itemDepth(item: { depth?: number }): number {
+	return item.depth ?? 0;
+}
+
+function hasChildren(items: Array<{ depth?: number }>, index: number): boolean {
+	return index + 1 < items.length && itemDepth(items[index + 1]!) > itemDepth(items[index]!);
+}
+
+function subtreeEnd(items: Array<{ depth?: number }>, index: number): number {
+	const depth = itemDepth(items[index]!);
+	let end = index + 1;
+	while (end < items.length && itemDepth(items[end]!) > depth) end++;
+	return end;
+}
+
+function descendantLeaves(items: PlanItem[], index: number): PlanItem[] {
+	const leaves: PlanItem[] = [];
+	for (let child = index + 1; child < subtreeEnd(items, index); child++) {
+		if (!hasChildren(items, child)) leaves.push(items[child]!);
+	}
+	return leaves;
+}
+
+function derivedStatus(items: PlanItem[], index: number): Status {
+	const leaves = descendantLeaves(items, index);
+	if (leaves.every((item) => item.status === "completed")) return "completed";
+	if (leaves.some((item) => item.status === "in_progress")) return "in_progress";
+	return "pending";
+}
+
 function normalizePlanItems(rawPlan: unknown): PlanItem[] {
 	if (!Array.isArray(rawPlan)) throw new Error("update_plan expects plan to be an array");
-	return rawPlan.map((rawItem, index): PlanItem => {
+	const drafts = rawPlan.map((rawItem, index): DraftPlanItem => {
 		if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) {
-			throw new Error(`Invalid update_plan step ${index + 1}: expected an object with step and status.`);
+			throw new Error(`Invalid update_plan step ${index + 1}: expected an object with step, optional status, and optional depth.`);
 		}
 		const item = rawItem as Record<string, unknown>;
-		assertNoExtraKeys(item, ["step", "status"], `step ${index + 1}`);
+		assertNoExtraKeys(item, ["step", "status", "depth"], `step ${index + 1}`);
 		const step = typeof item.step === "string" ? item.step.trim() : "";
 		if (!step) throw new Error(`Invalid update_plan step ${index + 1}: step must be a non-empty string.`);
-		const status = typeof item.status === "string" ? item.status : "";
-		if (!VALID_STATUS_SET.has(status)) {
-			throw new Error(`Invalid update_plan status for step ${index + 1}: ${JSON.stringify(item.status)}. Expected pending, in_progress, or completed.`);
+
+		const depth = item.depth === undefined ? 0 : item.depth;
+		if (!Number.isInteger(depth) || (depth as number) < 0 || (depth as number) > MAX_PLAN_DEPTH) {
+			throw new Error(`Invalid update_plan depth for step ${index + 1}: expected an integer from 0 to ${MAX_PLAN_DEPTH}.`);
 		}
-		return { step, status: status as Status };
+		if (index === 0 && depth !== 0) {
+			throw new Error("Invalid update_plan depth for step 1: the first step must have depth 0.");
+		}
+		const previousDepth = index > 0 ? itemDepth(rawPlan[index - 1] as { depth?: number }) : 0;
+		if ((depth as number) > previousDepth + 1) {
+			throw new Error(`Invalid update_plan depth for step ${index + 1}: depth may increase by at most one.`);
+		}
+
+		let status: Status | undefined;
+		if (item.status !== undefined) {
+			if (typeof item.status !== "string" || !VALID_STATUS_SET.has(item.status)) {
+				throw new Error(`Invalid update_plan status for step ${index + 1}: ${JSON.stringify(item.status)}. Expected pending, in_progress, or completed.`);
+			}
+			status = item.status as Status;
+		}
+		return { step, status, ...(depth === 0 ? {} : { depth: depth as number }) };
 	});
+
+	for (let index = 0; index < drafts.length; index++) {
+		if (!hasChildren(drafts, index) && !drafts[index]!.status) {
+			throw new Error(`Invalid update_plan step ${index + 1}: leaf tasks require a status.`);
+		}
+	}
+
+	const items = drafts.map((item): PlanItem => ({ ...item, status: item.status ?? "pending" }));
+	for (let index = items.length - 1; index >= 0; index--) {
+		if (hasChildren(items, index)) items[index]!.status = derivedStatus(items, index);
+	}
+	return items;
 }
 
 function normalizePlanUpdate(params: unknown): PlanState {
@@ -97,47 +168,73 @@ function validatePlanItems(items: PlanItem[], explanation?: string) {
 
 function restorePlanState(data: any): PlanState | undefined {
 	if (!data || typeof data !== "object" || !Array.isArray(data.items)) return undefined;
-	const items = data.items.flatMap((rawItem: any): PlanItem[] => {
-		if (!rawItem || typeof rawItem !== "object") return [];
-		const step = String(rawItem.step ?? "").trim();
-		const status = String(rawItem.status ?? "");
-		if (!step || !VALID_STATUS_SET.has(status)) return [];
-		return [{ step, status: status as Status }];
-	});
-	return {
-		explanation: typeof data.explanation === "string" ? data.explanation : undefined,
-		items,
-	};
+	try {
+		return {
+			explanation: typeof data.explanation === "string" ? data.explanation : undefined,
+			items: normalizePlanItems(data.items),
+		};
+	} catch {
+		return undefined;
+	}
+}
+
+function leafItems(items: PlanItem[]): PlanItem[] {
+	return items.filter((_item, index) => !hasChildren(items, index));
 }
 
 function planStats(items: PlanItem[]) {
-	const completed = items.filter((item) => item.status === "completed").length;
-	const inProgress = items.filter((item) => item.status === "in_progress").length;
-	const pending = items.filter((item) => item.status === "pending").length;
-	return { completed, inProgress, pending, total: items.length, incomplete: items.length - completed };
+	const tasks = leafItems(items);
+	const completed = tasks.filter((item) => item.status === "completed").length;
+	const inProgress = tasks.filter((item) => item.status === "in_progress").length;
+	const pending = tasks.filter((item) => item.status === "pending").length;
+	return { completed, inProgress, pending, total: tasks.length, incomplete: tasks.length - completed };
+}
+
+function groupStats(items: PlanItem[], index: number) {
+	const tasks = descendantLeaves(items, index);
+	const completed = tasks.filter((item) => item.status === "completed").length;
+	const inProgress = tasks.filter((item) => item.status === "in_progress").length;
+	const pending = tasks.filter((item) => item.status === "pending").length;
+	return { completed, inProgress, pending, total: tasks.length, incomplete: tasks.length - completed };
+}
+
+function itemPath(items: PlanItem[], index: number): string {
+	const path = [items[index]!.step];
+	let targetDepth = itemDepth(items[index]!) - 1;
+	for (let candidate = index - 1; candidate >= 0 && targetDepth >= 0; candidate--) {
+		if (itemDepth(items[candidate]!) !== targetDepth) continue;
+		path.unshift(items[candidate]!.step);
+		targetDepth--;
+	}
+	return path.join(" › ");
 }
 
 function planGuardText(plan: PlanState): string {
 	const stats = planStats(plan.items);
 	const examples = plan.items
-		.filter((item) => item.status !== "completed")
+		.map((item, index) => ({ item, index }))
+		.filter(({ item, index }) => !hasChildren(plan.items, index) && item.status !== "completed")
 		.slice(0, 3)
-		.map((item) => `${item.status}: ${item.step}`);
+		.map(({ item, index }) => `${item.status}: ${itemPath(plan.items, index)}`);
 	const suffix = examples.length ? ` Open: ${examples.join("; ")}${stats.incomplete > examples.length ? "; …" : ""}` : "";
 	return `${PLAN_GUARD_MARKER} update_plan still has ${stats.incomplete}/${stats.total} unfinished item(s) (${stats.completed}/${stats.total} completed).${suffix} Update the plan before finalizing, or explicitly say why the remaining work is blocked, canceled, or deferred.`;
 }
 
 function modelPlanLines(plan: PlanState): string[] {
 	const stats = planStats(plan.items);
-	const lines = [`Plan updated: ${stats.completed}/${stats.total} completed.`];
+	const lines = [`Plan updated: ${stats.completed}/${stats.total} tasks completed.`];
 	if (plan.explanation?.trim()) lines.push(`Explanation: ${plan.explanation.trim()}`);
-	const current = plan.items.find((item) => item.status === "in_progress");
-	if (current) lines.push(`Current step: ${current.step}`);
+	const currentIndex = plan.items.findIndex((item, index) => !hasChildren(plan.items, index) && item.status === "in_progress");
+	if (currentIndex >= 0) lines.push(`Current step: ${itemPath(plan.items, currentIndex)}`);
 	if (plan.items.length) {
 		lines.push("Current plan:");
-		for (const item of plan.items) {
+		for (let index = 0; index < plan.items.length; index++) {
+			const item = plan.items[index]!;
 			const marker = item.status === "completed" ? "[x]" : item.status === "in_progress" ? "[>]" : "[ ]";
-			lines.push(`- ${marker} ${item.step}`);
+			const progress = hasChildren(plan.items, index)
+				? (() => { const group = groupStats(plan.items, index); return ` (${group.completed}/${group.total})`; })()
+				: "";
+			lines.push(`${"  ".repeat(itemDepth(item))}- ${marker} ${item.step}${progress}`);
 		}
 	} else {
 		lines.push("Current plan is empty.");
@@ -173,19 +270,70 @@ function assistantHasToolCall(message: any): boolean {
 	return Array.isArray(message?.content) && message.content.some((block: any) => block?.type === "toolCall");
 }
 
+function hasLaterSibling(items: PlanItem[], index: number): boolean {
+	const depth = itemDepth(items[index]!);
+	for (let candidate = index + 1; candidate < items.length; candidate++) {
+		const candidateDepth = itemDepth(items[candidate]!);
+		if (candidateDepth < depth) return false;
+		if (candidateDepth === depth) return true;
+	}
+	return false;
+}
+
+function ancestorIndexAtDepth(items: PlanItem[], index: number, depth: number): number {
+	for (let candidate = index - 1; candidate >= 0; candidate--) {
+		if (itemDepth(items[candidate]!) === depth) return candidate;
+	}
+	return -1;
+}
+
+function treePrefixes(items: PlanItem[], index: number): { first: string; continuation: string } {
+	const depth = itemDepth(items[index]!);
+	let ancestors = "";
+	for (let ancestorDepth = 0; ancestorDepth < depth; ancestorDepth++) {
+		const ancestorIndex = ancestorIndexAtDepth(items, index, ancestorDepth);
+		ancestors += ancestorIndex >= 0 && hasLaterSibling(items, ancestorIndex) ? "│  " : "   ";
+	}
+	const laterSibling = hasLaterSibling(items, index);
+	return {
+		first: `  ${ancestors}${laterSibling ? "├─ " : "└─ "}`,
+		continuation: `  ${ancestors}${laterSibling ? "│  " : "   "}`,
+	};
+}
+
+function styledItem(items: PlanItem[], index: number, theme: any): { marker: string; text: string } {
+	const item = items[index]!;
+	const group = hasChildren(items, index);
+	const progress = group
+		? (() => { const stats = groupStats(items, index); return theme.fg("dim", ` · ${stats.completed}/${stats.total}`); })()
+		: "";
+	if (item.status === "completed") {
+		return {
+			marker: theme.fg("muted", "✓ "),
+			text: `${theme.fg("muted", theme.strikethrough(item.step))}${progress}`,
+		};
+	}
+	if (item.status === "in_progress") {
+		return {
+			marker: theme.fg("accent", theme.bold(group ? "◆ " : "● ")),
+			text: `${theme.fg("accent", theme.bold(item.step))}${progress}`,
+		};
+	}
+	return {
+		marker: theme.fg("dim", group ? "◇ " : "○ "),
+		text: `${theme.fg("muted", item.step)}${progress}`,
+	};
+}
+
 function planLines(state: PlanState, theme: any): string[] {
 	const lines = [`${theme.fg("muted", "•")} ${theme.bold("Updated Plan")}`];
 	if (state.explanation?.trim()) lines.push(`  ${theme.fg("dim", theme.italic(state.explanation.trim()))}`);
-	for (const item of state.items) {
-		if (item.status === "completed") {
-			lines.push(`  └ ${theme.fg("muted", "✓ ")}${theme.fg("muted", theme.strikethrough(item.step))}`);
-		} else if (item.status === "in_progress") {
-			lines.push(`  └ ${theme.fg("accent", theme.bold("● "))}${theme.fg("accent", theme.bold(item.step))}`);
-		} else {
-			lines.push(`  └ ${theme.fg("dim", "○ ")}${theme.fg("muted", item.step)}`);
-		}
+	for (let index = 0; index < state.items.length; index++) {
+		const { first } = treePrefixes(state.items, index);
+		const { marker, text } = styledItem(state.items, index, theme);
+		lines.push(`${first}${marker}${text}`);
 	}
-	if (!state.items.length) lines.push(`  └ ${theme.fg("dim", "(no steps)")}`);
+	if (!state.items.length) lines.push(`  └─ ${theme.fg("dim", "(no steps)")}`);
 	return lines;
 }
 
@@ -203,22 +351,12 @@ function renderedPlanLines(state: PlanState, theme: any, width: number): string[
 	if (state.explanation?.trim()) {
 		lines.push(...indentedWrap(theme.fg("dim", theme.italic(state.explanation.trim())), maxWidth, "  "));
 	}
-	for (const item of state.items) {
-		let marker: string;
-		let step: string;
-		if (item.status === "completed") {
-			marker = theme.fg("muted", "✓ ");
-			step = theme.fg("muted", theme.strikethrough(item.step));
-		} else if (item.status === "in_progress") {
-			marker = theme.fg("accent", theme.bold("● "));
-			step = theme.fg("accent", theme.bold(item.step));
-		} else {
-			marker = theme.fg("dim", "○ ");
-			step = theme.fg("muted", item.step);
-		}
-		lines.push(...indentedWrap(step, maxWidth, `  └ ${marker}`, "      "));
+	for (let index = 0; index < state.items.length; index++) {
+		const { first, continuation } = treePrefixes(state.items, index);
+		const { marker, text } = styledItem(state.items, index, theme);
+		lines.push(...indentedWrap(text, maxWidth, `${first}${marker}`, `${continuation}  `));
 	}
-	if (!state.items.length) lines.push(...indentedWrap(theme.fg("dim", "(no steps)"), maxWidth, "  └ ", "    "));
+	if (!state.items.length) lines.push(...indentedWrap(theme.fg("dim", "(no steps)"), maxWidth, "  └─ ", "     "));
 	return lines;
 }
 
@@ -248,21 +386,20 @@ function boundedWrap(content: string, width: number, maxRows: number, theme: any
 	return visible;
 }
 
-function itemRows(item: PlanItem, contentWidth: number, theme: any): string[] {
-	let marker: string;
-	let step: string;
-	if (item.status === "completed") {
-		marker = theme.fg("muted", "✓ ");
-		step = theme.fg("muted", theme.strikethrough(item.step));
-	} else if (item.status === "in_progress") {
-		marker = theme.fg("accent", theme.bold("● "));
-		step = theme.fg("accent", theme.bold(item.step));
-	} else {
-		marker = theme.fg("dim", "○ ");
-		step = theme.fg("muted", item.step);
+function itemRows(items: PlanItem[], index: number, contentWidth: number, theme: any): string[] {
+	const { first, continuation } = treePrefixes(items, index);
+	const { marker, text } = styledItem(items, index, theme);
+	return indentedWrap(text, contentWidth, `${first}${marker}`, `${continuation}  `);
+}
+
+function isInsideInactiveGroup(items: PlanItem[], index: number): boolean {
+	let targetDepth = itemDepth(items[index]!) - 1;
+	for (let candidate = index - 1; candidate >= 0 && targetDepth >= 0; candidate--) {
+		if (itemDepth(items[candidate]!) !== targetDepth) continue;
+		if (items[candidate]!.status !== "in_progress") return true;
+		targetDepth--;
 	}
-	const wrapped = wrapTextWithAnsi(step, Math.max(1, contentWidth - 2));
-	return wrapped.map((line, index) => `${index === 0 ? marker : "  "}${line}`);
+	return false;
 }
 
 function renderPlanBody(
@@ -283,10 +420,12 @@ function renderPlanBody(
 		body.push("");
 	}
 
-	for (const item of state.items) body.push(...itemRows(item, contentWidth, theme));
+	for (let index = 0; index < state.items.length; index++) {
+		if (!isInsideInactiveGroup(state.items, index)) body.push(...itemRows(state.items, index, contentWidth, theme));
+	}
 	if (!state.items.length) body.push(theme.fg("dim", "No active TODOs"));
 
-	const hiddenRows = Math.max(0, body.length - maxRows);
+	const hiddenRows = body.length > maxRows ? body.length - Math.max(0, maxRows - 1) : 0;
 	const visibleBody = hiddenRows > 0
 		? body.slice(0, Math.max(0, maxRows - 1))
 		: body;
@@ -300,7 +439,6 @@ interface PlanProgressDependencies {
 
 export default function (pi: ExtensionAPI, dependencies: PlanProgressDependencies = {}) {
 	let state: PlanState = { items: [] };
-	let activeCtx: any;
 	let planOverlayActive = false;
 
 	const overlayCard = (dependencies.registerOverlayCard ?? registerOverlayCard)({
@@ -317,7 +455,7 @@ export default function (pi: ExtensionAPI, dependencies: PlanProgressDependencie
 		},
 		title: (theme) => {
 			const stats = planStats(state.items);
-			return theme.bold(` Plan ${stats.completed}/${state.items.length} `);
+			return theme.bold(` Plan ${stats.completed}/${stats.total} `);
 		},
 		renderBody: (width, maxHeight, theme) => renderPlanBody(state, theme, width, maxHeight),
 	});
@@ -337,7 +475,7 @@ export default function (pi: ExtensionAPI, dependencies: PlanProgressDependencie
 	pi.registerTool({
 		name: "update_plan",
 		label: "Update Plan",
-		description: "Create or update the current execution plan and mark steps pending, in progress, or completed.",
+		description: "Create or update a flat or nested execution plan and mark leaf tasks pending, in progress, or completed.",
 		parameters,
 		promptGuidelines: PROMPT_GUIDELINES,
 		executionMode: "sequential",
@@ -388,7 +526,6 @@ export default function (pi: ExtensionAPI, dependencies: PlanProgressDependencie
 	});
 
 	const restoreState = (ctx: any) => {
-		activeCtx = ctx;
 		clearLegacyUi(ctx);
 		state = { items: [] };
 		planOverlayActive = false;
@@ -407,7 +544,6 @@ export default function (pi: ExtensionAPI, dependencies: PlanProgressDependencie
 	pi.on("session_shutdown", (_event, ctx) => {
 		clearLegacyUi(ctx);
 		ctx.ui.setStatus("plan", undefined);
-		activeCtx = undefined;
 		planOverlayActive = false;
 		overlayCard.unregister();
 	});
