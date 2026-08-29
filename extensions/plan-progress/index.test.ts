@@ -108,10 +108,10 @@ async function executePlan(harness: ReturnType<typeof createHarness>, params: an
 	);
 }
 
-test("keeps the overlay compact while preserving the full plan elsewhere", async () => {
+test("narrows the overlay without reducing vertical detail", async () => {
 	const harness = createHarness();
 	await executePlan(harness, {
-		explanation: "This deliberately long explanation should stay on one compact overlay row instead of consuming the screen.",
+		explanation: "This deliberately long explanation may use multiple rows because only horizontal space should be reduced.",
 		plan: Array.from({ length: 9 }, (_, index) => ({
 			step: `Task ${index + 1}`,
 			status: index === 0 ? "in_progress" : "pending",
@@ -120,11 +120,10 @@ test("keeps the overlay compact while preserving the full plan elsewhere", async
 
 	const rows = harness.overlayCardDefinition.renderBody(46, 30, theme);
 	expect(harness.overlayCardDefinition.width).toBe(50);
-	expect(rows).toHaveLength(7);
-	expect(rows[0]).toEndWith("…");
-	expect(rows[1]).toContain("Task 1");
-	expect(rows).not.toContain("");
-	expect(rows.at(-1)).toContain("… 4 more rows; /plan-status for full list");
+	expect(rows.length).toBeGreaterThan(7);
+	expect(rows).toContain("");
+	expect(rows.some((line: string) => line.includes("Task 9"))).toBe(true);
+	expect(rows.join("\n")).not.toContain("/plan-status for full list");
 });
 
 test("accepts, normalizes, and persists a valid plan update", async () => {

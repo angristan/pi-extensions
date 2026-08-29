@@ -8,8 +8,7 @@ interface PlanState { explanation?: string; items: PlanItem[] }
 const LEGACY_OVERLAY_HOST_KEY = "plan-overlay-host";
 const LEGACY_WIDGET_KEY = "plan";
 const OVERLAY_WIDTH = 50;
-const MAX_EXPLANATION_ROWS = 1;
-const MAX_OVERLAY_BODY_ROWS = 7;
+const MAX_EXPLANATION_ROWS = 3;
 const MAX_PLAN_DEPTH = 8;
 const ANSI_RESET = "\x1b[0m";
 
@@ -410,7 +409,6 @@ function renderPlanBody(
 	maxRows: number,
 ): string[] {
 	const contentWidth = Math.max(1, width);
-	const rowBudget = Math.max(1, Math.min(maxRows, MAX_OVERLAY_BODY_ROWS));
 	const body: string[] = [];
 	if (state.explanation?.trim()) {
 		body.push(...boundedWrap(
@@ -419,6 +417,7 @@ function renderPlanBody(
 			MAX_EXPLANATION_ROWS,
 			theme,
 		));
+		body.push("");
 	}
 
 	for (let index = 0; index < state.items.length; index++) {
@@ -426,9 +425,9 @@ function renderPlanBody(
 	}
 	if (!state.items.length) body.push(theme.fg("dim", "No active TODOs"));
 
-	const hiddenRows = body.length > rowBudget ? body.length - Math.max(0, rowBudget - 1) : 0;
+	const hiddenRows = body.length > maxRows ? body.length - Math.max(0, maxRows - 1) : 0;
 	const visibleBody = hiddenRows > 0
-		? body.slice(0, Math.max(0, rowBudget - 1))
+		? body.slice(0, Math.max(0, maxRows - 1))
 		: body;
 	if (hiddenRows > 0) visibleBody.push(theme.fg("dim", `… ${hiddenRows} more row${hiddenRows === 1 ? "" : "s"}; /plan-status for full list`));
 	return visibleBody.map((line) => truncateToWidth(line, width, ""));

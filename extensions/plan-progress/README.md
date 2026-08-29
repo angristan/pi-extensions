@@ -24,11 +24,10 @@ appear above the plan.
      └─ ○ Publish
 ```
 
-The compact overlay expands the group that contains the active task and
-collapses inactive groups to their `completed/total` summary. It uses a
-50-column card, keeps the explanation to one row, and shows at most seven body
-rows; `/plan-status` keeps the complete view. Totals count leaf tasks, not
-grouping rows.
+The narrower overlay expands the group that contains the active task and
+collapses inactive groups to their `completed/total` summary. Its card uses 50
+columns while retaining the available vertical detail. `/plan-status` keeps the
+complete view. Totals count leaf tasks, not grouping rows.
 
 - `✓` completed (strikethrough)
 - `●` in-progress task; `◆` group that contains it
