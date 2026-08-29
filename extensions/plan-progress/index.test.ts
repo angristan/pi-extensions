@@ -178,7 +178,10 @@ test("derives nested group progress and collapses inactive groups in the overlay
 	expect(result.content[0].text).toContain("- [>] Implementation (1/3)");
 
 	expect(harness.overlayCardDefinition.title(theme)).toBe(" Plan 1/4 ");
-	const overlay = harness.overlayCardDefinition.renderBody(80, 20, theme).join("\n");
+	const overlayRows = harness.overlayCardDefinition.renderBody(80, 20, theme);
+	const overlay = overlayRows.join("\n");
+	expect(overlayRows.find((line: string) => line.includes("Implementation"))).toStartWith("├─ ");
+	expect(overlayRows.find((line: string) => line.includes("Backend"))).toStartWith("│  ├─ ");
 	expect(overlay).toContain("◆ Implementation · 1/3");
 	expect(overlay).toContain("◆ Backend · 1/2");
 	expect(overlay).toContain("◇ Release · 0/1");

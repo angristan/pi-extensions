@@ -26,7 +26,8 @@ appear above the plan.
 
 The narrower overlay expands the group that contains the active task and
 collapses inactive groups to their `completed/total` summary. Its card uses 50
-columns while retaining the available vertical detail. `/plan-status` keeps the
+columns, and its tree starts at the card's content edge without an extra plan
+indent. Available vertical detail is unchanged. `/plan-status` keeps the
 complete view. Totals count leaf tasks, not grouping rows.
 
 - `✓` completed (strikethrough)

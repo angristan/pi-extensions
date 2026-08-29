@@ -287,7 +287,7 @@ function ancestorIndexAtDepth(items: PlanItem[], index: number, depth: number): 
 	return -1;
 }
 
-function treePrefixes(items: PlanItem[], index: number): { first: string; continuation: string } {
+function treePrefixes(items: PlanItem[], index: number, baseIndent = "  "): { first: string; continuation: string } {
 	const depth = itemDepth(items[index]!);
 	let ancestors = "";
 	for (let ancestorDepth = 0; ancestorDepth < depth; ancestorDepth++) {
@@ -296,8 +296,8 @@ function treePrefixes(items: PlanItem[], index: number): { first: string; contin
 	}
 	const laterSibling = hasLaterSibling(items, index);
 	return {
-		first: `  ${ancestors}${laterSibling ? "├─ " : "└─ "}`,
-		continuation: `  ${ancestors}${laterSibling ? "│  " : "   "}`,
+		first: `${baseIndent}${ancestors}${laterSibling ? "├─ " : "└─ "}`,
+		continuation: `${baseIndent}${ancestors}${laterSibling ? "│  " : "   "}`,
 	};
 }
 
@@ -387,7 +387,7 @@ function boundedWrap(content: string, width: number, maxRows: number, theme: any
 }
 
 function itemRows(items: PlanItem[], index: number, contentWidth: number, theme: any): string[] {
-	const { first, continuation } = treePrefixes(items, index);
+	const { first, continuation } = treePrefixes(items, index, "");
 	const { marker, text } = styledItem(items, index, theme);
 	return indentedWrap(text, contentWidth, `${first}${marker}`, `${continuation}  `);
 }
