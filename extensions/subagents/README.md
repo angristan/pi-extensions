@@ -72,10 +72,13 @@ children remain available through `/agents`, but keyboard navigation skips them.
 Children can use `report_to_parent` for material interim findings. Interim reports
 and final results enter a bounded parent mailbox.
 
-Updates do not force a parent model turn. They enter the next safe request while
-the parent is running, or display when the parent becomes idle. Final results are
-persisted until delivered or consumed. Waited and automatic delivery do not
-produce duplicate completion cards.
+Updates do not force a parent model turn. Each automatic update is queued once as
+a visible custom message at the next safe turn boundary while the parent is
+running, or appended immediately when the parent is idle. Because the same
+message is stored in session history and sent to the model, no model-only mailbox
+context can leak into a later task. Final results are persisted until delivered or
+consumed. Waited and automatic delivery do not produce duplicate completion
+cards.
 
 Mailbox cards group each child into a separate block with a status symbol, readable
 task summary, Markdown-rendered result, and subdued usage metadata. Status symbols

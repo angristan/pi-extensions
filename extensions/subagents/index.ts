@@ -48,7 +48,6 @@ import { createAgentPersistence, createMailboxPersistence } from "./persistence.
 import {
 	COMPLETION_MESSAGE_TYPE,
 	MAILBOX_BATCH_TYPE,
-	MAILBOX_HISTORY_ENTRY_TYPE,
 	MAILBOX_MESSAGE_TYPE,
 	childTaskEntry,
 	childTranscriptEntries,
@@ -161,19 +160,13 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	const runtimeConfig = options.config ?? loadSubagentsConfig();
 	let generation = 0;
 	let sessionActive = false;
-	let parentRunning = false;
 	let spawnReservations = 0;
 	let compactedSnapshot: { key: string; promise: Promise<string> } | undefined;
 	let activeTranscriptRefresh: (() => void) | undefined;
 	let transcriptOpen = false;
 	let previousEditorFactory: any;
 	let installedEditorFactory: any;
-	let activeMailboxAnchor: number | undefined;
 	const mailbox = new AgentMailbox<AgentSnapshot>(
-		runtimeConfig.mailbox.maxMessageBytes,
-		runtimeConfig.mailbox.maxMessagesPerAgent,
-	);
-	const activeTurnMailbox = new AgentMailbox<AgentSnapshot>(
 		runtimeConfig.mailbox.maxMessageBytes,
 		runtimeConfig.mailbox.maxMessagesPerAgent,
 	);
@@ -394,8 +387,9 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			removeMailboxEvent(event);
 			return;
 		}
-		if (parentRunning) return;
 		try {
+			// Pi defers non-triggering custom messages until the current tool turn
+			// finishes, so the result is visible, persisted, and ordered safely.
 			const delivery = { triggerTurn: false };
 			if (event.kind === "final") {
 				const data = event.final ?? snapshot(agent!);
@@ -931,11 +925,8 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		generation += 1;
 		compactedSnapshot = undefined;
 		mailbox.reset();
-		activeTurnMailbox.reset();
-		activeMailboxAnchor = undefined;
 		mailboxListeners.clear();
 		sessionActive = true;
-		parentRunning = false;
 		restorePersistedAgents(ctx);
 		restoreMailboxFinals(ctx);
 		updateOverlay();
@@ -962,38 +953,11 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		const { role: _role, timestamp: _timestamp, ...message } = mailboxDeliveryMessage(delivery);
 		return { message };
 	});
-	pi.on("agent_start", () => {
-		if (!parentRunning) {
-			activeTurnMailbox.clear();
-			activeMailboxAnchor = undefined;
-		}
-		parentRunning = true;
-	});
-	pi.on("context", (event) => {
-		const delivery = takeAutomaticMailboxDelivery();
-		if (delivery) {
-			activeMailboxAnchor ??= event.messages.length;
-			for (const mailboxEvent of delivery.events) activeTurnMailbox.publish(mailboxEvent);
-			const historyMessage = mailboxDeliveryMessage(delivery);
-			pi.appendEntry(MAILBOX_HISTORY_ENTRY_TYPE, { version: 1, details: historyMessage.details });
-		}
-		const activeEvents = activeTurnMailbox.peek();
-		if (activeEvents.length === 0) return;
-		const completed = activeEvents.flatMap((mailboxEvent) => mailboxEvent.kind === "final" && mailboxEvent.final ? [mailboxEvent.final] : []);
-		const message = mailboxDeliveryMessage({ events: activeEvents, agents: completed });
-		const messages = [...event.messages];
-		messages.splice(Math.min(activeMailboxAnchor ?? messages.length, messages.length), 0, message);
-		return { messages };
-	});
 	pi.on("agent_settled", () => {
-		parentRunning = false;
-		activeTurnMailbox.clear();
-		activeMailboxAnchor = undefined;
 		for (const event of mailbox.peek()) queueMicrotask(() => deliverMailboxEvent(event));
 	});
 	pi.on("session_shutdown", async (event, ctx) => {
 		sessionActive = false;
-		parentRunning = false;
 		transcriptOpen = false;
 		activeTranscriptRefresh = undefined;
 		if (ctx.mode === "tui" && ctx.ui.getEditorComponent() === installedEditorFactory) {
@@ -1004,8 +968,6 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		generation += 1;
 		compactedSnapshot = undefined;
 		mailbox.clear();
-		activeTurnMailbox.clear();
-		activeMailboxAnchor = undefined;
 		mailboxListeners.clear();
 		const current = [...agents.values()];
 		for (const agent of current) agent.suppressNotifications = true;

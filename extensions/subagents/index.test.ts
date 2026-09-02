@@ -395,19 +395,22 @@ describe("subagents", () => {
 		harnesses.splice(harnesses.indexOf(harness), 1);
 	});
 
-	test("shows unread mailbox counts and delivery metrics in /agents", async () => {
+	test("shows mailbox delivery metrics in /agents", async () => {
 		const harness = createHarness();
-		await harness.handlers.get("agent_start")?.({}, harness.ctx);
 		await spawnAgent(harness, "Inspect mailbox metrics");
 		harness.clients[0].report("Unread update");
 		const card = harness.overlay.definition;
 		expect(card.title(renderTheme)).toContain("✉ 1 unread");
 		expect(card.renderBody(54, 6, renderTheme)[0]).toContain("1 unread");
+		await Bun.sleep(0);
+		expect(card.visible()).toBe(true);
+		expect(card.title(renderTheme)).not.toContain("unread");
 
 		harness.ctx.ui.select = async (_title: string, labels: string[]) => labels[0];
 		await harness.commands.get("agents").handler("", harness.ctx);
-		expect(harness.notifications.at(-1)).toContain("1 unread");
+		expect(harness.notifications.at(-1)).toContain("0 unread");
 		expect(harness.notifications.at(-1)).toContain("1 published");
+		expect(harness.notifications.at(-1)).toContain("1 delivered");
 	});
 
 	test("opens a live child-only transcript from /agents", async () => {
@@ -1050,7 +1053,7 @@ describe("subagents", () => {
 			result: { content: [] },
 		});
 		expect(harness.overlay.definition.title(renderTheme)).not.toContain("unread");
-		expect(await harness.handlers.get("context")?.({ messages: [] }, harness.ctx)).toBeUndefined();
+		expect(harness.sentMessages).toHaveLength(0);
 	});
 
 	test("transports report_to_parent events through a real RPC process", async () => {
@@ -1141,67 +1144,62 @@ setInterval(() => {}, 1000);
 		expect(lines.join("\n")).toContain("The renderer needs one edge-case test.");
 	});
 
-	test("injects active-turn progress at the next model request boundary", async () => {
+	test("delivers active-turn progress once as a visible custom message", async () => {
 		const harness = createHarness();
-		await harness.handlers.get("agent_start")?.({}, harness.ctx);
 		const started = await spawnAgent(harness, "Inspect API");
 		harness.clients[0].report("The API contract is stable.");
 		await Bun.sleep(0);
-		expect(harness.sentMessages).toHaveLength(0);
 
-		const baseMessage = { role: "user", content: "Continue" };
-		const boundary = await harness.handlers.get("context")?.({ messages: [baseMessage] }, harness.ctx);
-		const delivery = boundary.messages.at(-1);
+		expect(harness.sentMessages).toHaveLength(1);
+		const delivery = harness.sentMessages[0]!;
 		expect(delivery).toMatchObject({
-			role: "custom",
-			customType: "subagent-mailbox",
-			content: expect.stringContaining("The API contract is stable."),
-			details: {
-				action: "mailbox",
-				agents: [],
-				mailbox: [{ kind: "message", agentName: started.details.agents[0].name }],
+			message: {
+				customType: "subagent-message",
+				content: expect.stringContaining("The API contract is stable."),
+				display: true,
+				details: { kind: "message", agentName: started.details.agents[0].name },
 			},
+			options: { triggerTurn: false },
 		});
-		const renderer = harness.messageRenderers.get("subagent-mailbox")!;
-		const lines = rendered(renderer(delivery, { expanded: false }, renderTheme));
-		expect(lines[0]).toBe("• Agent mailbox");
+		const renderer = harness.messageRenderers.get("subagent-message")!;
+		const lines = rendered(renderer(delivery.message, { expanded: false }, renderTheme));
+		expect(lines[0]).toBe("• Agent message");
 		expect(lines.join("\n")).toContain("The API contract is stable.");
-		await harness.handlers.get("agent_start")?.({}, harness.ctx);
-		const laterMessage = { role: "assistant", content: [{ type: "text", text: "Tool work continues" }] };
-		const nextBoundary = await harness.handlers.get("context")?.({ messages: [baseMessage, laterMessage] }, harness.ctx);
-		expect(nextBoundary.messages[1]).toMatchObject({
-			customType: "subagent-mailbox",
-			content: expect.stringContaining("The API contract is stable."),
-		});
-		expect(nextBoundary.messages[2]).toBe(laterMessage);
-		const history = [...harness.parent.getEntries()].reverse().find((entry: any) => entry.customType === "subagent-mailbox-history") as any;
-		expect(history?.data?.details.mailbox[0].content).toBe("The API contract is stable.");
-		const historyRenderer = harness.entryRenderers.get("subagent-mailbox-history")!;
-		expect(rendered(historyRenderer(history, { expanded: false }, renderTheme)).join("\n")).toContain("The API contract is stable.");
+
+		// Automatic continuations and immediately queued user prompts can start
+		// more runs before agent_settled. The delivered result must not reappear.
+		expect(await harness.handlers.get("before_agent_start")?.({}, harness.ctx)).toBeUndefined();
+		expect(await harness.handlers.get("before_agent_start")?.({}, harness.ctx)).toBeUndefined();
+		await harness.handlers.get("agent_settled")?.({}, harness.ctx);
+		await Bun.sleep(0);
+		expect(harness.sentMessages).toHaveLength(1);
+		expect(harness.handlers.has("context")).toBe(false);
 	});
 
-	test("reports coalesced progress omissions to parent context", async () => {
+	test("reports coalesced progress omissions in visible messages", async () => {
 		const harness = createHarness({
 			config: {
 				wait: { minimumMs: 0, defaultMs: 300_000, maximumMs: 3_600_000 },
 				mailbox: { maxMessageBytes: 8 * 1024, maxMessagesPerAgent: 1 },
 			},
 		});
-		await harness.handlers.get("agent_start")?.({}, harness.ctx);
 		await spawnAgent(harness, "Report repeated progress");
 		harness.clients[0].report("First progress");
 		harness.clients[0].report("Latest progress");
-		const boundary = await harness.handlers.get("context")?.({ messages: [] }, harness.ctx);
-		const delivery = boundary.messages.at(-1);
+		await Bun.sleep(0);
+
+		expect(harness.sentMessages).toHaveLength(1);
+		const delivery = harness.sentMessages[0]!.message;
 		expect(delivery.content).toContain("Earlier updates omitted: 1");
 		expect(delivery.content).toContain("Latest progress");
 		expect(delivery.content).not.toContain("First progress");
+
 		harness.clients[0].report("Newest progress");
-		const nextBoundary = await harness.handlers.get("context")?.({ messages: [] }, harness.ctx);
-		const retained = nextBoundary.messages.at(-1);
-		expect(retained.content).toContain("Earlier updates omitted: 2");
-		expect(retained.content).toContain("Newest progress");
-		expect(Buffer.byteLength(retained.content)).toBeLessThanOrEqual(48 * 1024);
+		await Bun.sleep(0);
+		expect(harness.sentMessages).toHaveLength(2);
+		const newest = harness.sentMessages[1]!.message;
+		expect(newest.content).toContain("Newest progress");
+		expect(Buffer.byteLength(newest.content)).toBeLessThanOrEqual(48 * 1024);
 		await harness.commands.get("agents").handler("", {
 			...harness.ctx,
 			ui: { ...harness.ctx.ui, select: async (_title: string, labels: string[]) => labels[0] },
@@ -1211,16 +1209,20 @@ setInterval(() => {}, 1000);
 
 	test("recovers unread final results from durable session state", async () => {
 		const harness = createHarness();
-		await harness.handlers.get("agent_start")?.({}, harness.ctx);
 		const started = await spawnAgent(harness, "Inspect recovery");
 		harness.clients[0].complete("Durable final result");
 		await Bun.sleep(0);
-		expect(harness.sentMessages).toHaveLength(0);
-		expect(harness.parent.getEntries().some((entry: any) => entry.customType === "subagent-mailbox-state" && entry.data?.state === "unread")).toBe(true);
+		expect(harness.sentMessages).toHaveLength(1);
 
-		await harness.handlers.get("session_start")?.({ reason: "resume" }, harness.ctx);
+		const unread = harness.parent.getEntries().find((entry: any) =>
+			entry.customType === "subagent-mailbox-state" && entry.data?.state === "unread"
+		) as any;
+		expect(unread).toBeDefined();
+		const recoveryParent = SessionManager.inMemory(process.cwd());
+		recoveryParent.appendCustomEntry("subagent-mailbox-state", unread.data);
+		const recovered = createHarness({ parent: recoveryParent });
 		await Bun.sleep(0);
-		expect(harness.sentMessages.at(-1)).toMatchObject({
+		expect(recovered.sentMessages.at(-1)).toMatchObject({
 			message: {
 				customType: "subagent-result",
 				content: expect.stringContaining("Durable final result"),
@@ -1228,40 +1230,33 @@ setInterval(() => {}, 1000);
 			},
 			options: { triggerTurn: false },
 		});
-		expect(harness.parent.getEntries().some((entry: any) => entry.customType === "subagent-mailbox-state" && entry.data?.state === "delivered")).toBe(true);
+		expect(recoveryParent.getEntries().some((entry: any) => entry.customType === "subagent-mailbox-state" && entry.data?.state === "delivered")).toBe(true);
 	});
 
-	test("renders two active-turn final results as monochrome Markdown blocks", async () => {
+	test("renders active-turn final results as visible Markdown blocks", async () => {
 		const harness = createHarness();
-		await harness.handlers.get("agent_start")?.({}, harness.ctx);
 		const first = await spawnAgent(harness, "Inspect API");
 		const second = await spawnAgent(harness, "Inspect accessibility");
 		harness.clients[0].complete("**API review complete with `client.ts`.**");
 		harness.clients[1].complete("[Accessibility review](https://www.w3.org/WAI/) complete.");
 		await Bun.sleep(0);
-		expect(harness.sentMessages).toHaveLength(0);
-
-		const boundary = await harness.handlers.get("context")?.({ messages: [] }, harness.ctx);
-		const delivery = boundary.messages.at(-1);
-		expect(delivery.details.agents).toMatchObject([
+		expect(harness.sentMessages).toHaveLength(2);
+		expect(harness.sentMessages.map((delivery) => delivery.message.details)).toMatchObject([
 			{ name: first.details.agents[0].name, status: "completed", output: "**API review complete with `client.ts`.**" },
 			{ name: second.details.agents[0].name, status: "completed", output: "[Accessibility review](https://www.w3.org/WAI/) complete." },
 		]);
-		const renderer = harness.messageRenderers.get("subagent-mailbox")!;
-		const lines = rendered(renderer(delivery, { expanded: false }, renderTheme));
-		const output = lines.join("\n");
-		expect(lines[0]).toBe("• Agent mailbox · 2 completed");
-		expect(lines[1]).toContain(`✓ ${first.details.agents[0].name}`);
-		expect(lines[1]).not.toContain("context");
-		expect(lines[6]).toContain(`✓ ${second.details.agents[0].name}`);
-		expect(lines[6]).not.toContain("context");
-		expect(output).toContain("API review complete with client.ts.");
-		expect(output).toContain("Accessibility review");
-		expect(output).not.toContain("**");
-		expect(output).not.toContain("](");
 
-		const styled = renderer(delivery, { expanded: true }, semanticTheme).render(100);
-		for (const resultLine of [styled[3], styled[8]]) {
+		const renderer = harness.messageRenderers.get("subagent-result")!;
+		const renderedResults = harness.sentMessages.map((delivery) => rendered(renderer(delivery.message, { expanded: false }, renderTheme)));
+		expect(renderedResults[0]![0]).toBe("• Agent completed");
+		expect(renderedResults[0]!.join("\n")).toContain("API review complete with client.ts.");
+		expect(renderedResults[1]!.join("\n")).toContain("Accessibility review");
+		expect(renderedResults.flat().join("\n")).not.toContain("**");
+		expect(renderedResults.flat().join("\n")).not.toContain("](");
+
+		for (const delivery of harness.sentMessages) {
+			const styled = renderer(delivery.message, { expanded: true }, semanticTheme).render(100);
+			const resultLine = styled[3]!;
 			const foregrounds = [...resultLine.matchAll(/\x1b\[(3\d|9\d)m/g)].map((match) => match[1]);
 			expect(new Set(foregrounds)).toEqual(new Set(["32", "37"]));
 		}
