@@ -27,8 +27,10 @@ appear above the plan.
 The narrower overlay expands the group that contains the active task and
 collapses inactive groups to their `completed/total` summary. Its card uses 50
 columns, and its tree starts at the card's content edge without an extra plan
-indent. Available vertical detail is unchanged. `/plan-status` keeps the
-complete view. Totals count leaf tasks, not grouping rows.
+indent. Available vertical detail is unchanged. Optional item descriptions stay
+hidden there except for the active leaf, whose description uses at most two
+rows. `/plan-status` and expanded tool results show every description. Totals
+count leaf tasks, not grouping rows.
 
 - `✓` completed (strikethrough)
 - `●` in-progress task; `◆` group that contains it
@@ -42,12 +44,14 @@ complete view. Totals count leaf tasks, not grouping rows.
 ## Tool
 
 - `update_plan` — agent-facing; replace the complete plan. Each ordered row has
-  `step`, optional `depth` (0–8), and a leaf `status` of `pending`,
-  `in_progress`, or `completed`. A row becomes a parent when the next row has a
-  greater depth; its status and progress are derived, so its input status can be
-  omitted. Depth starts at 0 and can increase by at most one row at a time.
-  Flat plans remain compatible. The tool runs sequentially so the agent sees
-  each update before continuing.
+  `step`, an optional `description` of up to 500 characters, optional `depth`
+  (0–8), and a leaf `status` of `pending`, `in_progress`, or `completed`.
+  Descriptions hold context or completion criteria that do not fit a concise
+  step title. A row becomes a parent when the next row has a greater depth; its
+  status and progress are derived, so its input status can be omitted. Depth
+  starts at 0 and can increase by at most one row at a time. Flat plans remain
+  compatible. The tool runs sequentially so the agent sees each update before
+  continuing.
 
 Box border uses the accent color from `accent-color`.
 

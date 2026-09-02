@@ -2,13 +2,15 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 
 type Status = "pending" | "in_progress" | "completed";
-interface PlanItem { step: string; status: Status; depth?: number }
-interface DraftPlanItem { step: string; status?: Status; depth?: number }
+interface PlanItem { step: string; description?: string; status: Status; depth?: number }
+interface DraftPlanItem { step: string; description?: string; status?: Status; depth?: number }
 interface PlanState { explanation?: string; items: PlanItem[] }
 const LEGACY_OVERLAY_HOST_KEY = "plan-overlay-host";
 const LEGACY_WIDGET_KEY = "plan";
 const OVERLAY_WIDTH = 50;
 const MAX_EXPLANATION_ROWS = 3;
+const MAX_ACTIVE_DESCRIPTION_ROWS = 2;
+const MAX_DESCRIPTION_LENGTH = 500;
 const MAX_PLAN_DEPTH = 8;
 const ANSI_RESET = "\x1b[0m";
 
@@ -25,6 +27,11 @@ const parameters = {
 				type: "object",
 				properties: {
 					step: { type: "string" },
+					description: {
+						type: "string",
+						maxLength: MAX_DESCRIPTION_LENGTH,
+						description: "Optional short context or completion criteria for this item",
+					},
 					status: {
 						type: "string",
 						enum: ["pending", "in_progress", "completed"],
@@ -52,6 +59,7 @@ const PLAN_GUARD_MARKER = "TODO guard:";
 
 const PROMPT_GUIDELINES = [
 	"Use update_plan for meaningful multi-step work. Pass the complete current plan on every update; do not send partial patches.",
+	"Keep update_plan step titles concise. Use optional descriptions only for context or completion criteria that the title cannot carry.",
 	"For nested update_plan lists, order parent rows before their children and set each child's depth to one more than its parent. Omit status on parent rows; parent status and progress are derived from leaf tasks.",
 	"Keep exactly one leaf update_plan step in_progress while work remains. Before finalizing, call update_plan so completed work is marked completed; if anything remains pending/in_progress, explain that it is blocked, canceled, or deferred.",
 ];
@@ -96,12 +104,23 @@ function normalizePlanItems(rawPlan: unknown): PlanItem[] {
 	if (!Array.isArray(rawPlan)) throw new Error("update_plan expects plan to be an array");
 	const drafts = rawPlan.map((rawItem, index): DraftPlanItem => {
 		if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) {
-			throw new Error(`Invalid update_plan step ${index + 1}: expected an object with step, optional status, and optional depth.`);
+			throw new Error(`Invalid update_plan step ${index + 1}: expected an object with step and optional description, status, and depth.`);
 		}
 		const item = rawItem as Record<string, unknown>;
-		assertNoExtraKeys(item, ["step", "status", "depth"], `step ${index + 1}`);
+		assertNoExtraKeys(item, ["step", "description", "status", "depth"], `step ${index + 1}`);
 		const step = typeof item.step === "string" ? item.step.trim() : "";
 		if (!step) throw new Error(`Invalid update_plan step ${index + 1}: step must be a non-empty string.`);
+
+		let description: string | undefined;
+		if (item.description !== undefined) {
+			if (typeof item.description !== "string") {
+				throw new Error(`Invalid update_plan description for step ${index + 1}: expected a string.`);
+			}
+			if (Array.from(item.description).length > MAX_DESCRIPTION_LENGTH) {
+				throw new Error(`Invalid update_plan description for step ${index + 1}: must be at most ${MAX_DESCRIPTION_LENGTH} characters.`);
+			}
+			description = item.description.trim().replace(/\s+/g, " ") || undefined;
+		}
 
 		const depth = item.depth === undefined ? 0 : item.depth;
 		if (!Number.isInteger(depth) || (depth as number) < 0 || (depth as number) > MAX_PLAN_DEPTH) {
@@ -122,7 +141,7 @@ function normalizePlanItems(rawPlan: unknown): PlanItem[] {
 			}
 			status = item.status as Status;
 		}
-		return { step, status, ...(depth === 0 ? {} : { depth: depth as number }) };
+		return { step, ...(description ? { description } : {}), status, ...(depth === 0 ? {} : { depth: depth as number }) };
 	});
 
 	for (let index = 0; index < drafts.length; index++) {
@@ -234,7 +253,9 @@ function modelPlanLines(plan: PlanState): string[] {
 			const progress = hasChildren(plan.items, index)
 				? (() => { const group = groupStats(plan.items, index); return ` (${group.completed}/${group.total})`; })()
 				: "";
-			lines.push(`${"  ".repeat(itemDepth(item))}- ${marker} ${item.step}${progress}`);
+			const indent = "  ".repeat(itemDepth(item));
+			lines.push(`${indent}- ${marker} ${item.step}${progress}`);
+			if (item.description) lines.push(`${indent}  Description: ${item.description}`);
 		}
 	} else {
 		lines.push("Current plan is empty.");
@@ -329,9 +350,11 @@ function planLines(state: PlanState, theme: any): string[] {
 	const lines = [`${theme.fg("muted", "•")} ${theme.bold("Updated Plan")}`];
 	if (state.explanation?.trim()) lines.push(`  ${theme.fg("dim", theme.italic(state.explanation.trim()))}`);
 	for (let index = 0; index < state.items.length; index++) {
-		const { first } = treePrefixes(state.items, index);
+		const item = state.items[index]!;
+		const { first, continuation } = treePrefixes(state.items, index);
 		const { marker, text } = styledItem(state.items, index, theme);
 		lines.push(`${first}${marker}${text}`);
+		if (item.description) lines.push(`${continuation}  ${theme.fg("dim", theme.italic(item.description))}`);
 	}
 	if (!state.items.length) lines.push(`  └─ ${theme.fg("dim", "(no steps)")}`);
 	return lines;
@@ -345,16 +368,20 @@ function indentedWrap(content: string, width: number, firstPrefix: string, conti
 	);
 }
 
-function renderedPlanLines(state: PlanState, theme: any, width: number): string[] {
+function renderedPlanLines(state: PlanState, theme: any, width: number, showDescriptions = false): string[] {
 	const maxWidth = Math.max(1, width);
 	const lines = [truncateToWidth(`${theme.fg("muted", "•")} ${theme.bold("Updated Plan")}`, maxWidth, "")];
 	if (state.explanation?.trim()) {
 		lines.push(...indentedWrap(theme.fg("dim", theme.italic(state.explanation.trim())), maxWidth, "  "));
 	}
 	for (let index = 0; index < state.items.length; index++) {
+		const item = state.items[index]!;
 		const { first, continuation } = treePrefixes(state.items, index);
 		const { marker, text } = styledItem(state.items, index, theme);
 		lines.push(...indentedWrap(text, maxWidth, `${first}${marker}`, `${continuation}  `));
+		if (showDescriptions && item.description) {
+			lines.push(...indentedWrap(theme.fg("dim", theme.italic(item.description)), maxWidth, `${continuation}  `));
+		}
 	}
 	if (!state.items.length) lines.push(...indentedWrap(theme.fg("dim", "(no steps)"), maxWidth, "  └─ ", "     "));
 	return lines;
@@ -368,28 +395,44 @@ function sealAnsiLine(line: string, width: number): string {
 }
 
 class PlanResult implements Component {
-	constructor(private readonly state: PlanState, private readonly theme: any) {}
+	constructor(
+		private readonly state: PlanState,
+		private readonly theme: any,
+		private readonly showDescriptions: boolean,
+	) {}
 
 	render(width: number): string[] {
-		return renderedPlanLines(this.state, this.theme, width).map((line) => sealAnsiLine(line, width));
+		return renderedPlanLines(this.state, this.theme, width, this.showDescriptions)
+			.map((line) => sealAnsiLine(line, width));
 	}
 
 	invalidate(): void {}
 }
 
-function boundedWrap(content: string, width: number, maxRows: number, theme: any): string[] {
-	const wrapped = wrapTextWithAnsi(content, Math.max(1, width));
-	if (wrapped.length <= maxRows) return wrapped;
-	const visible = wrapped.slice(0, maxRows);
+function boundedRows(rows: string[], width: number, maxRows: number, theme: any): string[] {
+	if (rows.length <= maxRows) return rows;
+	const visible = rows.slice(0, maxRows);
 	const last = visible.at(-1) ?? "";
 	visible[visible.length - 1] = `${truncateToWidth(last, Math.max(0, width - 1), "")}${theme.fg("dim", "…")}`;
 	return visible;
+}
+
+function boundedWrap(content: string, width: number, maxRows: number, theme: any): string[] {
+	return boundedRows(wrapTextWithAnsi(content, Math.max(1, width)), width, maxRows, theme);
 }
 
 function itemRows(items: PlanItem[], index: number, contentWidth: number, theme: any): string[] {
 	const { first, continuation } = treePrefixes(items, index, "");
 	const { marker, text } = styledItem(items, index, theme);
 	return indentedWrap(text, contentWidth, `${first}${marker}`, `${continuation}  `);
+}
+
+function activeDescriptionRows(items: PlanItem[], index: number, contentWidth: number, theme: any): string[] {
+	const description = items[index]!.description;
+	if (!description) return [];
+	const { continuation } = treePrefixes(items, index, "");
+	const rows = indentedWrap(theme.fg("dim", theme.italic(description)), contentWidth, `${continuation}  `);
+	return boundedRows(rows, contentWidth, MAX_ACTIVE_DESCRIPTION_ROWS, theme);
 }
 
 function isInsideInactiveGroup(items: PlanItem[], index: number): boolean {
@@ -421,7 +464,12 @@ function renderPlanBody(
 	}
 
 	for (let index = 0; index < state.items.length; index++) {
-		if (!isInsideInactiveGroup(state.items, index)) body.push(...itemRows(state.items, index, contentWidth, theme));
+		const item = state.items[index]!;
+		if (isInsideInactiveGroup(state.items, index)) continue;
+		body.push(...itemRows(state.items, index, contentWidth, theme));
+		if (!hasChildren(state.items, index) && item.status === "in_progress") {
+			body.push(...activeDescriptionRows(state.items, index, contentWidth, theme));
+		}
 	}
 	if (!state.items.length) body.push(theme.fg("dim", "No active TODOs"));
 
@@ -490,9 +538,9 @@ export default function (pi: ExtensionAPI, dependencies: PlanProgressDependencie
 			};
 		},
 		renderCall: () => new Text("", 0, 0),
-		renderResult: (result: any, _options: any, theme: any) => {
+		renderResult: (result: any, options: any, theme: any) => {
 			const details = restorePlanState(result.details);
-			return new PlanResult(details ?? { items: [] }, theme);
+			return new PlanResult(details ?? { items: [] }, theme, Boolean(options.expanded));
 		},
 		renderShell: "self",
 	});

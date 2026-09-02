@@ -143,7 +143,7 @@ test("accepts, normalizes, and persists a valid plan update", async () => {
 		explanation: "  Starting implementation  ",
 		plan: [
 			{ step: "  Inspect code  ", status: "completed" },
-			{ step: "Add tests", status: "in_progress" },
+			{ step: "Add tests", description: "  Cover description\n behavior  ", status: "in_progress" },
 			{ step: "Run checks", status: "pending" },
 		],
 	});
@@ -152,13 +152,53 @@ test("accepts, normalizes, and persists a valid plan update", async () => {
 		explanation: "Starting implementation",
 		items: [
 			{ step: "Inspect code", status: "completed" },
-			{ step: "Add tests", status: "in_progress" },
+			{ step: "Add tests", description: "Cover description behavior", status: "in_progress" },
 			{ step: "Run checks", status: "pending" },
 		],
 	};
 	expect(result.details).toEqual(expected);
 	expect(harness.appended).toEqual([{ customType: "plan-progress", data: expected }]);
 	expect(result.content[0].text).toContain("Current step: Add tests");
+	expect(result.content[0].text).toContain("Description: Cover description behavior");
+});
+
+test("keeps descriptions compact in the overlay and transcript", async () => {
+	const harness = createHarness();
+	const result = await executePlan(harness, {
+		plan: [
+			{ step: "Inspect code", description: "Find the relevant state and rendering paths.", status: "completed" },
+			{
+				step: "Add tests",
+				description: "Run integration tests and compare the complete output before closing this task.",
+				status: "in_progress",
+			},
+			{ step: "Run checks", description: "Execute the full repository validation.", status: "pending" },
+		],
+	});
+
+	const compact = harness.updatePlan.renderResult(result, { expanded: false }, theme).render(40).join("\n");
+	expect(compact).not.toContain("Find the relevant state");
+	expect(compact).not.toContain("Run integration tests");
+
+	const expanded = harness.updatePlan.renderResult(result, { expanded: true }, theme).render(40).join("\n");
+	expect(expanded).toContain("Find the relevant state");
+	expect(expanded).toContain("Run integration tests");
+	expect(expanded).toContain("Execute the full repository");
+
+	const overlay = harness.overlayCardDefinition.renderBody(30, 20, theme);
+	expect(overlay.join("\n")).not.toContain("Find the relevant state");
+	expect(overlay.join("\n")).toContain("Run integration tests");
+	expect(overlay.join("\n")).not.toContain("Execute the full repository");
+	const activeRow = overlay.findIndex((line: string) => line.includes("Add tests"));
+	const nextTaskRow = overlay.findIndex((line: string) => line.includes("Run checks"));
+	expect(nextTaskRow - activeRow).toBe(3);
+	expect(overlay.some((line: string) => line.endsWith("…"))).toBe(true);
+
+	await harness.commands["plan-status"].handler("", harness.ctx);
+	const fullStatus = harness.notifications.at(-1)?.message ?? "";
+	expect(fullStatus).toContain("Find the relevant state");
+	expect(fullStatus).toContain("Run integration tests");
+	expect(fullStatus).toContain("Execute the full repository");
 });
 
 test("derives nested group progress and collapses inactive groups in the overlay", async () => {
@@ -209,6 +249,20 @@ test("derives nested group progress and collapses inactive groups in the overlay
 		"  └─ ◇ Release · 0/1",
 		"     └─ ○ Publish",
 	].join("\n"));
+});
+
+test("publishes and enforces the description length limit", async () => {
+	const harness = createHarness();
+	const descriptionSchema = harness.updatePlan.parameters.properties.plan.items.properties.description;
+	expect(descriptionSchema.maxLength).toBe(500);
+
+	await expect(executePlan(harness, {
+		plan: [{ step: "Invalid description", description: 42, status: "completed" }],
+	})).rejects.toThrow("expected a string");
+	await expect(executePlan(harness, {
+		plan: [{ step: "Long description", description: "x".repeat(501), status: "completed" }],
+	})).rejects.toThrow("must be at most 500 characters");
+	expect(harness.appended).toEqual([]);
 });
 
 test("rejects invalid nesting and missing leaf statuses", async () => {
@@ -289,7 +343,7 @@ test("restores the latest plan state from the active session branch", async () =
 				explanation: "Restored state",
 				items: [
 					{ step: "Restored done", status: "completed" },
-					{ step: "Restored active", status: "in_progress" },
+					{ step: "Restored active", description: "Resume from the saved checkpoint.", status: "in_progress" },
 				],
 			},
 		},
@@ -300,6 +354,6 @@ test("restores the latest plan state from the active session branch", async () =
 
 	expect(harness.notifications).toEqual([{
 		level: "info",
-		message: "• Updated Plan\n  Restored state\n  ├─ ✓ Restored done\n  └─ ● Restored active",
+		message: "• Updated Plan\n  Restored state\n  ├─ ✓ Restored done\n  └─ ● Restored active\n       Resume from the saved checkpoint.",
 	}]);
 });
