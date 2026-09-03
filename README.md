@@ -41,6 +41,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | [`petit-chat-input-bar`](extensions/petit-chat-input-bar/) | A tiny animated companion sprite above the editor, with smart and manual modes |
 | [`turn-separator`](extensions/turn-separator/) | Optional, default-off rule between tool loops with per-response TTFT/TPS |
 | [`turn-stats`](extensions/turn-stats/) | Full-turn average timing and token-usage entries plus per-response timing events |
+| [`thinking-tokens`](extensions/thinking-tokens/) | Live token counts on Pi's collapsed thinking labels |
 | [`working-timer`](extensions/working-timer/) | Adds phase text, elapsed time, and an optional spinner style to pi's built-in working row |
 
 ### Session & navigation
