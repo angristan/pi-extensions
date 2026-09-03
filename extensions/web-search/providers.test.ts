@@ -2,6 +2,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { WebProviderError } from "./provider-error";
 import { parseExaAdvancedSearchText, parseExaSearchText, searchExaWeb } from "./providers/exa";
 import { dateFilter, parseFirecrawlItems } from "./providers/firecrawl";
+import { openTinyFishUrl, parseTinyFishItems, searchTinyFishWeb } from "./providers/tinyfish";
 
 function restoreEnv(name: string, value: string | undefined): void {
 	if (value === undefined) delete process.env[name];
@@ -343,6 +344,160 @@ describe("provider normalization", () => {
 			globalThis.fetch = previousFetch;
 			restoreEnv("EXA_API_KEY", previousApiKey);
 			random.mockRestore();
+		}
+	});
+
+	test("normalizes TinyFish records and preserves bounded paper metadata", () => {
+		const results = parseTinyFishItems([
+			{
+				url: "https://arxiv.org/abs/2503.07919",
+				title: "BearCubs",
+				snippet: "A benchmark for computer-using web agents.",
+				year: 2025,
+				authors: ["Researcher"],
+				venue: "arXiv",
+				cited_by_count: 12,
+				pdf_url: "https://arxiv.org/pdf/2503.07919",
+			},
+			{ url: "https://arxiv.org/abs/2503.07919", title: "Duplicate" },
+			{ url: "javascript:alert(1)", title: "Unsafe" },
+		]);
+
+		expect(results).toHaveLength(1);
+		expect(results[0]).toMatchObject({
+			url: "https://arxiv.org/abs/2503.07919",
+			title: "BearCubs",
+			date: "2025",
+			snippets: ["A benchmark for computer-using web agents."],
+			source: "tinyfish",
+			rank: 1,
+			metadata: {
+				authors: ["Researcher"],
+				venue: "arXiv",
+				year: 2025,
+				citedByCount: 12,
+				pdfUrl: "https://arxiv.org/pdf/2503.07919",
+			},
+		});
+	});
+
+	test("maps TinyFish filters and paginates to the requested limit", async () => {
+		const previousFetch = globalThis.fetch;
+		const previousApiKey = process.env.TINYFISH_API_KEY;
+		const requestUrls: string[] = [];
+		const requestKeys: Array<string | null> = [];
+		globalThis.fetch = (async (input, init) => {
+			const url = new URL(String(input));
+			requestUrls.push(url.toString());
+			requestKeys.push(new Headers(init?.headers).get("x-api-key"));
+			const page = Number(url.searchParams.get("page"));
+			const count = page === 0 ? 10 : 2;
+			return new Response(JSON.stringify({
+				results: Array.from({ length: count }, (_, index) => ({
+					url: `https://example.com/${page}-${index}`,
+					title: `Paper ${page}-${index}`,
+					snippet: "Grounded evidence.",
+					year: 2026,
+				})),
+			}), { headers: { "Content-Type": "application/json" } });
+		}) as typeof fetch;
+		try {
+			process.env.TINYFISH_API_KEY = "test-tinyfish-key";
+			const result = await searchTinyFishWeb({
+				query: "web agent benchmark",
+				startDate: "2025-04-01",
+				endDate: "2026-08-30",
+				category: "publication",
+				includeDomains: [" arxiv.org "],
+				excludeDomains: ["example.org"],
+				maxAgeHours: 24,
+				limit: 12,
+			});
+
+			expect(result.results).toHaveLength(12);
+			expect(requestUrls).toHaveLength(2);
+			const first = new URL(requestUrls[0]!);
+			expect(first.searchParams.get("query")).toBe("web agent benchmark");
+			expect(first.searchParams.get("domain_type")).toBe("research_paper");
+			expect(first.searchParams.get("pub_year_min")).toBe("2025");
+			expect(first.searchParams.get("pub_year_max")).toBe("2026");
+			expect(first.searchParams.get("include_domains")).toBe("arxiv.org");
+			expect(first.searchParams.get("exclude_domains")).toBe("example.org");
+			expect(first.searchParams.has("after_date")).toBe(false);
+			expect(first.searchParams.has("recency_minutes")).toBe(false);
+			expect(new URL(requestUrls[1]!).searchParams.get("page")).toBe("1");
+			expect(requestKeys).toEqual(["test-tinyfish-key", "test-tinyfish-key"]);
+			expect(requestUrls.join("\n")).not.toContain("test-tinyfish-key");
+		} finally {
+			globalThis.fetch = previousFetch;
+			restoreEnv("TINYFISH_API_KEY", previousApiKey);
+		}
+	});
+
+	test("passes exact date bounds to TinyFish news search", async () => {
+		const previousFetch = globalThis.fetch;
+		const previousApiKey = process.env.TINYFISH_API_KEY;
+		let requestUrl = "";
+		globalThis.fetch = (async (input) => {
+			requestUrl = String(input);
+			return new Response(JSON.stringify({ results: [] }), { headers: { "Content-Type": "application/json" } });
+		}) as typeof fetch;
+		try {
+			process.env.TINYFISH_API_KEY = "test-tinyfish-key";
+			await searchTinyFishWeb({
+				query: "AI policy",
+				category: "news",
+				startDate: "2026-08-01",
+				endDate: "2026-08-30",
+			});
+			const url = new URL(requestUrl);
+			expect(url.searchParams.get("domain_type")).toBe("news");
+			expect(url.searchParams.get("after_date")).toBe("2026-08-01");
+			expect(url.searchParams.get("before_date")).toBe("2026-08-30");
+		} finally {
+			globalThis.fetch = previousFetch;
+			restoreEnv("TINYFISH_API_KEY", previousApiKey);
+		}
+	});
+
+	test("opens TinyFish pages as bounded Markdown without putting credentials in the body", async () => {
+		const previousFetch = globalThis.fetch;
+		const previousApiKey = process.env.TINYFISH_API_KEY;
+		let requestBody: any;
+		let requestKey: string | null = null;
+		globalThis.fetch = (async (_input, init) => {
+			requestBody = JSON.parse(String(init?.body));
+			requestKey = new Headers(init?.headers).get("x-api-key");
+			return new Response(JSON.stringify({
+				results: [{
+					url: "https://example.com/docs",
+					final_url: "https://example.com/docs/",
+					text: "# Documentation\n\nReadable content.",
+					format: "markdown",
+				}],
+				errors: [],
+			}), { headers: { "Content-Type": "application/json" } });
+		}) as typeof fetch;
+		try {
+			process.env.TINYFISH_API_KEY = "test-tinyfish-key";
+			const result = await openTinyFishUrl("https://example.com/docs");
+			expect(requestKey).toBe("test-tinyfish-key");
+			expect(requestBody).toEqual({
+				urls: ["https://example.com/docs"],
+				format: "markdown",
+				links: false,
+				image_links: false,
+			});
+			expect(JSON.stringify(requestBody)).not.toContain("test-tinyfish-key");
+			expect(result).toMatchObject({
+				provider: "tinyfish",
+				url: "https://example.com/docs/",
+				content: "# Documentation\n\nReadable content.",
+				truncated: false,
+			});
+		} finally {
+			globalThis.fetch = previousFetch;
+			restoreEnv("TINYFISH_API_KEY", previousApiKey);
 		}
 	});
 

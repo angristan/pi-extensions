@@ -20,7 +20,7 @@ import { openUrl, searchWeb, webStatus } from "./router";
 import type { OpenDisplayDetails, ProviderAttempt, SearchDisplayDetails, SearchDisplayItem, WebProvider } from "./types";
 
 const providerPreferenceSchema = Type.Optional(Type.String({
-	description: "Optional provider to try first: 'exa', 'firecrawl', or 'mistral'. Leave unset unless a provider-specific retry is needed; unavailable providers are skipped and fallback continues.",
+	description: "Optional provider to try first: 'exa', 'tinyfish', 'firecrawl', or 'mistral'. Leave unset unless a provider-specific retry is needed; unavailable providers are skipped and fallback continues.",
 }));
 
 const webSearchSchema = Type.Object({
@@ -108,6 +108,7 @@ function compactFilter(value: unknown): string | undefined {
 function providerPreference(value: unknown): string | undefined {
 	const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
 	if (normalized === "exa") return "try Exa first";
+	if (normalized === "tinyfish") return "try TinyFish first";
 	if (normalized === "firecrawl") return "try Firecrawl first";
 	if (normalized === "mistral") return "try Mistral first";
 	return undefined;
@@ -235,7 +236,7 @@ function headlineRow(partial: boolean, isError: boolean, verb: string, detail: s
 // Colored summary that follows the `└ ` branch, matching tidy tools' shape:
 // `<count> <noun> · <elapsed>` (and a truncation note when content was clipped).
 function providerLabel(provider: WebProvider): string {
-	return provider === "exa" ? "Exa" : provider === "firecrawl" ? "Firecrawl" : "Mistral";
+	return provider === "exa" ? "Exa" : provider === "tinyfish" ? "TinyFish" : provider === "firecrawl" ? "Firecrawl" : "Mistral";
 }
 
 function routeLabel(provider: WebProvider | undefined, attempts: ProviderAttempt[] | undefined, searchEngine?: string): string | undefined {
@@ -468,7 +469,7 @@ export default function webSearchExtension(pi: ExtensionAPI, overrides: WebSearc
 		name: "open_url",
 		label: "Open URL",
 		description:
-			"Open a public remote PDF or Mistral article ID. For HTML, use this remote Exa, Firecrawl, or Mistral fallback only after local ax retrieval is unavailable, blocked, empty, or poor.",
+			"Open a public remote PDF or Mistral article ID. For HTML, use this remote Exa, TinyFish, Firecrawl, or Mistral fallback only after local ax retrieval is unavailable, blocked, empty, or poor.",
 		promptSnippet: "Open a public remote PDF or retry a URL after local ax retrieval fails",
 		promptGuidelines: [
 			"Use open_url for public PDFs or Mistral article IDs; for HTML, only after ax is unavailable, blocked, empty, or poor.",

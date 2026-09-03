@@ -323,23 +323,27 @@ describe("web search renderer", () => {
 		const agentDirectory = mkdtempSync(join(tmpdir(), "pi-web-status-test-"));
 		const previous = {
 			agentDirectory: process.env.PI_CODING_AGENT_DIR,
+			tinyfishKey: process.env.TINYFISH_API_KEY,
 			firecrawlKey: process.env.FIRECRAWL_API_KEY,
 			mistralKey: process.env.MISTRAL_API_KEY,
 		};
 		try {
 			process.env.PI_CODING_AGENT_DIR = agentDirectory;
+			process.env.TINYFISH_API_KEY = "test-tinyfish-key";
 			process.env.FIRECRAWL_API_KEY = "test-firecrawl-key";
 			process.env.MISTRAL_API_KEY = "test-mistral-key";
 			const status = commands.find((entry) => entry.name === "web-status")?.command;
 			let message = "";
 			status.handler("", { ui: { notify(value: string) { message = value; } } });
-			expect(message).toContain("web: exa → firecrawl → mistral");
-			expect(message).toContain("open: exa → firecrawl → mistral");
+			expect(message).toContain("web: exa → tinyfish → firecrawl → mistral");
+			expect(message).toContain("open: exa → tinyfish → firecrawl → mistral");
 			expect(message).not.toContain("pdf:");
+			expect(message).not.toContain("test-tinyfish-key");
 			expect(message).not.toContain("test-firecrawl-key");
 			expect(message).not.toContain("test-mistral-key");
 		} finally {
 			if (previous.agentDirectory === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous.agentDirectory;
+			if (previous.tinyfishKey === undefined) delete process.env.TINYFISH_API_KEY; else process.env.TINYFISH_API_KEY = previous.tinyfishKey;
 			if (previous.firecrawlKey === undefined) delete process.env.FIRECRAWL_API_KEY; else process.env.FIRECRAWL_API_KEY = previous.firecrawlKey;
 			if (previous.mistralKey === undefined) delete process.env.MISTRAL_API_KEY; else process.env.MISTRAL_API_KEY = previous.mistralKey;
 			rmSync(agentDirectory, { recursive: true, force: true });

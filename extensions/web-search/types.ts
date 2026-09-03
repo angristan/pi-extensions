@@ -1,4 +1,4 @@
-export type WebProvider = "exa" | "firecrawl" | "mistral";
+export type WebProvider = "exa" | "tinyfish" | "firecrawl" | "mistral";
 export type WebSearchCategory = "news" | "pdf" | "publication" | "company" | "people" | "personal site" | "financial report";
 export type AttemptStatus = "success" | "empty" | "failed" | "skipped";
 

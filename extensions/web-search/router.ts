@@ -3,6 +3,7 @@ import { compactProviderError, isRetriableProviderError, WebProviderError } from
 import { openExaUrl, searchExaWeb } from "./providers/exa";
 import { hasFirecrawlAccess, openFirecrawlUrl, searchFirecrawlWeb } from "./providers/firecrawl";
 import { hasMistralAccess, openMistralUrl, searchMistralWeb } from "./providers/mistral";
+import { hasTinyFishAccess, openTinyFishUrl, searchTinyFishWeb } from "./providers/tinyfish";
 import type {
 	OpenUrlResult,
 	ProviderAttempt,
@@ -12,11 +13,11 @@ import type {
 	WebSearchResult,
 } from "./types";
 
-const DEFAULT_PROVIDER_ORDER: WebProvider[] = ["exa", "firecrawl", "mistral"];
+const DEFAULT_PROVIDER_ORDER: WebProvider[] = ["exa", "tinyfish", "firecrawl", "mistral"];
 
 function normalizedProvider(value: string | undefined): WebProvider | undefined {
 	const normalized = value?.trim().toLowerCase();
-	return normalized === "exa" || normalized === "firecrawl" || normalized === "mistral" ? normalized : undefined;
+	return normalized === "exa" || normalized === "tinyfish" || normalized === "firecrawl" || normalized === "mistral" ? normalized : undefined;
 }
 
 function configuredProvider(name: string): WebProvider | undefined {
@@ -26,6 +27,7 @@ function configuredProvider(name: string): WebProvider | undefined {
 function available(provider: WebProvider): boolean {
 	if (provider === "mistral") return hasMistralAccess();
 	if (provider === "firecrawl") return hasFirecrawlAccess();
+	if (provider === "tinyfish") return hasTinyFishAccess();
 	return true;
 }
 
@@ -80,10 +82,17 @@ function matchesDomain(url: string | null, rule: DomainRule): boolean {
 
 function knownDateInRange(date: string | null, startDate?: string, endDate?: string): boolean {
 	if (!date || /^(?:n\/?a|none|null|unknown)$/i.test(date.trim())) return true;
-	const timestamp = Date.parse(date);
-	if (!Number.isFinite(timestamp)) return true;
+	const yearOnly = /^(\d{4})$/.exec(date.trim());
 	const start = startDate ? Date.parse(`${startDate}T00:00:00Z`) : undefined;
 	const end = endDate ? Date.parse(`${endDate}T23:59:59.999Z`) : undefined;
+	if (yearOnly) {
+		const year = Number(yearOnly[1]);
+		const yearStart = Date.UTC(year, 0, 1);
+		const yearEnd = Date.UTC(year, 11, 31, 23, 59, 59, 999);
+		return (start === undefined || yearEnd >= start) && (end === undefined || yearStart <= end);
+	}
+	const timestamp = Date.parse(date);
+	if (!Number.isFinite(timestamp)) return true;
 	return (start === undefined || timestamp >= start) && (end === undefined || timestamp <= end);
 }
 
@@ -170,9 +179,11 @@ export async function searchWeb(args: WebSearchArgs, options: ProviderOptions = 
 	return routeSearch(webProviderOrder(args.provider), async (provider) => {
 		const result = provider === "exa"
 			? await searchExaWeb(args, options)
-			: provider === "firecrawl"
-				? await searchFirecrawlWeb(args, options)
-				: await searchMistralWeb(args, options);
+			: provider === "tinyfish"
+				? await searchTinyFishWeb(args, options)
+				: provider === "firecrawl"
+					? await searchFirecrawlWeb(args, options)
+					: await searchMistralWeb(args, options);
 		return applySearchFilters(result, args);
 	});
 }
@@ -186,9 +197,11 @@ export async function openUrl(url: string, options: ProviderOptions = {}, prefer
 		try {
 			const result = provider === "exa"
 				? await openExaUrl(url, options)
-				: provider === "firecrawl"
-					? await openFirecrawlUrl(url, options)
-					: await openMistralUrl(url, options);
+				: provider === "tinyfish"
+					? await openTinyFishUrl(url, options)
+					: provider === "firecrawl"
+						? await openFirecrawlUrl(url, options)
+						: await openMistralUrl(url, options);
 			attempts.push({ provider, status: "success", elapsedMs: performance.now() - attemptStarted, creditsUsed: result.creditsUsed });
 			return {
 				...result,
@@ -209,6 +222,7 @@ export function webStatus() {
 	return {
 		providers: {
 			exa: { available: true, keyed: Boolean(process.env.EXA_API_KEY?.trim()) },
+			tinyfish: { available: hasTinyFishAccess(), keyed: hasTinyFishAccess() },
 			firecrawl: { available: hasFirecrawlAccess(), keyed: hasFirecrawlAccess() },
 			mistral: { available: hasMistralAccess(), keyed: hasMistralAccess() },
 		},

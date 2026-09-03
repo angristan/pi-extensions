@@ -14,8 +14,8 @@ Requests use sequential fallbacks. Providers are never raced, avoiding duplicate
 requests and unnecessary Firecrawl credits.
 
 ```text
-web_search  Exa → Firecrawl (when configured) → Mistral (when configured)
-open_url    Exa → Firecrawl (when configured) → Mistral (when configured)
+web_search  Exa → TinyFish (when configured) → Firecrawl (when configured) → Mistral (when configured)
+open_url    Exa → TinyFish (when configured) → Firecrawl (when configured) → Mistral (when configured)
 ```
 
 The same default provider order is used for web search and URL opening.
@@ -55,9 +55,14 @@ paid key. The key is sent in the `x-api-key` request header and never placed in
 the MCP URL. HTTP 429 responses from paid Exa use the normal retry policy. If
 both Exa tiers are unavailable, routing continues to the next provider.
 Anonymous retries are independent in each process, so jitter reduces collisions
-between concurrent sessions without shared state. Firecrawl is credential-gated
-to avoid flaky shared-IP keyless limits; set `FIRECRAWL_API_KEY` before it
-appears in routes.
+between concurrent sessions without shared state.
+
+TinyFish Search and Fetch are free but require an account key. Set
+`TINYFISH_API_KEY` to enable them. Search uses TinyFish's native date, domain,
+news, and research-paper filters where they match the public tool contract;
+unsupported categories and cache-age controls remain best effort. Firecrawl is
+credential-gated to avoid flaky shared-IP keyless limits; set
+`FIRECRAWL_API_KEY` before it appears in routes.
 
 Mistral continues to read its API key and base URL from the `mistral` provider in
 `$PI_CODING_AGENT_DIR/models.json` (defaults to `~/.pi/agent/models.json`), with
@@ -66,13 +71,13 @@ resolvable key, Mistral is omitted from every route.
 
 Optional routing overrides:
 
-- `PI_WEB_SEARCH_PROVIDER=exa|mistral|firecrawl`
-- `PI_WEB_OPEN_PROVIDER=exa|mistral|firecrawl`
+- `PI_WEB_SEARCH_PROVIDER=exa|tinyfish|firecrawl|mistral`
+- `PI_WEB_OPEN_PROVIDER=exa|tinyfish|firecrawl|mistral`
 
-Each tool also accepts an optional `provider` argument (`exa`, `firecrawl`, or
-`mistral`) to try that provider first for a single call. Per-call preferences
-win over environment overrides, but unavailable providers are skipped and the
-normal fallback route continues.
+Each tool also accepts an optional `provider` argument (`exa`, `tinyfish`,
+`firecrawl`, or `mistral`) to try that provider first for a single call. Per-call
+preferences win over environment overrides, but unavailable providers are
+skipped and the normal fallback route continues.
 
 Use `/web-status` to inspect effective routes and keyed availability.
 Credential values are never shown.
@@ -127,4 +132,4 @@ Fallbacks render explicitly:
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
 - **Depends on extensions:** [`better-native-pi`](../better-native-pi/).
-- **System/services:** Exa; Firecrawl and Mistral are optional keyed providers.
+- **System/services:** Exa; TinyFish, Firecrawl, and Mistral are optional keyed providers.

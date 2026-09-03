@@ -82,6 +82,16 @@ describe("provider router", () => {
 		});
 	});
 
+	test("keeps year-only publications when their year overlaps the requested dates", () => {
+		const unfiltered = result("tinyfish");
+		unfiltered.results[0] = { ...unfiltered.results[0]!, date: "2026" };
+		expect(applySearchFilters(unfiltered, {
+			query: "web agents",
+			startDate: "2026-06-01",
+			endDate: "2026-06-30",
+		}).results).toHaveLength(1);
+	});
+
 	test("falls back sequentially and records each attempt", async () => {
 		const calls: WebProvider[] = [];
 		const routed = await routeSearch(["exa", "firecrawl"], async (provider) => {
@@ -128,10 +138,11 @@ describe("provider router", () => {
 		expect(routed.attempts?.[0]).toMatchObject({ provider: "exa", status: "success" });
 	});
 
-	test("omits Firecrawl and Mistral when credentials are missing", () => {
+	test("omits keyed providers when credentials are missing", () => {
 		const agentDir = mkdtempSync(join(tmpdir(), "pi-web-search-test-"));
 		const previous = {
 			agentDir: process.env.PI_CODING_AGENT_DIR,
+			tinyfishKey: process.env.TINYFISH_API_KEY,
 			firecrawlKey: process.env.FIRECRAWL_API_KEY,
 			mistralKey: process.env.MISTRAL_API_KEY,
 			searchProvider: process.env.PI_WEB_SEARCH_PROVIDER,
@@ -139,6 +150,7 @@ describe("provider router", () => {
 		};
 		try {
 			process.env.PI_CODING_AGENT_DIR = agentDir;
+			delete process.env.TINYFISH_API_KEY;
 			delete process.env.FIRECRAWL_API_KEY;
 			delete process.env.MISTRAL_API_KEY;
 			delete process.env.PI_WEB_SEARCH_PROVIDER;
@@ -147,11 +159,13 @@ describe("provider router", () => {
 			expect(webProviderOrder()).toEqual(["exa"]);
 			expect(openProviderOrder("https://example.com/docs")).toEqual(["exa"]);
 			expect(openProviderOrder("mistral-news-article-id")).toEqual([]);
+			expect(webStatus().providers.tinyfish).toEqual({ available: false, keyed: false });
 			expect(webStatus().providers.firecrawl).toEqual({ available: false, keyed: false });
 			expect(webStatus().providers.mistral).toEqual({ available: false, keyed: false });
 			expect(webStatus().routes).not.toHaveProperty("pdf");
 		} finally {
 			restoreEnv("PI_CODING_AGENT_DIR", previous.agentDir);
+			restoreEnv("TINYFISH_API_KEY", previous.tinyfishKey);
 			restoreEnv("FIRECRAWL_API_KEY", previous.firecrawlKey);
 			restoreEnv("MISTRAL_API_KEY", previous.mistralKey);
 			restoreEnv("PI_WEB_SEARCH_PROVIDER", previous.searchProvider);
@@ -162,22 +176,25 @@ describe("provider router", () => {
 
 	test("uses one credential-gated order for web, open, and PDFs", () => {
 		const previous = {
+			tinyfishKey: process.env.TINYFISH_API_KEY,
 			firecrawlKey: process.env.FIRECRAWL_API_KEY,
 			mistralKey: process.env.MISTRAL_API_KEY,
 			searchProvider: process.env.PI_WEB_SEARCH_PROVIDER,
 			openProvider: process.env.PI_WEB_OPEN_PROVIDER,
 		};
 		try {
+			process.env.TINYFISH_API_KEY = "test-tinyfish";
 			process.env.FIRECRAWL_API_KEY = "test-firecrawl";
 			process.env.MISTRAL_API_KEY = "test-mistral";
 			delete process.env.PI_WEB_SEARCH_PROVIDER;
 			delete process.env.PI_WEB_OPEN_PROVIDER;
 
-			const route = ["exa", "firecrawl", "mistral"];
+			const route = ["exa", "tinyfish", "firecrawl", "mistral"];
 			expect(webProviderOrder()).toEqual(route);
 			expect(openProviderOrder("https://example.com/docs")).toEqual(route);
 			expect(openProviderOrder("https://example.com/manual.pdf")).toEqual(route);
 		} finally {
+			restoreEnv("TINYFISH_API_KEY", previous.tinyfishKey);
 			restoreEnv("FIRECRAWL_API_KEY", previous.firecrawlKey);
 			restoreEnv("MISTRAL_API_KEY", previous.mistralKey);
 			restoreEnv("PI_WEB_SEARCH_PROVIDER", previous.searchProvider);
@@ -187,21 +204,25 @@ describe("provider router", () => {
 
 	test("lets a per-call provider preference take precedence over env overrides", () => {
 		const previous = {
+			tinyfishKey: process.env.TINYFISH_API_KEY,
 			firecrawlKey: process.env.FIRECRAWL_API_KEY,
 			mistralKey: process.env.MISTRAL_API_KEY,
 			searchProvider: process.env.PI_WEB_SEARCH_PROVIDER,
 			openProvider: process.env.PI_WEB_OPEN_PROVIDER,
 		};
 		try {
+			process.env.TINYFISH_API_KEY = "test-tinyfish";
 			process.env.FIRECRAWL_API_KEY = "test-firecrawl";
 			process.env.MISTRAL_API_KEY = "test-mistral";
 			process.env.PI_WEB_SEARCH_PROVIDER = "mistral";
 			process.env.PI_WEB_OPEN_PROVIDER = "mistral";
 
-			expect(webProviderOrder("firecrawl")).toEqual(["firecrawl", "mistral", "exa"]);
-			expect(openProviderOrder("https://example.com/docs", "firecrawl")).toEqual(["firecrawl", "mistral", "exa"]);
-			expect(webProviderOrder("unknown")).toEqual(["mistral", "exa", "firecrawl"]);
+			expect(webProviderOrder("tinyfish")).toEqual(["tinyfish", "mistral", "exa", "firecrawl"]);
+			expect(webProviderOrder("firecrawl")).toEqual(["firecrawl", "mistral", "exa", "tinyfish"]);
+			expect(openProviderOrder("https://example.com/docs", "firecrawl")).toEqual(["firecrawl", "mistral", "exa", "tinyfish"]);
+			expect(webProviderOrder("unknown")).toEqual(["mistral", "exa", "tinyfish", "firecrawl"]);
 		} finally {
+			restoreEnv("TINYFISH_API_KEY", previous.tinyfishKey);
 			restoreEnv("FIRECRAWL_API_KEY", previous.firecrawlKey);
 			restoreEnv("MISTRAL_API_KEY", previous.mistralKey);
 			restoreEnv("PI_WEB_SEARCH_PROVIDER", previous.searchProvider);
