@@ -43,9 +43,11 @@ dependency.
 ## User experience
 
 Managed commands keep the same reason-first headline, bordered command, and
-`│` output gutter as `better-native-pi`. Foreground completions omit terminal
-metadata; once a command yields, a final muted row identifies the terminal
-without mixing metadata into command output:
+`│` output gutter as `better-native-pi`. The elapsed time in the headline keeps
+ticking once per second while the command runs — foreground and background
+alike — and settles to the final duration once it completes. Foreground
+completions omit terminal metadata; once a command yields, a final muted row
+identifies the terminal without mixing metadata into command output:
 
 ```text
 • Running exercise live terminal updates 10s
@@ -111,9 +113,11 @@ Each terminal uses explicit lifecycle states:
 - `■` killed
 - `×` failed
 
-Once a command yields, its transcript card becomes an immutable snapshot with a
-`/ps` hint. Live output and final status move to the explicitly opened viewer,
-which prevents hidden or off-screen cards from redrawing long transcripts.
+Once a command yields, its transcript card keeps a live elapsed headline driven by
+a shared one-second ticker, with a `/ps` hint. Live output continues in the
+explicitly opened viewer. When the command completes, the card settles once to
+a final status and elapsed time and then stays byte-stable, which prevents
+hidden or off-screen cards from repeatedly redrawing long transcripts.
 Completion state remains persisted invisibly for session restore without adding
 a duplicate transcript entry.
 
@@ -121,7 +125,8 @@ a duplicate transcript entry.
 
 - Polls return cursor-based deltas rather than repeating old output.
 - Foreground command updates are coalesced after 250ms of quiet, with a 500ms maximum wait during continuous output.
-- Yielded transcript cards are immutable and never start polling or invalidate the transcript.
+- Live managed cards advance their elapsed headline on a single shared one-second ticker that exists only while active jobs exist; completion settles each card once and releases it.
+- Settled transcript cards are immutable and never poll or invalidate the transcript again.
 - The live viewer subscribes to output/status events only while open, skips unchanged revisions, pauses redraws while unfocused, and uses a 5-second fallback check for missed events.
 - Closing the viewer disposes its subscription and timers; historical jobs never subscribe.
 - Collapsed cards and the viewer render bounded latest-output tails with width-keyed caches; expanded cards remain available on explicit request.

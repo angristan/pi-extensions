@@ -236,7 +236,10 @@ class ManagedCommandComponent {
 		const expansionChanged = this.expanded !== expanded;
 		this.fallback = next;
 		if (changed || expansionChanged) this.frozenView = undefined;
-		if (Number.isFinite(next?.observedAt)) this.observedAt = next.observedAt;
+		// Monotonic: the ticker may have already advanced observation time past a
+		// re-delivered stale partial (quiet commands emit no new partials, so Pi
+		// re-renders with the same result object while ticks move time forward).
+		if (Number.isFinite(next?.observedAt)) this.observedAt = Math.max(this.observedAt, next.observedAt);
 		// Partial updates and expansion changes recompute this transcript row
 		// from new data; the shared ticker adds the per-second elapsed heartbeat.
 		if (changed || expansionChanged) this.invalidate();
