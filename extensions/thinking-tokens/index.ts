@@ -1,23 +1,39 @@
 /**
- * thinking-tokens — live token counts on Pi's collapsed thinking labels.
+ * thinking-tokens — live thinking-token progress without transcript redraws.
  *
- * Pi renders every hidden thinking block as a static "Thinking..." label with
- * no progress signal. This extension turns that label into a live counter
- * (`Thinking… 1.2k`) while reasoning streams, then freezes the final count on
- * the message when it settles. The frozen count is exact when the provider
- * reports reasoning tokens in its usage payload (Anthropic, OpenAI Responses,
- * Gemini); otherwise the last chars-per-token estimate is kept.
+ * Pi renders hidden thinking blocks as a static "Thinking..." label with no
+ * progress signal. Driving that label live via `setHiddenThinkingLabel` is not
+ * viable: every push re-renders every assistant message component, and any
+ * change to a transcript line above the viewport forces a full-screen redraw
+ * with scrollback replay. Per-token, that storms the renderer.
  *
- * The label is global across the transcript, so the counter always reflects the
- * most recent thinking episode. The frozen count stays visible after a run
- * settles — for transcript review — and resets when the next run starts.
+ * So the live counter lives in a one-line widget above the editor instead:
+ * `⠋ Thinking… 1.2k`. Widget updates only diff the bottom rows of the screen
+ * and never touch transcript lines. Streaming updates only mark state dirty; a
+ * single 100ms tick while an episode is live pushes at most one widget render
+ * per interval, so token bursts cannot queue renders.
+ *
+ * When a message settles, the exact provider-reported reasoning count (or the
+ * final estimate) is published as a cross-extension event, and the widget
+ * disappears. The transcript keeps Pi's plain labels.
  */
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-const STREAMING_LABEL = "Thinking\u2026"; // … while the label is still moving
-const FROZEN_LABEL = "Thinking..."; // matches Pi's default label style
+export const THINKING_TOKENS_EVENT = "thinking-tokens:episode";
+
+export interface ThinkingEpisodeEvent {
+	/** Exact reasoning tokens when the provider reports them, else the estimate. */
+	reasoningTokens: number;
+	/** True when the figure is the provider's exact count, false when estimated. */
+	exact: boolean;
+}
+
+const WIDGET_KEY = "thinking-tokens";
 const CHARS_PER_TOKEN = 4;
+/** One widget render per interval at most, so token bursts stay invisible. */
+const TICK_INTERVAL_MS = 100;
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠖", "⠒", "⠐", "⠂", "⠂"] as const;
 
 /** Compact token count, e.g. `512`, `1.2k`, `3.4M`. */
 export function formatTokenCount(value: number): string {
@@ -56,66 +72,128 @@ export function exactReasoningTokens(message: AssistantMessage): number | undefi
 	return typeof reasoning === "number" && reasoning >= 0 ? reasoning : undefined;
 }
 
-export function formatLabel(count: number, streaming: boolean): string {
-	const head = streaming ? STREAMING_LABEL : FROZEN_LABEL;
-	return count > 0 ? `${head} ${formatTokenCount(count)}` : head;
+export function formatWidgetLine(count: number, spinnerFrame: number, fg: (color: "accent" | "dim", text: string) => string): string {
+	const spinner = SPINNER_FRAMES[Math.abs(spinnerFrame) % SPINNER_FRAMES.length];
+	return `${fg("accent", spinner)} ${fg("dim", `Thinking… ${formatTokenCount(count)}`)}`;
+}
+
+export interface ThinkingEpisode {
+	/** Final reasoning tokens for the episode, exact when the provider reports them. */
+	reasoningTokens: number;
+	exact: boolean;
 }
 
 interface RuntimeDependencies {
-	/** Injected clock-free label sink for tests. */
-	pushLabel?: (ctx: ExtensionContext, label: string | undefined) => void;
+	/** Interval factory for tests. */
+	setInterval?: (callback: () => void, ms: number) => { unref?: () => void };
+	clearInterval?: (timer: unknown) => void;
 }
 
 export default function thinkingTokens(pi: ExtensionAPI, deps: RuntimeDependencies = {}) {
-	// runActive distinguishes fresh user-visible runs (reset the label) from
-	// internal re-entries (retries, compaction continuations) that keep it.
-	let runActive = false;
-	let sawThinking = false;
-	let lastLabel: string | undefined;
+	const setInterval_ = deps.setInterval ?? ((callback: () => void, ms: number) => globalThis.setInterval(callback, ms));
+	const clearInterval_ = deps.clearInterval ?? ((timer: unknown) => globalThis.clearInterval(timer as any));
 
-	const push = (ctx: ExtensionContext, label: string | undefined) => {
-		if (ctx.mode !== "tui" || label === lastLabel) return;
-		lastLabel = label;
-		(deps.pushLabel ?? ((context, value) => context.ui.setHiddenThinkingLabel(value)))(ctx, label);
-	};
+	// Episode state. `dirty` marks that the widget line changed since the last
+	// pushed render; the tick is the only place that renders, so bursts of
+	// message_update events collapse into at most one render per interval.
+	let dirty = false;
+	let episodeLive = false;
+	let count = 0;
+	let spinnerFrame = 0;
+	let lastLine: string | undefined;
+	let ctxRef: ExtensionContext | undefined;
 
 	const isAssistant = (message: unknown): message is AssistantMessage =>
 		(message as AssistantMessage).role === "assistant";
 
-	pi.on("agent_start", (_event, ctx) => {
-		// A fresh run clears the previous episode's frozen count; an internal
-		// re-entry keeps it until new thinking streams.
-		if (runActive) return;
-		runActive = true;
-		sawThinking = false;
-		push(ctx, undefined);
+	const fg = (ctx: ExtensionContext) =>
+		(color: "accent" | "dim", text: string) => ctx.ui.theme.fg(color, text);
+
+	const push = () => {
+		const ctx = ctxRef;
+		if (ctx?.mode !== "tui") return;
+		const line = formatWidgetLine(count, spinnerFrame, fg(ctx));
+		if (line === lastLine) return;
+		lastLine = line;
+		ctx.ui.setWidget(WIDGET_KEY, [line]);
+	};
+
+	const dropWidget = (ctx: ExtensionContext) => {
+		if (ctx.mode !== "tui") return;
+		lastLine = undefined;
+		ctx.ui.setWidget(WIDGET_KEY, undefined);
+	};
+
+	// The tick exists only while an episode is live. It advances the spinner
+	// once per interval and pushes the line only when state is dirty, so an
+	// idle-but-live episode (quiet thinking) still animates without rendering
+	// more than the spinner needs.
+	let tickTimer: { unref?: () => void } | undefined;
+	const startTick = () => {
+		if (tickTimer) return;
+		tickTimer = setInterval_(() => {
+			if (!episodeLive) {
+				clearInterval_(tickTimer);
+				tickTimer = undefined;
+				return;
+			}
+			spinnerFrame = (spinnerFrame + 1) % SPINNER_FRAMES.length;
+			push();
+		}, TICK_INTERVAL_MS);
+		tickTimer.unref?.();
+	};
+	const stopTick = () => {
+		if (!tickTimer) return;
+		clearInterval_(tickTimer);
+		tickTimer = undefined;
+	};
+
+	pi.on("session_start", (_event, ctx) => {
+		ctxRef = ctx;
 	});
 
 	pi.on("message_update", (event, ctx) => {
 		if (!isAssistant(event.message)) return;
-		// Recompute from the partial message every update: block text always
-		// reflects everything streamed so far, including interleaved blocks.
 		const hasThinking = event.message.content.some((block) => block.type === "thinking");
 		if (!hasThinking) return;
-		sawThinking = true;
-		push(ctx, formatLabel(estimateThinkingTokens(event.message), true));
+		ctxRef = ctx;
+		count = estimateThinkingTokens(event.message);
+		dirty = true;
+		if (!episodeLive) {
+			episodeLive = true;
+			startTick();
+			// First token: show the widget immediately instead of waiting a tick.
+			push();
+		}
 	});
 
 	pi.on("message_end", (event, ctx) => {
-		if (!isAssistant(event.message) || !sawThinking) return;
-		// Freeze with the exact count when the provider reports one; otherwise
-		// keep the streamed estimate. The plain-dots label marks it settled.
-		const count = exactReasoningTokens(event.message) ?? estimateThinkingTokens(event.message);
-		push(ctx, formatLabel(count, false));
+		if (!isAssistant(event.message) || !episodeLive) return;
+		// Freeze the exact count when the provider reports one; otherwise keep
+		// the streamed estimate, then publish and disappear.
+		const exact = exactReasoningTokens(event.message);
+		const finalCount = exact ?? estimateThinkingTokens(event.message);
+		pi.events.emit(THINKING_TOKENS_EVENT, {
+			reasoningTokens: finalCount,
+			exact: exact !== undefined,
+		} satisfies ThinkingEpisodeEvent);
+		episodeLive = false;
+		dirty = false;
+		stopTick();
+		dropWidget(ctx);
 	});
 
-	pi.on("agent_settled", () => {
-		// Keep the frozen count visible for transcript review between runs.
-		runActive = false;
+	pi.on("agent_settled", (_event, ctx) => {
+		// Safety net: a stream that never reached message_end (abort, error)
+		// must not leave a stale widget or a ticking timer behind.
+		episodeLive = false;
+		dirty = false;
+		stopTick();
+		if (lastLine !== undefined) dropWidget(ctx);
 	});
 
 	pi.on("session_shutdown", (_event, ctx) => {
-		// Restore Pi's default label so reload/quit never leaks a custom one.
-		push(ctx, undefined);
+		stopTick();
+		dropWidget(ctx);
 	});
 }
