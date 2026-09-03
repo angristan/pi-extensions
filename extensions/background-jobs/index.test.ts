@@ -781,7 +781,7 @@ describe("terminal tools", () => {
 		await shutdownHarness(harness);
 	});
 
-	test("freezes the yielded transcript card when the command completes", async () => {
+	test("settles the yielded transcript card when the command completes", async () => {
 		const harness = createHarness();
 		await startHarness(harness);
 		const tool = harness.tools.get("bash");
@@ -804,9 +804,13 @@ describe("terminal tools", () => {
 			job_id: started.details.id,
 			wait: true,
 		});
-		// Completion updates footer state and the live overlay, not an off-screen
-		// transcript row whose redraw would recompute the whole session.
-		expect(component.render(120)).toEqual(running);
+		// Completion settles the card once: the next render reflects the final
+		// status and elapsed time, and every render afterward stays byte-identical.
+		const settled = component.render(120).join("\n");
+		expect(settled).toContain("Ran test live card");
+		expect(settled).toContain("completed");
+		expect(settled).not.toContain("/ps");
+		expect(component.render(120).join("\n")).toBe(settled);
 		component.dispose?.();
 	});
 
@@ -850,12 +854,12 @@ describe("terminal tools", () => {
 		}
 	});
 
-	test("never invalidates a yielded transcript card", async () => {
+	test("ticks a live yielded card and stops once it completes", async () => {
 		const harness = createHarness();
 		await startHarness(harness);
 		const tool = harness.tools.get("bash");
 		const args = {
-			command: "sleep 0.35; printf 'changed\\n'; sleep 0.35",
+			command: "sleep 2.6",
 			reasoning: "test change-driven redraws",
 			"yield-time_ms": 250,
 		};
@@ -868,14 +872,38 @@ describe("terminal tools", () => {
 			cwd: harness.ctx.cwd,
 			invalidate() { invalidations += 1; },
 		});
+		const headlineOf = (lines: string[]) =>
+			lines.find((line) => line.includes("test change-driven redraws")) ?? "";
+		const elapsedMsOf = (lines: string[]): number => {
+			const match = headlineOf(lines).match(/(\d+)(ms|s)\b/);
+			if (!match) throw new Error(`no elapsed time in headline: ${headlineOf(lines)}`);
+			return Number(match[1]) * (match[2] === "s" ? 1000 : 1);
+		};
+
 		const firstRender = component.render(120);
+		const firstElapsed = elapsedMsOf(firstRender);
+		expect(firstRender.join("\n")).toContain("Running test change-driven redraws");
+		expect(firstRender.join("\n")).toContain("running · /ps");
+
+		// The shared 1s ticker advances the elapsed headline while the job runs.
+		await Bun.sleep(1_400);
+		const tickedRender = component.render(120);
+		expect(elapsedMsOf(tickedRender)).toBeGreaterThan(firstElapsed);
+		expect(invalidations).toBeGreaterThanOrEqual(1);
 
 		await harness.tools.get("job_output").execute("wait", {
 			job_id: started.details.id,
 			wait: true,
 		});
-		expect(invalidations).toBe(0);
-		expect(component.render(120)).toEqual(firstRender);
+		// Completion settles the card; the ticker stops, so later renders are
+		// byte-identical and no further invalidations arrive.
+		const settled = component.render(120).join("\n");
+		expect(settled).toContain("completed");
+		expect(settled).not.toContain("/ps");
+		const invalidationsAtSettle = invalidations;
+		await Bun.sleep(1_400);
+		expect(component.render(120).join("\n")).toBe(settled);
+		expect(invalidations).toBe(invalidationsAtSettle);
 		component.dispose?.();
 		await shutdownHarness(harness);
 	});

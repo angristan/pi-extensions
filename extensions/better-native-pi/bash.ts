@@ -202,6 +202,17 @@ class ManagedCommandComponent {
 	// such cards then burns CPU in the render path even when idle.
 	private cachedWidth?: number;
 	private cachedLines?: string[];
+	// One shared 1-second ticker drives the elapsed headline of every live
+	// managed card — mirroring pi's own bash tool, which invalidates its
+	// "Elapsed" row once per second while a command runs. The ticker exists
+	// only while live cards exist, and completion settles each card once to a
+	// final frozen view. This replaces the earlier design where a yielded
+	// card's counter froze at yield time, and the older per-card 500ms poll
+	// that burned CPU redrawing every card independently.
+	private static liveCards = new Set<ManagedCommandComponent>();
+	private static ticker?: ReturnType<typeof setInterval>;
+	private unsubscribe?: () => void;
+	private requestInvalidate?: () => void;
 
 	constructor(
 		private readonly args: any,
@@ -210,31 +221,119 @@ class ManagedCommandComponent {
 		private readonly theme: any,
 		private readonly cwd: string | undefined,
 		private readonly service: BackgroundTerminalService,
+		requestInvalidate?: () => void,
 	) {
 		this.fallback = result?.details ?? {};
 		this.expanded = expanded;
 		this.observedAt = Number.isFinite(this.fallback.observedAt) ? this.fallback.observedAt : Date.now();
+		this.requestInvalidate = requestInvalidate;
+		this.syncSubscription();
 	}
 
-	update(result: any, expanded: boolean): void {
+	update(result: any, expanded: boolean, requestInvalidate?: () => void): void {
 		const next = result?.details ?? this.fallback;
 		const changed = this.revision(next) !== this.revision(this.fallback);
 		const expansionChanged = this.expanded !== expanded;
 		this.fallback = next;
 		if (changed || expansionChanged) this.frozenView = undefined;
 		if (Number.isFinite(next?.observedAt)) this.observedAt = next.observedAt;
-		// Partial updates and expansion changes are the only reasons to recompute
-		// this transcript row. Once a command yields, the card becomes an immutable
-		// snapshot and live output moves to the explicitly opened /ps overlay.
+		// Partial updates and expansion changes recompute this transcript row
+		// from new data; the shared ticker adds the per-second elapsed heartbeat.
 		if (changed || expansionChanged) this.invalidate();
 		this.expanded = expanded;
+		if (requestInvalidate) this.requestInvalidate = requestInvalidate;
+		this.syncSubscription();
+	}
+
+	private isActiveDetails(details: any): boolean {
+		const status = details?.status;
+		return status === "running" || status === "stopping";
+	}
+
+	/**
+	 * Keep this card in the live set while its job runs. The stored result of a
+	 * yielded card stays frozen at "running", so liveness is confirmed through
+	 * the service: a dead job settles immediately instead of re-acquiring the
+	 * ticker on every re-render (expansion toggles, transcript redraws).
+	 */
+	private syncSubscription(): void {
+		const id = this.fallback?.id;
+		const live = typeof id === "string" && this.isActiveDetails(this.fallback) && this.service.isActive(id);
+		if (live) {
+			if (!ManagedCommandComponent.liveCards.has(this)) {
+				ManagedCommandComponent.liveCards.add(this);
+				this.unsubscribe = this.service.subscribe(id, () => this.onJobActivity());
+			}
+		} else {
+			// Historical and already-settled cards just detach; requesting an
+			// invalidation here would storm the renderer during session restore.
+			this.detach();
+		}
+		ManagedCommandComponent.syncTicker();
+	}
+
+	/** Job activity while still live is carried by partial updates; ignore it. */
+	private onJobActivity(): void {
+		const id = this.fallback?.id;
+		if (typeof id === "string" && this.service.isActive(id)) return;
+		this.settle();
+	}
+
+	/** Stop participating in live updates; idempotent and render-safe. */
+	private detach(): void {
+		this.unsubscribe?.();
+		this.unsubscribe = undefined;
+		if (ManagedCommandComponent.liveCards.delete(this)) ManagedCommandComponent.syncTicker();
+	}
+
+	/**
+	 * Freeze the final view so the next render reflects the terminal status
+	 * (exit code, endedAt) instead of the last live observation, then redraw.
+	 * Only call outside a render: it requests an invalidation from Pi.
+	 */
+	private settle(): void {
+		this.detach();
+		this.frozenView = undefined;
+		this.cachedWidth = undefined;
+		this.cachedLines = undefined;
+		this.requestInvalidate?.();
+	}
+
+	private tick(): void {
+		const id = this.fallback?.id;
+		// Probe live status: a missed completion event settles on the heartbeat.
+		if (typeof id !== "string" || !this.service.isActive(id)) {
+			this.settle();
+			return;
+		}
+		// Advance the elapsed headline. The frozen view keeps the rest of the
+		// card byte-stable between ticks, so only the headline row changes.
+		this.observedAt = Date.now();
+		this.cachedWidth = undefined;
+		this.cachedLines = undefined;
+		this.requestInvalidate?.();
+	}
+
+	private static syncTicker(): void {
+		if (ManagedCommandComponent.liveCards.size > 0) {
+			if (ManagedCommandComponent.ticker) return;
+			ManagedCommandComponent.ticker = setInterval(() => {
+				// Copy before iterating: tick() may settle() and mutate the live set.
+				for (const card of [...ManagedCommandComponent.liveCards]) card.tick();
+			}, 1_000);
+			ManagedCommandComponent.ticker.unref?.();
+		} else if (ManagedCommandComponent.ticker) {
+			clearInterval(ManagedCommandComponent.ticker);
+			ManagedCommandComponent.ticker = undefined;
+		}
 	}
 
 	private view(): { details: any; output: string } {
-		const active = this.fallback.status === "running" || this.fallback.status === "stopping";
+		const active = this.isActiveDetails(this.fallback);
 		if (active && this.fallback.backgrounded) {
-			// Resolve once so resumed cards whose process no longer exists can settle
-			// to "killed"; live cards then keep that snapshot immutable.
+			// Resolve once so resumed cards whose process no longer exists can
+			// settle to "killed". While the job runs, elapsed advances with the
+			// ticker; after completion, settle() drops this for a final view.
 			this.frozenView ??= this.service.getView(
 				this.fallback.id,
 				this.fallback,
@@ -243,9 +342,9 @@ class ManagedCommandComponent {
 			return this.frozenView;
 		}
 		return this.service.getView(
-			this.fallback.id,
-			this.fallback,
-			this.expanded ? EXPANDED_OUTPUT_BYTES : COLLAPSED_OUTPUT_BYTES,
+				this.fallback.id,
+				this.fallback,
+				this.expanded ? EXPANDED_OUTPUT_BYTES : COLLAPSED_OUTPUT_BYTES,
 		);
 	}
 
@@ -270,7 +369,8 @@ class ManagedCommandComponent {
 		const status = details.status ?? "failed";
 		const active = status === "running" || status === "stopping";
 		// Every card is width-cached. Foreground output invalidates through Pi's
-		// partial-result updates; yielded cards never mutate behind the viewport.
+		// partial-result updates; live yielded cards tick once per second via the
+		// shared ticker, and settled cards stay frozen for the transcript's life.
 		const elapsedMs = Math.max(0, (details.endedAt ?? this.observedAt) - (details.startedAt ?? this.observedAt));
 		const failed = status === "failed" || status === "killed" || status === "timed_out";
 		const summaryText = details.exitCode === undefined ? status : `Command exited with code ${details.exitCode}`;
@@ -310,7 +410,11 @@ class ManagedCommandComponent {
 		this.cachedLines = undefined;
 	}
 
-	dispose(): void {}
+	dispose(): void {
+		// Release the shared ticker reference even if Pi drops the component
+		// (compaction, redraw) while the job is still running.
+		this.detach();
+	}
 }
 
 export default function bash(pi: ExtensionAPI) {
@@ -352,8 +456,8 @@ export default function bash(pi: ExtensionAPI) {
 				},
 				renderResult: (result: any, options: any, theme: any, context: any) => {
 					const terminal = getBackgroundTerminalService();
-					// Foreground managed output streams into this component. After a
-					// yield, the transcript snapshot freezes and /ps owns live updates.
+					// Foreground managed output streams into this component; after a
+					// yield it keeps ticking once per second until the job completes.
 					if (options?.isPartial && terminal && result?.details?.managedTerminal) {
 						let component = context.state.managedCommand as ManagedCommandComponent | undefined;
 						if (!component) {
@@ -364,9 +468,10 @@ export default function bash(pi: ExtensionAPI) {
 								theme,
 								context.cwd,
 								terminal,
+								context.invalidate,
 							);
 							context.state.managedCommand = component;
-						} else component.update(result, Boolean(options.expanded));
+						} else component.update(result, Boolean(options.expanded), context.invalidate);
 						return component;
 					}
 					if (options?.isPartial) return new Container();
@@ -380,9 +485,10 @@ export default function bash(pi: ExtensionAPI) {
 								theme,
 								context.cwd,
 								terminal,
+								context.invalidate,
 							);
 							context.state.managedCommand = component;
-						} else component.update(result, Boolean(options.expanded));
+						} else component.update(result, Boolean(options.expanded), context.invalidate);
 						return component;
 					}
 					context.state.startedAt ??= Date.now();

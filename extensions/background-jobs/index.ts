@@ -1027,7 +1027,9 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			const partial = job.output.read(initialCursor, PARTIAL_OUTPUT_BYTES);
 			onUpdate({
 				content: [{ type: "text", text: formatDeltaText(job, partial) }],
-				details: { managedTerminal: true, ...snapshot(job, PERSISTED_OUTPUT_BYTES) },
+				// observedAt lets the live card advance its elapsed counter with each
+				// output burst; without it the headline freezes at construction time.
+				details: { managedTerminal: true, ...snapshot(job, PERSISTED_OUTPUT_BYTES), observedAt: Date.now() },
 			});
 		};
 		const partialUpdates = new CoalescedRefresh(update);
@@ -1085,6 +1087,10 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			if (!job || !isActive(job)) return () => {};
 			job.activityListeners.add(listener);
 			return () => job.activityListeners.delete(listener);
+		},
+		isActive: (id) => {
+			const job = jobs.get(id);
+			return Boolean(job && isActive(job));
 		},
 	};
 	setBackgroundTerminalService(terminalService);

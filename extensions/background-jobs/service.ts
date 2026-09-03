@@ -17,6 +17,8 @@ export interface BackgroundTerminalService {
 	getView(id: string, fallback: any, maxOutputBytes: number): BackgroundTerminalView;
 	/** Subscribe to live output or status changes. Returns a no-op for historical jobs. */
 	subscribe(id: string, listener: () => void): () => void;
+	/** Whether the terminal is still live in this session (running or stopping). */
+	isActive(id: string): boolean;
 }
 
 export interface BetterNativeBashIntegration {
