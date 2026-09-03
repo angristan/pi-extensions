@@ -5,9 +5,10 @@ extensions: nicer tool-block rendering, context telemetry, goal/plan tracking,
 background jobs, image sidecars, working timers, and quality-of-life features for
 the terminal UI.
 
-These are generic extensions with one third-party runtime dependency, `marked`,
-used for Telegram message formatting. They ship together because a few share
-rendering helpers and runtime services, as shown below.
+These are generic extensions with focused third-party runtime dependencies:
+`marked` for Telegram formatting and Shiki packages for Zig syntax highlighting.
+They ship together because a few share rendering helpers and runtime services,
+as shown below.
 
 ## Install
 
@@ -33,7 +34,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 |---|---|
 | [`accent-color`](extensions/accent-color/) | Pins the editor (input bar) border to a fixed accent color, overriding pi's default |
 | [`better-native-pi`](extensions/better-native-pi/) | Restyles pi's native tools into compact, reason-first 2-line transcript blocks with shell highlighting and inline diffs |
-| [`code-blocks`](extensions/code-blocks/) | Renders fenced code blocks with syntax highlighting, horizontal rules, and copy-friendly unframed code rows |
+| [`code-blocks`](extensions/code-blocks/) | Renders fenced code blocks with syntax highlighting, including Zig, horizontal rules, and copy-friendly unframed code rows |
 | [`footer`](extensions/footer/) | A status line below the transcript showing session, model, context usage, and cost |
 | [`hyperlinks`](extensions/hyperlinks/) | Render local file paths as clickable OSC 8 terminal hyperlinks, and expose the helper to other extensions |
 | [`overlay-stack`](extensions/overlay-stack/) | Composes independent top-right overlay cards and toggles them with `Ctrl+Shift+O` or `/overlay` |
@@ -131,7 +132,7 @@ MIT
 ## Dependencies
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent).
-- **Runtime npm packages:** [`marked`](https://www.npmjs.com/package/marked) for Telegram formatting; Pi APIs resolve from Pi's bundled modules.
+- **Runtime npm packages:** [`marked`](https://www.npmjs.com/package/marked) for Telegram formatting; Shiki core, its JavaScript RegExp engine, and language grammars for Zig highlighting. Pi APIs resolve from Pi's bundled modules.
 - **Development npm packages:** Pi 0.84 extension APIs and TypeBox 1.3.7. Pi uses a compatible `^0.84.0` development range so git-package installs work with npm release-age policies; `bun.lock` keeps repository tests reproducible. Pi-provided packages are also declared as unbundled peers.
 - **System/services:** Only where noted in each extension README.
 

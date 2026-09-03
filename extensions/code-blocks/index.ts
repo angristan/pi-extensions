@@ -7,6 +7,7 @@ import {
 	type Component,
 	type TUI,
 } from "@earendil-works/pi-tui";
+import { highlightZigCode, normalizeLanguage, type SyntaxTheme } from "./syntax.js";
 
 const HOST_KEY = "code-blocks-host";
 const PATCH = Symbol.for("pi.code-blocks.patch");
@@ -17,8 +18,8 @@ type MarkdownPrototype = {
 };
 
 interface PatchState {
-	owners: number;
 	original: MarkdownPrototype["renderToken"];
+	themeProviders: Set<() => SyntaxTheme>;
 }
 
 function languageLabel(lang: unknown): string {
@@ -202,6 +203,7 @@ export interface CodeBoxOptions {
 	defaultTextStyle?: any;
 	maxRows?: number;
 	renderOmission?: (omitted: number, innerWidth: number) => string;
+	syntaxTheme?: SyntaxTheme;
 }
 
 function renderCodeRows(
@@ -212,9 +214,12 @@ function renderCodeRows(
 	options: CodeBoxOptions,
 ): string[] {
 	const maxWidth = Math.max(1, width);
-	const highlighted = theme.highlightCode
+	const zigLines = normalizeLanguage(lang) === "zig" && options.syntaxTheme
+		? highlightZigCode(code, options.syntaxTheme)
+		: undefined;
+	const highlighted = zigLines ?? (theme.highlightCode
 		? theme.highlightCode(code, lang)
-		: code.split("\n").map((line: string) => theme.codeBlock(line));
+		: code.split("\n").map((line: string) => theme.codeBlock(line)));
 	const sourceLines = highlighted.length > 0 ? highlighted : [""];
 
 	// Re-apply the parent block's default style (e.g. thinking: dim + italic) on
@@ -297,24 +302,31 @@ export function renderCodeBox(
 	return lines;
 }
 
-function renderMarkdownCodeBlock(instance: any, token: any, width: number, nextTokenType?: string): string[] {
+function renderMarkdownCodeBlock(
+	instance: any,
+	token: any,
+	width: number,
+	nextTokenType: string | undefined,
+	syntaxTheme: SyntaxTheme | undefined,
+): string[] {
 	const lines = renderCodeBlock(String(token.text ?? ""), token.lang, width, instance.theme, {
 		defaultTextStyle: instance.defaultTextStyle,
+		syntaxTheme,
 	});
 	if (nextTokenType && nextTokenType !== "space") lines.push("");
 	return lines;
 }
 
-function acquirePatch(): () => void {
+function acquirePatch(themeProvider: () => SyntaxTheme): () => void {
 	const prototype = Markdown.prototype as unknown as MarkdownPrototype;
 	const existing = prototype[PATCH];
 	if (existing) {
-		existing.owners += 1;
-		return () => releasePatch(prototype, existing);
+		existing.themeProviders.add(themeProvider);
+		return () => releasePatch(prototype, existing, themeProvider);
 	}
 
 	const original = prototype.renderToken;
-	const state: PatchState = { owners: 1, original };
+	const state: PatchState = { original, themeProviders: new Set([themeProvider]) };
 	prototype[PATCH] = state;
 	prototype.renderToken = function renderToken(
 		this: any,
@@ -323,16 +335,23 @@ function acquirePatch(): () => void {
 		nextTokenType?: string,
 		styleContext?: any,
 	): string[] {
-		if (token?.type === "code") return renderMarkdownCodeBlock(this, token, width, nextTokenType);
+		if (token?.type === "code") {
+			const activeProvider = [...state.themeProviders].at(-1);
+			return renderMarkdownCodeBlock(this, token, width, nextTokenType, activeProvider?.());
+		}
 		return original.call(this, token, width, nextTokenType, styleContext);
 	};
 
-	return () => releasePatch(prototype, state);
+	return () => releasePatch(prototype, state, themeProvider);
 }
 
-function releasePatch(prototype: MarkdownPrototype, state: PatchState): void {
-	state.owners -= 1;
-	if (state.owners > 0 || prototype[PATCH] !== state) return;
+function releasePatch(
+	prototype: MarkdownPrototype,
+	state: PatchState,
+	themeProvider: () => SyntaxTheme,
+): void {
+	state.themeProviders.delete(themeProvider);
+	if (state.themeProviders.size > 0 || prototype[PATCH] !== state) return;
 	prototype.renderToken = state.original;
 	delete prototype[PATCH];
 }
@@ -341,8 +360,8 @@ class CodeBlockHost implements Component {
 	private readonly release: () => void;
 	private disposed = false;
 
-	constructor(private readonly tui: TUI) {
-		this.release = acquirePatch();
+	constructor(private readonly tui: TUI, themeProvider: () => SyntaxTheme) {
+		this.release = acquirePatch(themeProvider);
 		tui.invalidate();
 		tui.requestRender(true);
 	}
@@ -372,7 +391,7 @@ export default function (pi: ExtensionAPI) {
 		if (ctx.mode !== "tui") return;
 		clear(ctx);
 		ctx.ui.setWidget(HOST_KEY, (tui: TUI) => {
-			host = new CodeBlockHost(tui);
+			host = new CodeBlockHost(tui, () => ctx.ui.theme);
 			return host;
 		});
 	});

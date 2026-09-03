@@ -16,6 +16,8 @@ def greet(name):
 - No side borders, so terminal selection does not include framing characters
   on every copied line
 - Syntax highlighting via the active theme
+- Native Zig highlighting for `zig` fences; `.zig` and `.zon` diffs rendered by
+  `better-native-pi` use the same grammar and colors
 - Wrapped to the pane width without adding indentation or padding
 - Inside **thinking/reasoning** blocks: code is dimmed and italicized to match
   the surrounding trace, so it reads as part of the reasoning, not as output
@@ -27,5 +29,7 @@ on session end). The exported `renderCodeBox` helper remains bordered for the
 ## Dependencies
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API.
+- **Runtime npm packages:** Shiki core, the JavaScript RegExp engine, and the Zig
+  TextMate grammar. The focused setup loads no WASM and initializes on first use.
 - **Depends on extensions:** None.
 - **Used by extensions:** [`better-native-pi`](../better-native-pi/).

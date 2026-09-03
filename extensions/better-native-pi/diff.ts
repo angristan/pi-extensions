@@ -4,11 +4,11 @@
  * lines to the live viewport width (used by every restyler, not just diffs).
  *
  * Depends on core's fitToolLine for non-diff line fitting. Diff coloring uses
- * pi's `highlightCode`/`getLanguageFromPath` for syntax when a path is given.
+ * Pi's native highlighter plus code-blocks' focused Zig grammar.
  */
 
-import { getLanguageFromPath, highlightCode } from "@earendil-works/pi-coding-agent";
 import { sliceByColumn, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { getSyntaxLanguageFromPath, highlightCodeForLanguage } from "../code-blocks/syntax.js";
 import { CYAN, GREEN, RED, RESET } from "./render.js";
 import { fitToolLine } from "./core.js";
 
@@ -289,9 +289,13 @@ function parseDiffLine(line: string): ParsedDiffLine | undefined {
 export function colorizeDiff(diff: string, path?: string, theme?: any): string[] {
 	const rawLines = diff.split("\n");
 	const parsedLines = rawLines.map(parseDiffLine);
-	const language = path ? getLanguageFromPath(path) : undefined;
+	const language = path ? getSyntaxLanguageFromPath(path) : undefined;
 	const syntaxLines = language
-		? highlightCode(parsedLines.map((line) => line?.content ?? "").join("\n"), language)
+		? highlightCodeForLanguage(
+			parsedLines.map((line) => line?.content ?? "").join("\n"),
+			language,
+			theme,
+		)
 		: [];
 
 	const add = (t: string) => (typeof theme?.fg === "function" ? theme.fg("toolDiffAdded", t) : `${GREEN}${t}${RESET}`);

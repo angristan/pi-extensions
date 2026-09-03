@@ -42,7 +42,8 @@ Re-registers pi's built-in tools under their native names (`read`, `write`,
   subdirectory searches remain allowed, including through symlink-safe checks
 
 Successful `edit`/`write` calls append a syntax-highlighted, line-numbered
-diff inline. Bash commands reuse the bordered box from the `code-blocks`
+diff inline, including `.zig` and `.zon` files through `code-blocks`' focused
+Shiki grammar. Bash commands reuse the bordered box from the `code-blocks`
 Markdown renderer with the dedicated shell tokenizer for syntax highlighting.
 Long commands wrap at top-level shell operators and quote-aware word boundaries;
 the box spans the full available transcript width.
