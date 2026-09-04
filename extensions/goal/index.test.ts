@@ -27,6 +27,8 @@ function makeHarness(options: { judgeRetryPolicy?: { enabled: boolean; maxRetrie
 	const notifications: Array<{ message: string; type?: string }> = [];
 	const confirmCalls: Array<{ title: string; message: string }> = [];
 	const confirmResponses: boolean[] = [];
+	const selectCalls: Array<{ title: string; options: string[] }> = [];
+	const selectResponses: Array<string | undefined> = [];
 	let editorValue: string | undefined;
 	let branchReadCount = 0;
 
@@ -49,6 +51,10 @@ function makeHarness(options: { judgeRetryPolicy?: { enabled: boolean; maxRetrie
 		ui: {
 			notify(message: string, type?: string) { notifications.push({ message, type }); },
 			setStatus() {},
+			select(title: string, options: string[]) {
+				selectCalls.push({ title, options });
+				return Promise.resolve(selectResponses.shift());
+			},
 			confirm(title: string, message: string) {
 				confirmCalls.push({ title, message });
 				return Promise.resolve(confirmResponses.length ? confirmResponses.shift()! : true);
@@ -88,6 +94,8 @@ function makeHarness(options: { judgeRetryPolicy?: { enabled: boolean; maxRetrie
 		notifications,
 		confirmCalls,
 		confirmResponses,
+		selectCalls,
+		selectResponses,
 		ctx,
 		getBranchReadCount: () => branchReadCount,
 		setEditorValue(value: string | undefined) { editorValue = value; },
@@ -280,7 +288,7 @@ test("appends active goal context without rebuilding the system prompt", async (
 	const h = makeHarness();
 	await h.commands.goal.handler("ship <unsafe>&", h.ctx);
 
-	expect(await emit(h, "before_agent_start", { prompt: "continue" })).toEqual([undefined]);
+	expect(h.handlers.before_agent_start).toBeUndefined();
 	const contexts = sentMessages(h, "goal-context");
 	expect(contexts).toHaveLength(1);
 	expect(contexts[0]!.options).toEqual({ deliverAs: "steer" });
@@ -480,10 +488,34 @@ test("terminal provider errors block the active goal instead of continuing", asy
 	expect(blockedContext.content).toContain("goal_resume");
 	expect(blockedContext.content).toContain("goal_clear");
 	expect(sentMessages(h, "goal-continuation")).toHaveLength(continuationsBeforeError);
+});
 
-	const [reconciliation] = await emit(h, "before_agent_start", { prompt: "continue the work" });
-	expect(reconciliation.message.details).toEqual({ status: "blocked", reconciliation: true });
-	expect(reconciliation.message.content).toContain("reconciliation required");
+test("offers resume, keep, or clear when reopening an inactive goal", async () => {
+	const reopenWith = async (choice: string, reason = "resume") => {
+		const h = makeHarness();
+		await h.commands.goal.handler("monitor the rollout", h.ctx);
+		await h.commands.goal.handler("block", h.ctx);
+		h.selectResponses.push(choice);
+		await emit(h, "session_start", { reason });
+		return h;
+	};
+
+	const resumed = await reopenWith("Resume goal");
+	expect(resumed.selectCalls[0]!.options).toEqual(["Resume goal", "Keep blocked", "Clear goal"]);
+	expect(latestGoalState(resumed).status).toBe("active");
+
+	const kept = await reopenWith("Keep blocked", "startup");
+	expect(latestGoalState(kept).status).toBe("blocked");
+
+	const cleared = await reopenWith("Clear goal");
+	expect(cleared.entries.at(-1)!.data).toEqual({ cleared: true });
+
+	const reloaded = makeHarness();
+	await reloaded.commands.goal.handler("monitor the rollout", reloaded.ctx);
+	await reloaded.commands.goal.handler("block", reloaded.ctx);
+	await emit(reloaded, "session_start", { reason: "reload" });
+	expect(reloaded.selectCalls).toHaveLength(0);
+	expect(latestGoalState(reloaded).status).toBe("blocked");
 });
 
 test("goal_complete silently retries a transient judge failure", async () => {

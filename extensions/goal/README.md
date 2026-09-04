@@ -20,11 +20,11 @@ summary is surfaced in its own overlay card, while the full goal is available vi
 `/goal-status`. Goal lifecycle updates are appended as hidden model-context
 messages, including fresh anchors after restore and compaction, so the system
 prompt remains stable. Paused, blocked, completed, and cleared transitions retire
-older active-goal instructions explicitly. Before a new turn proceeds with a
-paused or blocked goal, the agent is told to resume it when the request continues
-the objective or clear it when the objective is obsolete or unrelated. Objective
-and validation text are wrapped as untrusted user-provided data before reaching
-the model.
+older active-goal instructions explicitly. When a session with a paused or blocked
+goal is reopened, the UI offers **Resume goal**, **Keep paused/blocked**, or
+**Clear goal**. Ordinary later turns are not gated on that choice. Objective and
+validation text are wrapped as untrusted user-provided data before reaching the
+model.
 
 ## How the loop works
 
@@ -75,9 +75,9 @@ not drive normal cycles.
   so it doesn't immediately resume on the next boundary.
 - **Provider error → blocked** — if a turn ends with a terminal provider error,
   the goal is marked `blocked` at the next safe idle boundary instead of
-  retry-looping. Usage/rate/quota errors get a specific resume hint. A later user
-  turn must reconcile that blocked goal by resuming it or clearing it before
-  unrelated work proceeds.
+  retry-looping. Usage/rate/quota errors get a specific resume hint. Reopening
+  the session offers resume, keep, and clear choices without forcing a decision
+  on every later turn.
 - **Completion status** — the model marks the goal complete by calling
   `goal_complete` when current evidence proves every requirement is satisfied
   and no required work remains. A judge veto keeps the goal active and reports
@@ -136,7 +136,8 @@ All sections except `# Goal` are optional.
 - **`goal_resume`** — always available; reactivates the existing paused or
   blocked goal and restarts auto-continuation without replacing its objective,
   validation criteria, identity, timing, or continuation history. This is the
-  agent-callable equivalent of `/goal resume`.
+  agent-callable equivalent of `/goal resume`. Reopening a session with a paused
+  or blocked goal also offers this action in the UI.
 - **`goal_clear`** — always available; retires an obsolete, superseded, cancelled,
   or unrelated goal without deleting its append-only history. It is not a
   substitute for `goal_complete` when the objective was achieved.
