@@ -539,6 +539,27 @@ test("goal_block is vetoed at the threshold when the judge finds an action", asy
 	expect(renderBlock(block)[1]).toContain("Read the local log file");
 });
 
+test("goal_block judge receives authoritative in-flight threshold evidence", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("reduce p95 latency below 120ms", h.ctx);
+
+	for (let run = 1; run <= 2; run++) {
+		await emit(h, "turn_start", { turnIndex: 0, timestamp: 0 });
+		await h.tools.goal_block.execute(`call-${run}`, { blocker: "needs logs" }, undefined, undefined, h.ctx);
+		await emit(h, "turn_end", { turnIndex: 0, toolResults: [{ toolName: "goal_block" }] });
+		await emit(h, "agent_settled");
+	}
+
+	await emit(h, "turn_start", { turnIndex: 0, timestamp: 0 });
+	await h.tools.goal_block.execute("call-3", { blocker: "needs logs" }, undefined, undefined, h.ctx);
+
+	const prompt = judgeCalls[0]![1].messages[0].content[0].text;
+	expect(prompt).toContain("<extension_audit_state>");
+	expect(prompt).toContain("3/3 consecutive settled goal runs");
+	expect(prompt).toContain("current goal_block call is still in flight");
+	expect(prompt).toContain("Do not require its tool result in the transcript");
+});
+
 test("judge veto rendering keeps useful text and expands full details", async () => {
 	const h = makeHarness();
 	await h.commands.goal.handler("ship the feature", h.ctx);

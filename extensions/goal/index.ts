@@ -319,6 +319,14 @@ function judgeGuidance(decision: GoalJudgeDecision): string {
 }
 
 function buildGoalJudgePrompt(state: GoalState, request: GoalJudgeRequest, evidence: string): string {
+	const auditState = request.action === "block"
+		? [
+			"<extension_audit_state>",
+			`The extension has verified ${state.blockedAudit?.count ?? 0}/${BLOCKED_AUDIT_THRESHOLD} consecutive settled goal runs with this blocker, including the current candidate report.`,
+			"The current goal_block call is still in flight, so its tool result cannot yet appear in the transcript. Do not require its tool result in the transcript or re-audit the extension-maintained counter.",
+			"</extension_audit_state>",
+		].join("\n")
+		: undefined;
 	const candidate = request.action === "complete"
 		? `Candidate decision: mark the goal complete.\nSummary: ${escapeXmlText(request.summary ?? "") || "(none)"}`
 		: request.action === "block"
@@ -342,11 +350,12 @@ Your job is only to decide whether the candidate decision is supported by curren
 Rules:
 - For completion, return allow only when current evidence proves every explicit objective requirement and validation criterion is satisfied, with no required work remaining.
 - Deny completion if proof is missing, stale, indirect, only asserted in prose, or too narrow for the requirement scope.
+- For blocking, the extension invokes you only after its repeated-blocker threshold is reached. Treat <extension_audit_state> as authoritative runtime evidence; audit whether the blocker is valid, not whether the in-flight report already has a transcript result.
 - For blocking, return allow only when no meaningful code, inspection, verification, or read-only diagnostic action remains possible without user input or an external-state change.
 - Deny blocking if an actionable next step is still available, even if the work is difficult, slow, or uncertain.
 - Return only JSON with this exact shape: {"verdict":"allow"|"deny","reason":"short reason","missing_evidence":["item"],"next_action":"short next action or empty"}.
 
-${untrustedGoalBlock(state)}
+${auditState ? `${auditState}\n\n` : ""}${untrustedGoalBlock(state)}
 
 <candidate_decision>
 ${candidate}

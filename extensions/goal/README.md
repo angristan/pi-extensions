@@ -83,8 +83,10 @@ not drive normal cycles.
 - **Blocked audit** — `goal_block` records blockers while leaving the goal
   active until the same blocker has recurred across three settled agent runs.
   At most one report counts per run, including runs with a final tool-less turn.
-  At the terminal threshold, a judge can reject the block if actionable work
-  remains. Resuming a blocked goal starts a fresh audit.
+  At the terminal threshold, the extension passes its authoritative audit count
+  to the judge because the current tool result is not yet in the transcript. The
+  judge can reject the block if actionable work remains, but does not re-audit
+  that counter. Resuming a blocked goal starts a fresh audit.
 
 ## Commands
 
