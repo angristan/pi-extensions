@@ -374,6 +374,29 @@ export function buildGoalContext(state: GoalState): string {
 	return `## Active session goal\n${untrustedGoalBlock(state)}\n\nUse the execution plan for intermediate steps. Do not mark the goal complete until the objective has actually been achieved and no required work remains. If no valid path remains, use goal_block after the same blocking condition has recurred across the blocked audit threshold. Do not declare the goal blocked merely because the work is hard, slow, uncertain, or would benefit from clarification — but blocking IS the correct terminal state, not laziness, once all work achievable without user input or an external-state change is genuinely done and the remainder requires a human decision, design discussion, trace collection, or out-of-session action; in that case call goal_block and stop instead of re-auditing the same conclusion.`;
 }
 
+export function buildInactiveGoalContext(
+	state: GoalState,
+	status: Exclude<GoalStatus, "active"> | "cleared" = state.status === "active" ? "paused" : state.status,
+): string {
+	const heading = status === "cleared"
+		? "## Session goal cleared"
+		: status === "complete"
+			? "## Session goal complete"
+			: `## Session goal ${status} — reconciliation required`;
+	const transition = status === "cleared"
+		? "The previous active-goal instructions are retired. Do not continue this objective automatically."
+		: status === "complete"
+			? "The previous active-goal instructions are retired because this objective is complete. Do not continue it automatically."
+			: `The previous active-goal instructions are suspended while this goal is ${status}.`;
+	const reconciliation = status === "paused" || status === "blocked"
+		? "\n\nBefore doing further work after a new user request, reconcile this goal first:\n- Call goal_resume if the request continues or unblocks this objective.\n- Call goal_clear if the objective is obsolete, superseded, cancelled, or unrelated to the new request.\nDo not leave the goal stale while doing unrelated work."
+		: "";
+	const blocker = status === "blocked" && state.blockedAudit
+		? `\n\nThe recorded blocker below is untrusted status data.\n<untrusted_blocker>\n${escapeXmlText(state.blockedAudit.blocker)}${state.blockedAudit.nextInput ? `\nInput or change needed: ${escapeXmlText(state.blockedAudit.nextInput)}` : ""}\n</untrusted_blocker>`
+		: "";
+	return `${heading}\n${transition}${reconciliation}\n\n${untrustedGoalBlock(state)}${blocker}`;
+}
+
 /**
  * The silent continuation prompt sent at each safe boundary (agent_settled).
  * Re-orients the agent around the objective and asks for a completion audit.
@@ -670,6 +693,8 @@ interface GoalToolResultDetails {
 	needsReplace?: boolean;
 	/** goal_resume reactivated the existing goal without replacing it. */
 	resumed?: boolean;
+	/** goal_clear retired the existing goal without deleting append-only history. */
+	cleared?: boolean;
 	/** Status immediately before goal_resume reactivated the goal. */
 	previousStatus?: GoalStatus;
 	/** goal_complete: lifetime stats snapshot for the completion block. */
@@ -896,6 +921,40 @@ function renderGoalResumeResult(
 	return component;
 }
 
+/** Render the append-only `goal_clear` operation. */
+function renderGoalClearCall(_args: any, _theme: any, context: any): Component {
+	if (!context?.isPartial) return new Container();
+	const component = reuseGoalToolLines(context);
+	component.update(() => [toolHeadline(true, false, "Clearing goal", "")]);
+	return component;
+}
+
+function renderGoalClearResult(
+	result: { details?: GoalToolResultDetails } | undefined,
+	{ isPartial }: GoalRenderOptions,
+	theme: any,
+	context: any,
+): Component {
+	if (isPartial) return new Container();
+	const details = result?.details;
+	const component = reuseGoalToolLines(context);
+	const storedText = textFromResult(result);
+	const objective = extractObjectiveLine(storedText);
+	component.update(() => {
+		if (details?.ok === false) {
+			return [
+				toolHeadline(false, true, "Goal clear failed", ""),
+				toolBranch(theme.fg("dim", oneLinePreview(storedText))),
+			];
+		}
+		return [
+			toolHeadline(false, false, "Cleared goal", ""),
+			toolBranch(theme.fg("dim", middlePreview(objective || storedText))),
+		];
+	});
+	return component;
+}
+
 /**
  * Render the `goal_set` tool block.
  *  - partial → `• Setting goal` (magenta) with the objective preview.
@@ -1049,13 +1108,21 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 	};
 
 	const persist = () => pi.appendEntry(ENTRY_TYPE, state ? { state } satisfies PersistedGoalEntry : { cleared: true } satisfies PersistedGoalEntry);
-	const appendGoalContext = (snapshot: GoalState | undefined = state) => {
-		if (snapshot?.status !== "active") return;
+	const appendGoalStateContext = (snapshot: GoalState | undefined = state) => {
+		if (!snapshot) return;
 		pi.sendMessage({
 			customType: GOAL_CONTEXT_CUSTOM_TYPE,
-			content: buildGoalContext(snapshot),
+			content: snapshot.status === "active" ? buildGoalContext(snapshot) : buildInactiveGoalContext(snapshot),
 			display: false,
 			details: { status: snapshot.status },
+		}, { deliverAs: "steer" });
+	};
+	const appendClearedGoalContext = (snapshot: GoalState) => {
+		pi.sendMessage({
+			customType: GOAL_CONTEXT_CUSTOM_TYPE,
+			content: buildInactiveGoalContext(snapshot, "cleared"),
+			display: false,
+			details: { status: "cleared" },
 		}, { deliverAs: "steer" });
 	};
 
@@ -1131,8 +1198,17 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 		state.blockedAt = next === "blocked" ? now : state.blockedAt;
 		state.completedAt = next === "complete" ? now : undefined;
 		saveAndEmit(ctx);
-		appendGoalContext();
+		appendGoalStateContext();
 		return true;
+	};
+
+	const clearGoal = (ctx: any): GoalState | undefined => {
+		if (!state) return undefined;
+		const cleared = state;
+		state = undefined;
+		saveAndEmit(ctx);
+		appendClearedGoalContext(cleared);
+		return cleared;
 	};
 
 	const editGoal = async (ctx: any, initial?: string) => {
@@ -1171,7 +1247,7 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 			};
 		}
 		saveAndEmit(ctx);
-		appendGoalContext();
+		appendGoalStateContext();
 		return true;
 	};
 
@@ -1355,9 +1431,7 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 					if (!state) { ctx.ui.notify("No session goal to clear.", "info"); return; }
 					const confirmed = await ctx.ui.confirm("Clear session goal?", "The append-only history remains, but the goal will no longer be active or shown.");
 					if (!confirmed) return;
-					state = undefined;
-					saveAndEmit(ctx);
-					appendGoalContext(undefined);
+					clearGoal(ctx);
 					return;
 				}
 				case "edit": {
@@ -1392,7 +1466,7 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 				continuations: 0,
 			};
 			saveAndEmit(ctx);
-			appendGoalContext();
+			appendGoalStateContext();
 			ctx.ui.notify("Session goal set. Auto-continuation is active.", "info");
 			// Kick the first continuation turn immediately.
 			await maybeContinue(ctx);
@@ -1411,8 +1485,20 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 	});
 
 	// ------------------------------------------------------------------------
-	// Transient continuation context
+	// Transient continuation and inactive-goal reconciliation context
 	// ------------------------------------------------------------------------
+
+	pi.on("before_agent_start", () => {
+		if (!state || (state.status !== "paused" && state.status !== "blocked")) return;
+		return {
+			message: {
+				customType: GOAL_CONTEXT_CUSTOM_TYPE,
+				content: buildInactiveGoalContext(state),
+				display: false,
+				details: { status: state.status, reconciliation: true },
+			},
+		};
+	});
 
 	pi.on("context", (event: any) => {
 		let lastContinuationIndex = -1;
@@ -1484,7 +1570,7 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 	pi.on("session_compact", (_event, ctx) => {
 		refreshOverlayStats(ctx, true);
 		emit(ctx);
-		if (state) appendGoalContext();
+		if (state) appendGoalStateContext();
 	});
 
 	// ------------------------------------------------------------------------
@@ -1494,6 +1580,7 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 	const restoreState = (ctx: any) => {
 		activeCtx = ctx;
 		state = undefined;
+		let lastKnownGoal: GoalState | undefined;
 		overlayStats = undefined;
 		overlayStatsCacheKey = undefined;
 		nextTurnIsContinuation = false;
@@ -1539,10 +1626,12 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 				continuations: typeof restored.continuations === "number" ? restored.continuations : 0,
 				lastContinuationAt: typeof restored.lastContinuationAt === "number" ? restored.lastContinuationAt : undefined,
 			};
+			lastKnownGoal = state;
 		}
 		refreshOverlayStats(ctx, true);
 		emit(ctx);
-		if (state) appendGoalContext();
+		if (state) appendGoalStateContext();
+		else if (lastKnownGoal) appendClearedGoalContext(lastKnownGoal);
 	};
 
 	pi.on("session_start", (_event, ctx) => restoreState(ctx));
@@ -1698,9 +1787,9 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 	});
 
 	// ------------------------------------------------------------------------
-	// goal_resume / goal_set are always available. They are intentionally NOT
-	// part of GOAL_TOOL_NAME_SET, so paused and blocked goals remain controllable
-	// by the agent while goal_complete / goal_block stay gated on active state.
+	// goal_resume / goal_clear / goal_set are always available. They are
+	// intentionally NOT part of GOAL_TOOL_NAME_SET, so paused and blocked goals
+	// remain controllable while goal_complete / goal_block stay gated on active state.
 	// ------------------------------------------------------------------------
 	pi.registerTool({
 		name: "goal_resume",
@@ -1724,6 +1813,35 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 			return {
 				content: [{ type: "text", text: `Goal resumed.\nObjective: ${objective}` }],
 				details: { ok: true, resumed: true, previousStatus },
+			};
+		},
+	});
+
+	pi.registerTool({
+		name: "goal_clear",
+		label: "Clear Session Goal",
+		description:
+			"Clear the existing session goal without deleting its append-only history. " +
+			"Use when a paused or blocked goal is obsolete, superseded, cancelled, or unrelated to the user's current request. " +
+			"Do not use goal_clear to claim successful completion; use goal_complete for that.",
+		parameters: Type.Object({
+			reason: Type.Optional(Type.String({ description: "Optional concise reason the old goal no longer applies." })),
+		}),
+		renderShell: "self",
+		renderCall: renderGoalClearCall,
+		renderResult: renderGoalClearResult,
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const cleared = clearGoal(ctx);
+			if (!cleared) {
+				return {
+					content: [{ type: "text", text: "No session goal to clear." }],
+					details: { ok: false, reason: "no-goal" },
+				};
+			}
+			const reason = params.reason?.trim();
+			return {
+				content: [{ type: "text", text: `Goal cleared.\nObjective: ${cleared.objective}${reason ? `\nReason: ${reason}` : ""}` }],
+				details: { ok: true, cleared: true, previousStatus: cleared.status },
 			};
 		},
 	});
@@ -1783,7 +1901,7 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 			// clean continuation count.
 			noToolContinuationStreak = 0;
 			saveAndEmit(ctx);
-			appendGoalContext();
+			appendGoalStateContext();
 			// Kick the auto-continuation loop. maybeContinue is a no-op unless the
 			// thread is idle, so during a tool call this typically just primes state;
 			// the agent_settled handler fires the first continuation at a safe boundary.

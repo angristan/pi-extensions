@@ -17,12 +17,14 @@ should not create a goal.
 
 The goal is a short statement plus optional **validation criteria**. A compact
 summary is surfaced in its own overlay card, while the full goal is available via
-`/goal-status`. Active goal instructions are appended as hidden model-context
+`/goal-status`. Goal lifecycle updates are appended as hidden model-context
 messages, including fresh anchors after restore and compaction, so the system
-prompt remains stable. Paused, blocked, completed, and cleared goals stay in
-runtime state without adding model instructions. This lets later ordinary tasks
-run normally. Objective and validation text are wrapped as untrusted user-provided
-data before reaching the model.
+prompt remains stable. Paused, blocked, completed, and cleared transitions retire
+older active-goal instructions explicitly. Before a new turn proceeds with a
+paused or blocked goal, the agent is told to resume it when the request continues
+the objective or clear it when the objective is obsolete or unrelated. Objective
+and validation text are wrapped as untrusted user-provided data before reaching
+the model.
 
 ## How the loop works
 
@@ -73,7 +75,9 @@ not drive normal cycles.
   so it doesn't immediately resume on the next boundary.
 - **Provider error → blocked** — if a turn ends with a terminal provider error,
   the goal is marked `blocked` at the next safe idle boundary instead of
-  retry-looping. Usage/rate/quota errors get a specific resume hint.
+  retry-looping. Usage/rate/quota errors get a specific resume hint. A later user
+  turn must reconcile that blocked goal by resuming it or clearing it before
+  unrelated work proceeds.
 - **Completion status** — the model marks the goal complete by calling
   `goal_complete` when current evidence proves every requirement is satisfied
   and no required work remains. A judge veto keeps the goal active and reports
@@ -133,6 +137,9 @@ All sections except `# Goal` are optional.
   blocked goal and restarts auto-continuation without replacing its objective,
   validation criteria, identity, timing, or continuation history. This is the
   agent-callable equivalent of `/goal resume`.
+- **`goal_clear`** — always available; retires an obsolete, superseded, cancelled,
+  or unrelated goal without deleting its append-only history. It is not a
+  substitute for `goal_complete` when the objective was achieved.
 - **`goal_complete`** — introduced when a `/goal` first becomes active; asks the
   judge to audit current evidence, then marks the goal complete only if the
   judge allows it. It accepts an optional `summary`. It remains non-terminating
@@ -148,15 +155,15 @@ All sections except `# Goal` are optional.
   blocker repeats across three settled agent runs and the judge accepts the
   terminal block. Multiple reports in one run count once.
 
-`goal_set` and `goal_resume` are always registered. `goal_complete` and
-`goal_block` start inactive, are added when the first goal becomes active, and
+`goal_set`, `goal_resume`, and `goal_clear` are always registered. `goal_complete`
+and `goal_block` start inactive, are added when the first goal becomes active, and
 remain in the active loadout for the rest of that session. This monotonic
 activation preserves deferred-tool and prompt-cache reuse across pause, block,
 completion, and clear transitions. Stale `goal_complete` and `goal_block` calls
 made while no goal is active are ignored silently so they do not add noisy output
 to the transcript; the rendered block is hidden too.
 
-All four tools render as the same compact 2-line transcript blocks as the native
+All five tools render as the same compact 2-line transcript blocks as the native
 and web tools (`renderShell: "self"`): a `• verb` headline whose bullet color
 tracks the outcome (magenta while running, green on success, red for a real
 blocker) over a dim `└ summary` branch. Example settled blocks:
@@ -168,6 +175,8 @@ blocker) over a dim `└ summary` branch. Example settled blocks:
   └ ship the feature
 • Resumed goal
   └ ship the feature
+• Cleared goal
+  └ monitor the old rollout
 • Goal already active
   └ make all tests pass
 • Completed goal
