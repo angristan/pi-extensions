@@ -487,7 +487,6 @@ interface PlanProgressDependencies {
 
 export default function (pi: ExtensionAPI, dependencies: PlanProgressDependencies = {}) {
 	let state: PlanState = { items: [] };
-	let planOverlayActive = false;
 
 	const overlayCard = (dependencies.registerOverlayCard ?? registerOverlayCard)({
 		id: "plan-progress",
@@ -496,11 +495,7 @@ export default function (pi: ExtensionAPI, dependencies: PlanProgressDependencie
 		minBodyHeight: 1,
 		minTerminalWidth: 90,
 		minTerminalHeight: 10,
-		visible: () => {
-			const stats = planStats(state.items);
-			const activePlan = planOverlayActive && state.items.length > 0 && stats.completed < state.items.length;
-			return activePlan;
-		},
+		visible: () => state.items.length > 0,
 		title: (theme) => {
 			const stats = planStats(state.items);
 			return theme.bold(` Plan ${stats.completed}/${stats.total} `);
@@ -529,7 +524,6 @@ export default function (pi: ExtensionAPI, dependencies: PlanProgressDependencie
 		executionMode: "sequential",
 		async execute(_id: string, params: any, _signal: AbortSignal, _update: any, ctx: any) {
 			state = normalizePlanUpdate(params);
-			planOverlayActive = planStats(state.items).incomplete > 0;
 			persist();
 			updateUi(ctx);
 			return {
@@ -551,7 +545,7 @@ export default function (pi: ExtensionAPI, dependencies: PlanProgressDependencie
 	});
 	pi.registerCommand("plan-clear", {
 		description: "Clear the current plan",
-		handler: async (_args, ctx) => { state = { items: [] }; planOverlayActive = false; persist(); updateUi(ctx); },
+		handler: async (_args, ctx) => { state = { items: [] }; persist(); updateUi(ctx); },
 	});
 
 	pi.on("message_end", (event: any, _ctx: any) => {
@@ -566,17 +560,14 @@ export default function (pi: ExtensionAPI, dependencies: PlanProgressDependencie
 	});
 
 	pi.on("agent_settled", (_event: any, ctx: any) => {
-		// Keep the canonical plan state for /plan-status and persisted history,
-		// but close the active overlay once Pi is no longer working. This mirrors
-		// Lifecycle distinction between the plan item and the live widget.
-		planOverlayActive = false;
+		// A plan remains actionable context between turns, including after an
+		// interrupted turn. Keep its overlay visible until it is explicitly cleared.
 		updateUi(ctx);
 	});
 
 	const restoreState = (ctx: any) => {
 		clearLegacyUi(ctx);
 		state = { items: [] };
-		planOverlayActive = false;
 		const entries = typeof ctx.sessionManager.getBranch === "function"
 			? ctx.sessionManager.getBranch()
 			: ctx.sessionManager.getEntries();
@@ -592,7 +583,6 @@ export default function (pi: ExtensionAPI, dependencies: PlanProgressDependencie
 	pi.on("session_shutdown", (_event, ctx) => {
 		clearLegacyUi(ctx);
 		ctx.ui.setStatus("plan", undefined);
-		planOverlayActive = false;
 		overlayCard.unregister();
 	});
 }
