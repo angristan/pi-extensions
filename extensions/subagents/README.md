@@ -117,7 +117,8 @@ token and cost totals. Parent and child context windows remain independent.
 
 Each child has its own persistent session file. In Herdr, it runs as an interactive
 Pi process connected to the parent through structured IPC. In other environments,
-it runs through Pi RPC.
+it runs through Pi RPC. Child processes receive their parent session ID so compatible
+telemetry collectors can classify and link delegated sessions without reading content.
 
 - Running children hibernate after completion, interruption, or provider limits.
 - A completed Herdr pane remains visible in the parent tab and is reused for follow-ups.

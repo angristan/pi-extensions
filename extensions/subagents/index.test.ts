@@ -332,6 +332,7 @@ describe("subagents", () => {
 		expect(client.started).toBe(true);
 		expect(client.prompts[0]).toContain("Task:\nInspect the repository");
 		expect(client.options.env?.PI_SUBAGENT_CHILD).toBe("1");
+		expect(client.options.env?.PI_SUBAGENT_PARENT_SESSION_ID).toBe(harness.parent.getSessionId());
 		expect(client.options.args).toContain("test-provider/test-model");
 		expect(client.options.args).toContain("medium");
 		const toolsArg = client.options.args[client.options.args.indexOf("--tools") + 1];

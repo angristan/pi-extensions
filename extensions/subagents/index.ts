@@ -399,7 +399,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			command: invocation.command,
 			args: invocation.args,
 			cwd,
-			env: childEnvironment(id),
+			env: childEnvironment(id, ctx.sessionManager.getSessionId()),
 			...(visible ? { herdr: { agentId: id, name } } : {}),
 		};
 	};

@@ -10,6 +10,7 @@ const KILL_CLOSE_MS = 1_000;
 const STDERR_LIMIT_BYTES = 16 * 1024;
 const STDOUT_LINE_LIMIT_BYTES = 2 * 1024 * 1024;
 const CHILD_ENV = "PI_SUBAGENT_CHILD";
+const PARENT_SESSION_ENV = "PI_SUBAGENT_PARENT_SESSION_ID";
 
 export interface RpcAgentEvent {
 	type: string;
@@ -151,8 +152,12 @@ export function getPiInvocation(args: string[]): { command: string; args: string
 	return { command: "pi", args };
 }
 
-export function childEnvironment(agentId: string): Record<string, string> {
-	return { [CHILD_ENV]: "1", PI_SUBAGENT_PARENT_ID: agentId };
+export function childEnvironment(agentId: string, parentSessionId?: string): Record<string, string> {
+	return {
+		[CHILD_ENV]: "1",
+		PI_SUBAGENT_PARENT_ID: agentId,
+		...(parentSessionId ? { [PARENT_SESSION_ENV]: parentSessionId } : {}),
+	};
 }
 
 export function isSubagentChild(): boolean {
