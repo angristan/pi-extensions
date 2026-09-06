@@ -92,12 +92,13 @@ function withoutCommand(args: any): any {
 	return rest;
 }
 
-function renderedWorkingDirectory(args: any, cwd: string | undefined, width: number, theme: any): string {
-	const base = cwd ?? process.cwd();
+function renderedWorkingDirectory(args: any, cwd: string | undefined, width: number, theme: any): string | undefined {
+	const current = resolve(cwd ?? process.cwd());
 	const requested = typeof args?.cwd === "string" && args.cwd.trim() ? args.cwd.trim() : ".";
-	const effective = resolve(base, requested);
+	const effective = resolve(current, requested);
+	if (effective === current) return undefined;
 	const label = typeof theme?.fg === "function" ? theme.fg("dim", "in ") : "in ";
-	return fitToolLine(`  └ ${label}${hyperlinkPath(shortPath(effective), effective, base)}`, width);
+	return fitToolLine(`  └ ${label}${hyperlinkPath(shortPath(effective), effective, current)}`, width);
 }
 
 function renderedCommand(command: string, width: number, expanded: boolean, theme: any): string[] {
@@ -186,7 +187,7 @@ class CommandComponent {
 			? renderedCommand(this.args.command, max, this.options.expanded, this.theme)
 			: [];
 		if (this.options.partial) {
-			this.cachedLines = [...block.map((line) => fitToolLine(line, max)), directory, ...command];
+			this.cachedLines = [...block.map((line) => fitToolLine(line, max)), ...(directory ? [directory] : []), ...command];
 			this.cachedWidth = max;
 			return this.cachedLines;
 		}
@@ -196,7 +197,7 @@ class CommandComponent {
 			maxRows: this.options.expanded ? undefined : OUTPUT_ROWS,
 		});
 		const fittedBlock = block.map((line) => fitToolLine(line, max));
-		this.cachedLines = [...fittedBlock, directory, ...command, ...output];
+		this.cachedLines = [...fittedBlock, ...(directory ? [directory] : []), ...command, ...output];
 		this.cachedWidth = max;
 		return this.cachedLines;
 	}
@@ -407,7 +408,7 @@ class ManagedCommandComponent {
 			emptyText: active ? "(waiting for output)" : "(no output)",
 		});
 		if (!details.backgrounded) {
-			const result = [...block, directory, ...command, ...output];
+			const result = [...block, ...(directory ? [directory] : []), ...command, ...output];
 			this.cachedLines = result;
 			this.cachedWidth = max;
 			return result;
@@ -415,7 +416,7 @@ class ManagedCommandComponent {
 		const color = terminalStatusColor(status);
 		const metadata = [details.id, status, details.tty ? "tty" : undefined, active ? "/ps" : undefined].filter(Boolean).join(" · ");
 		const footer = fitToolLine(`  └ ${this.theme.fg(color, terminalStatusSymbol(status))} ${this.theme.fg("dim", metadata)}`, max);
-		const result = [...block, directory, ...command, ...output, footer];
+		const result = [...block, ...(directory ? [directory] : []), ...command, ...output, footer];
 		this.cachedLines = result;
 		this.cachedWidth = max;
 		return result;

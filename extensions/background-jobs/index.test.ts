@@ -556,7 +556,7 @@ describe("terminal tools", () => {
 		expect(noOp).toBe("<warning>◷</warning> confirm-app-he-ff5ed8c6 is already timed out.");
 	});
 
-	test("returns quick commands normally and clears persistent status", async () => {
+	test("shows an overridden cwd while returning quick commands normally", async () => {
 		const harness = createHarness();
 		await startHarness(harness);
 		const tool = harness.tools.get("bash");
@@ -582,6 +582,21 @@ describe("terminal tools", () => {
 		const cwdLine = rendered.split("\n").find((line) => line.includes(renderedCwd));
 		expect(cwdLine).toContain("└ in ");
 		expect(rendered).not.toContain(result.details.id);
+	});
+
+	test("omits the cwd row when bash uses Pi's current directory", async () => {
+		const harness = createHarness();
+		await startHarness(harness);
+		const tool = harness.tools.get("bash");
+		const args = { command: "printf 'same-directory'", reasoning: "test compact cwd display" };
+		const result = await tool.execute("exec", args, undefined, undefined, harness.ctx);
+		const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+		const rendered = tool.renderResult(result, { expanded: false }, theme, {
+			state: {}, args, cwd: harness.ctx.cwd, invalidate() {},
+		}).render(120).join("\n");
+
+		expect(rendered).toContain("same-directory");
+		expect(rendered).not.toContain("└ in ");
 	});
 
 	test("exposes current Pi session metadata and removes stale inherited values", async () => {

@@ -17,8 +17,9 @@ groups consecutive read/list/search calls into a single "exploring" block.
 **Line 1** — status bullet (🟢✓ / 🔴✗ / 🟣running) + semantic verb + the model's
 *reasoning* for the call
 **Line 2** — non-bash tools use a `└` branch with their target and result summary;
-bash shows its effective working directory, then a custom Markdown-style bordered
-command box followed by bounded `│` output
+bash shows its effective working directory only when it differs from Pi's current
+directory, then a custom Markdown-style bordered command box followed by bounded
+`│` output
 
 ## What it patches
 
@@ -47,9 +48,9 @@ diff inline, including `.zig` and `.zon` files through `code-blocks`' focused
 Shiki grammar. Bash commands reuse the bordered box from the `code-blocks`
 Markdown renderer with the dedicated shell tokenizer for syntax highlighting.
 Long commands wrap at top-level shell operators and quote-aware word boundaries;
-the box spans the full available transcript width. Each bash block shows its
-resolved working directory (including a relative `cwd` override) as a clickable,
-home-shortened path.
+the box spans the full available transcript width. A bash block whose resolved
+working directory differs from Pi's current directory shows that override as a
+clickable, home-shortened path; the redundant row is omitted otherwise.
 `Ctrl+O` (`app.tools.expand`) reveals full commands, raw output, or full written
 content without duplicating an already-shown diff. Read results backed by
 `image-store` render their live sidecar inline immediately for the current
