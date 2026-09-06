@@ -34,7 +34,7 @@ import {
 	childSessionName,
 	isHerdrParent,
 	subagentsTabLabel,
-	watchHerdrLayout,
+	subscribeTerminalResize,
 	type HerdrAgentClientOptions,
 	type HerdrExec,
 } from "./herdr.js";
@@ -180,9 +180,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			options.herdrExec ?? ((command, args, execOptions) => pi.exec(command, args, execOptions)),
 			env.HERDR_WORKSPACE_ID!,
 			env.HERDR_PANE_ID!,
-			env.HERDR_SOCKET_PATH
-				? (listener) => watchHerdrLayout(env.HERDR_SOCKET_PATH!, env.HERDR_PANE_ID!, listener)
-				: undefined,
+			(listener) => subscribeTerminalResize(listener),
 			() => subagentsTabLabel(pi.getSessionName()),
 		)
 		: undefined;

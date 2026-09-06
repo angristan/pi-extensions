@@ -51,11 +51,10 @@ When the parent runs in Herdr, children open automatically as normal Pi TUIs in
 an unfocused region of the parent's tab. A wide tab places the region on the
 right; a narrow tab places it below. The parent keeps roughly two-thirds of the
 space, and concurrent spawns split only the managed child region. While an
-inline child region exists, one scoped Herdr socket watcher follows parent-tab
-geometry, debounces updates, and reflows between right and below with hysteresis.
-It uses a low-frequency `pane.layout` request because Herdr 0.8.2 does not emit
-an event for outer terminal resizes. Idle Pi sessions do not watch or poll. If
-the parent
+inline child region exists, one native listener follows the parent PTY's resize
+events. Each debounced resize reads the Herdr geometry once and reflows between
+right and below with hysteresis. Idle Pi sessions do not install a listener or
+poll. If the parent
 tab already contains unrelated panes, children use a dedicated, unfocused
 `Subagents · <parent session>` tab instead of changing user-owned layout.
 

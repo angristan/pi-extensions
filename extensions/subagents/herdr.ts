@@ -13,7 +13,6 @@ const BRIDGE_COMMAND_TIMEOUT_MS = 30_000;
 const STOP_TIMEOUT_MS = 5_000;
 const MAX_RECORD_BYTES = 2 * 1024 * 1024;
 const REFLOW_DEBOUNCE_MS = 250;
-const LAYOUT_POLL_MS = 400;
 const PRIMARY_PANE_RATIO = 0.67;
 const REFLOW_TAB_LABEL = "Reflowing subagents";
 const MAX_HERDR_LABEL_CHARS = 80;
@@ -35,7 +34,17 @@ export interface HerdrPaneLayout {
 	panes: Array<{ pane_id: string; rect: HerdrLayoutRect }>;
 }
 
-export type HerdrLayoutSubscriber = (listener: (layout: HerdrPaneLayout) => void) => () => void;
+export type HerdrResizeSubscriber = (listener: () => void) => () => void;
+
+export interface ResizeEmitter {
+	on(event: "resize", listener: () => void): unknown;
+	off(event: "resize", listener: () => void): unknown;
+}
+
+export function subscribeTerminalResize(listener: () => void, output: ResizeEmitter = process.stdout): () => void {
+	output.on("resize", listener);
+	return () => output.off("resize", listener);
+}
 
 export function subagentsTabLabel(parentSessionName: string | undefined): string {
 	const parent = parentSessionName?.replace(/\s+/g, " ").trim() || "Untitled Session";
@@ -58,70 +67,6 @@ export function responsiveSplitDirection(layout: HerdrPaneLayout, current?: Spli
 	if (current === "right") return width <= 150 || aspect <= 1.7 ? "down" : "right";
 	if (current === "down") return width >= 180 && aspect >= 2.1 ? "right" : "down";
 	return width >= 165 && aspect >= 1.9 ? "right" : "down";
-}
-
-/**
- * Watch one parent layout only while its surface manager needs it. Herdr 0.8.2
- * does not emit layout events for outer terminal resizes and processes one API
- * request per connection, so each low-frequency poll uses a short local socket.
- */
-export function watchHerdrLayout(
-	socketPath: string,
-	paneId: string,
-	listener: (layout: HerdrPaneLayout) => void,
-	pollIntervalMs = LAYOUT_POLL_MS,
-): () => void {
-	let disposed = false;
-	let socket: Socket | undefined;
-	let pollTimer: ReturnType<typeof setInterval> | undefined;
-	let nextRequestId = 0;
-
-	const poll = () => {
-		if (disposed || socket) return;
-		const requestId = `subagents-layout-poll-${++nextRequestId}`;
-		let buffer = "";
-		const decoder = new StringDecoder("utf8");
-		const current = net.createConnection(socketPath);
-		socket = current;
-		current.setNoDelay(true);
-		current.setTimeout(HERDR_TIMEOUT_MS, () => current.destroy());
-		current.once("connect", () => {
-			current.write(`${JSON.stringify({
-				id: requestId,
-				method: "pane.layout",
-				params: { pane_id: paneId },
-			})}\n`);
-		});
-		current.on("data", (chunk) => {
-			buffer += decoder.write(chunk);
-			if (Buffer.byteLength(buffer) > MAX_RECORD_BYTES) {
-				current.destroy(new Error("Herdr pane layout response exceeded the size limit"));
-				return;
-			}
-			const newline = buffer.indexOf("\n");
-			if (newline < 0) return;
-			try {
-				const message = JSON.parse(buffer.slice(0, newline));
-				if (!disposed && message?.id === requestId && message?.result?.layout) listener(message.result.layout);
-			} catch { /* A later poll retries malformed responses. */ }
-			current.destroy();
-		});
-		current.on("error", () => { /* A later poll retries transient socket errors. */ });
-		current.once("close", () => {
-			if (socket === current) socket = undefined;
-		});
-	};
-
-	poll();
-	pollTimer = setInterval(poll, pollIntervalMs);
-	pollTimer.unref?.();
-	return () => {
-		disposed = true;
-		if (pollTimer) clearInterval(pollTimer);
-		pollTimer = undefined;
-		socket?.destroy();
-		socket = undefined;
-	};
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
@@ -203,7 +148,7 @@ export class HerdrSurfaceManager {
 	private parentTabId?: string;
 	private dedicatedTabId?: string;
 	private currentDirection?: SplitDirection;
-	private unsubscribeLayouts?: () => void;
+	private unsubscribeResize?: () => void;
 	private reflowTimer?: ReturnType<typeof setTimeout>;
 	private operationTail: Promise<void> = Promise.resolve();
 
@@ -211,7 +156,7 @@ export class HerdrSurfaceManager {
 		private readonly exec: HerdrExec,
 		private readonly workspaceId: string,
 		private readonly parentPaneId: string,
-		private readonly subscribeLayouts?: HerdrLayoutSubscriber,
+		private readonly subscribeResize?: HerdrResizeSubscriber,
 		private readonly tabLabel: () => string = () => "Subagents",
 	) {}
 
@@ -289,30 +234,27 @@ export class HerdrSurfaceManager {
 		return { paneId: fallback, direction: "down" };
 	}
 
-	private startLayoutListener(): void {
-		if (this.dedicatedTabId || this.unsubscribeLayouts || !this.subscribeLayouts || this.surfaces.size === 0) return;
-		this.unsubscribeLayouts = this.subscribeLayouts((layout) => this.onLayout(layout));
+	private startResizeListener(): void {
+		if (this.dedicatedTabId || this.unsubscribeResize || !this.subscribeResize || this.surfaces.size === 0) return;
+		this.unsubscribeResize = this.subscribeResize(() => this.onResize());
 	}
 
-	private stopLayoutListener(): void {
+	private stopResizeListener(): void {
 		if (this.reflowTimer) clearTimeout(this.reflowTimer);
 		this.reflowTimer = undefined;
-		this.unsubscribeLayouts?.();
-		this.unsubscribeLayouts = undefined;
+		this.unsubscribeResize?.();
+		this.unsubscribeResize = undefined;
 	}
 
-	private onLayout(layout: HerdrPaneLayout): void {
-		if (this.dedicatedTabId || !this.parentTabId || layout.tab_id !== this.parentTabId || this.surfaces.size === 0) return;
-		if (layout.zoomed || !this.hasOnlyOwnedPanes(layout)) return;
-		const direction = responsiveSplitDirection(layout, this.currentDirection);
-		if (direction === this.currentDirection) return;
+	private onResize(): void {
+		if (this.dedicatedTabId || !this.parentTabId || this.surfaces.size === 0) return;
 		if (this.reflowTimer) clearTimeout(this.reflowTimer);
 		this.reflowTimer = setTimeout(() => {
 			this.reflowTimer = undefined;
-			void this.serialize(() => this.reflow(direction)).catch(() => {
+			void this.serialize(() => this.reflow()).catch(() => {
 				// Keep child PTYs alive if responsive rearrangement is unavailable.
 				// A later child lifecycle operation can still close each owned pane.
-				this.stopLayoutListener();
+				this.stopResizeListener();
 			});
 		}, REFLOW_DEBOUNCE_MS);
 		this.reflowTimer.unref?.();
@@ -362,8 +304,8 @@ export class HerdrSurfaceManager {
 		}
 	}
 
-	private async reflow(requestedDirection: SplitDirection): Promise<void> {
-		if (this.dedicatedTabId || this.surfaces.size === 0 || requestedDirection === this.currentDirection) return;
+	private async reflow(): Promise<void> {
+		if (this.dedicatedTabId || this.surfaces.size === 0) return;
 		const layout = await this.parentLayout();
 		if (layout.tab_id !== this.parentTabId || layout.zoomed || !this.hasOnlyOwnedPanes(layout)) return;
 		const direction = responsiveSplitDirection(layout, this.currentDirection);
@@ -446,7 +388,7 @@ export class HerdrSurfaceManager {
 			this.surfaces.set(state.agentId, state);
 			try {
 				await this.run(["pane", "rename", paneId, state.name]);
-				this.startLayoutListener();
+				this.startResizeListener();
 			} catch (error) {
 				this.surfaces.delete(state.agentId);
 				state.paneId = undefined;
@@ -455,7 +397,7 @@ export class HerdrSurfaceManager {
 					this.parentTabId = undefined;
 					this.dedicatedTabId = undefined;
 					this.currentDirection = undefined;
-					this.stopLayoutListener();
+					this.stopResizeListener();
 				}
 				throw error;
 			}
@@ -523,7 +465,7 @@ export class HerdrSurfaceManager {
 				this.parentTabId = undefined;
 				this.dedicatedTabId = undefined;
 				this.currentDirection = undefined;
-				this.stopLayoutListener();
+				this.stopResizeListener();
 			}
 		});
 	}

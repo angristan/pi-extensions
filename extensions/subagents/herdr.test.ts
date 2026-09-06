@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
@@ -9,7 +10,7 @@ import {
 	HerdrSurfaceManager,
 	responsiveSplitDirection,
 	subagentsTabLabel,
-	watchHerdrLayout,
+	subscribeTerminalResize,
 	type ExecResult,
 	type HerdrPaneLayout,
 } from "./herdr";
@@ -104,7 +105,7 @@ describe("Herdr subagent surfaces", () => {
 
 	test("reflows owned panes after scoped debounced resize events", async () => {
 		const calls: string[][] = [];
-		let listener: ((value: HerdrPaneLayout) => void) | undefined;
+		let listener: (() => void) | undefined;
 		let unsubscribed = 0;
 		let currentLayout = layout(240, 80, [
 			{ pane_id: "parent-pane", rect: { x: 0, y: 0, width: 240, height: 80 } },
@@ -131,12 +132,8 @@ describe("Herdr subagent surfaces", () => {
 			{ pane_id: "parent-pane", rect: { x: 0, y: 0, width: 120, height: 54 } },
 			{ pane_id: "pane-1", rect: { x: 0, y: 54, width: 120, height: 26 } },
 		]);
-		listener?.(layout(120, 80, currentLayout.panes, "another-tab"));
-		await Bun.sleep(300);
-		expect(calls.filter((args) => args[0] === "pane" && args[1] === "move")).toHaveLength(0);
-
-		listener?.(currentLayout);
-		listener?.(currentLayout);
+		listener?.();
+		listener?.();
 		await Bun.sleep(350);
 		const moves = calls.filter((args) => args[0] === "pane" && args[1] === "move");
 		expect(moves).toEqual([
@@ -178,46 +175,15 @@ describe("Herdr subagent surfaces", () => {
 		expect(calls.at(-1)).toEqual(["tab", "rename", "tab-agents", "Subagents · Renamed Parent"]);
 	});
 
-	test("polls one parent layout without overlapping socket requests", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-herdr-layout-test-"));
-		const socketPath = join(directory, "herdr.sock");
-		const requests: any[] = [];
-		const server = net.createServer((socket) => {
-			let buffer = "";
-			socket.on("data", (chunk) => {
-				buffer += chunk.toString();
-				for (;;) {
-					const newline = buffer.indexOf("\n");
-					if (newline < 0) break;
-					const request = JSON.parse(buffer.slice(0, newline));
-					buffer = buffer.slice(newline + 1);
-					requests.push(request);
-					if (request.method === "pane.layout") {
-						setTimeout(() => socket.write(`${JSON.stringify({ id: request.id, result: { layout: layout(120, 80, []) } })}\n`), 50);
-					}
-				}
-			});
-		});
-		await new Promise<void>((resolve, reject) => {
-			server.once("error", reject);
-			server.listen(socketPath, resolve);
-		});
-		cleanup.push(async () => {
-			await new Promise<void>((resolve) => server.close(() => resolve()));
-			await rm(directory, { recursive: true, force: true });
-		});
-
-		let unsubscribe = () => {};
-		const received = new Promise<HerdrPaneLayout>((resolve) => {
-			unsubscribe = watchHerdrLayout(socketPath, "parent-pane", resolve, 10);
-		});
-		await expect(received).resolves.toEqual(layout(120, 80, []));
+	test("subscribes to native terminal resize events until disposed", () => {
+		const output = new EventEmitter();
+		let resizes = 0;
+		const unsubscribe = subscribeTerminalResize(() => { resizes += 1; }, output);
+		output.emit("resize");
+		expect(resizes).toBe(1);
 		unsubscribe();
-		expect(requests.filter((request) => request.method === "pane.layout")).toEqual([
-			expect.objectContaining({ params: { pane_id: "parent-pane" } }),
-		]);
-		await Bun.sleep(30);
-		expect(requests.filter((request) => request.method === "pane.layout")).toHaveLength(1);
+		output.emit("resize");
+		expect(resizes).toBe(1);
 	});
 
 	test("treats the pane shell as idle after a child exits", async () => {
