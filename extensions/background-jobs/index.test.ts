@@ -854,7 +854,7 @@ describe("terminal tools", () => {
 		}
 	});
 
-	test("ticks a live yielded card and stops once it completes", async () => {
+	test("keeps a yielded card static until the job completes", async () => {
 		const harness = createHarness();
 		await startHarness(harness);
 		const tool = harness.tools.get("bash");
@@ -872,38 +872,29 @@ describe("terminal tools", () => {
 			cwd: harness.ctx.cwd,
 			invalidate() { invalidations += 1; },
 		});
-		const headlineOf = (lines: string[]) =>
-			lines.find((line) => line.includes("test change-driven redraws")) ?? "";
-		const elapsedMsOf = (lines: string[]): number => {
-			const match = headlineOf(lines).match(/(\d+)(ms|s)\b/);
-			if (!match) throw new Error(`no elapsed time in headline: ${headlineOf(lines)}`);
-			return Number(match[1]) * (match[2] === "s" ? 1000 : 1);
-		};
 
-		const firstRender = component.render(120);
-		const firstElapsed = elapsedMsOf(firstRender);
-		expect(firstRender.join("\n")).toContain("Running test change-driven redraws");
-		expect(firstRender.join("\n")).toContain("running · /ps");
+		const running = component.render(120).join("\n");
+		expect(running).toContain("Running test change-driven redraws");
+		expect(running).toContain("running · /ps");
 
-		// The shared 1s ticker advances the elapsed headline while the job runs.
+		// A yielded card is historical transcript content. Keep it byte-stable
+		// while the job is idle instead of invalidating the transcript each second.
 		await Bun.sleep(1_400);
-		const tickedRender = component.render(120);
-		expect(elapsedMsOf(tickedRender)).toBeGreaterThan(firstElapsed);
-		expect(invalidations).toBeGreaterThanOrEqual(1);
+		expect(component.render(120).join("\n")).toBe(running);
+		expect(invalidations).toBe(0);
 
 		await harness.tools.get("job_output").execute("wait", {
 			job_id: started.details.id,
 			wait: true,
 		});
-		// Completion settles the card; the ticker stops, so later renders are
-		// byte-identical and no further invalidations arrive.
+		// Completion invalidates once so the card records final status and duration.
 		const settled = component.render(120).join("\n");
 		expect(settled).toContain("completed");
 		expect(settled).not.toContain("/ps");
-		const invalidationsAtSettle = invalidations;
+		expect(invalidations).toBe(1);
 		await Bun.sleep(1_400);
 		expect(component.render(120).join("\n")).toBe(settled);
-		expect(invalidations).toBe(invalidationsAtSettle);
+		expect(invalidations).toBe(1);
 		component.dispose?.();
 		await shutdownHarness(harness);
 	});

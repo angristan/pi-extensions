@@ -202,14 +202,12 @@ class ManagedCommandComponent {
 	// such cards then burns CPU in the render path even when idle.
 	private cachedWidth?: number;
 	private cachedLines?: string[];
-	// One shared 1-second ticker drives the elapsed headline of every live
-	// managed card — mirroring pi's own bash tool, which invalidates its
-	// "Elapsed" row once per second while a command runs. The ticker exists
-	// only while live cards exist, and completion settles each card once to a
-	// final frozen view. This replaces the earlier design where a yielded
-	// card's counter froze at yield time, and the older per-card 500ms poll
-	// that burned CPU redrawing every card independently.
-	private static liveCards = new Set<ManagedCommandComponent>();
+	// One shared 1-second ticker drives elapsed headlines only while commands
+	// remain in the foreground, mirroring Pi's native bash tool. Once a command
+	// yields, its transcript card freezes at the yield observation so an old row
+	// cannot invalidate and redraw the transcript every second. The completion
+	// subscription still settles that card once with its final duration.
+	private static tickingCards = new Set<ManagedCommandComponent>();
 	private static ticker?: ReturnType<typeof setInterval>;
 	private unsubscribe?: () => void;
 	private requestInvalidate?: () => void;
@@ -254,19 +252,17 @@ class ManagedCommandComponent {
 	}
 
 	/**
-	 * Keep this card in the live set while its job runs. The stored result of a
-	 * yielded card stays frozen at "running", so liveness is confirmed through
-	 * the service: a dead job settles immediately instead of re-acquiring the
-	 * ticker on every re-render (expansion toggles, transcript redraws).
+	 * Subscribe every live card to completion, but tick only foreground cards.
+	 * The stored result of a yielded card stays frozen at "running", so liveness
+	 * is confirmed through the service without a transcript heartbeat.
 	 */
 	private syncSubscription(): void {
 		const id = this.fallback?.id;
 		const live = typeof id === "string" && this.isActiveDetails(this.fallback) && this.service.isActive(id);
 		if (live) {
-			if (!ManagedCommandComponent.liveCards.has(this)) {
-				ManagedCommandComponent.liveCards.add(this);
-				this.unsubscribe = this.service.subscribe(id, () => this.onJobActivity());
-			}
+			this.unsubscribe ??= this.service.subscribe(id, () => this.onJobActivity());
+			if (this.fallback.backgrounded) ManagedCommandComponent.tickingCards.delete(this);
+			else ManagedCommandComponent.tickingCards.add(this);
 		} else {
 			// Historical and already-settled cards just detach; requesting an
 			// invalidation here would storm the renderer during session restore.
@@ -286,7 +282,7 @@ class ManagedCommandComponent {
 	private detach(): void {
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
-		if (ManagedCommandComponent.liveCards.delete(this)) ManagedCommandComponent.syncTicker();
+		if (ManagedCommandComponent.tickingCards.delete(this)) ManagedCommandComponent.syncTicker();
 	}
 
 	/**
@@ -309,8 +305,13 @@ class ManagedCommandComponent {
 			this.settle();
 			return;
 		}
-		// Advance the elapsed headline. The frozen view keeps the rest of the
-		// card byte-stable between ticks, so only the headline row changes.
+		// A command can yield between ticks. Stop before changing its historical
+		// transcript row; completion remains covered by the service subscription.
+		if (this.fallback.backgrounded) {
+			ManagedCommandComponent.tickingCards.delete(this);
+			ManagedCommandComponent.syncTicker();
+			return;
+		}
 		this.observedAt = Date.now();
 		this.cachedWidth = undefined;
 		this.cachedLines = undefined;
@@ -318,11 +319,11 @@ class ManagedCommandComponent {
 	}
 
 	private static syncTicker(): void {
-		if (ManagedCommandComponent.liveCards.size > 0) {
+		if (ManagedCommandComponent.tickingCards.size > 0) {
 			if (ManagedCommandComponent.ticker) return;
 			ManagedCommandComponent.ticker = setInterval(() => {
-				// Copy before iterating: tick() may settle() and mutate the live set.
-				for (const card of [...ManagedCommandComponent.liveCards]) card.tick();
+				// Copy before iterating: tick() may settle() and mutate the ticking set.
+				for (const card of [...ManagedCommandComponent.tickingCards]) card.tick();
 			}, 1_000);
 			ManagedCommandComponent.ticker.unref?.();
 		} else if (ManagedCommandComponent.ticker) {
@@ -371,9 +372,8 @@ class ManagedCommandComponent {
 		const details = view.details;
 		const status = details.status ?? "failed";
 		const active = status === "running" || status === "stopping";
-		// Every card is width-cached. Foreground output invalidates through Pi's
-		// partial-result updates; live yielded cards tick once per second via the
-		// shared ticker, and settled cards stay frozen for the transcript's life.
+		// Every card is width-cached. Foreground cards tick once per second, while
+		// yielded cards stay frozen until completion settles their final duration.
 		const elapsedMs = Math.max(0, (details.endedAt ?? this.observedAt) - (details.startedAt ?? this.observedAt));
 		const failed = status === "failed" || status === "killed" || status === "timed_out";
 		const summaryText = details.exitCode === undefined ? status : `Command exited with code ${details.exitCode}`;
@@ -414,8 +414,8 @@ class ManagedCommandComponent {
 	}
 
 	dispose(): void {
-		// Release the shared ticker reference even if Pi drops the component
-		// (compaction, redraw) while the job is still running.
+		// Release the completion subscription and any foreground ticker reference
+		// if Pi drops the component while the job is still running.
 		this.detach();
 	}
 }
@@ -459,8 +459,8 @@ export default function bash(pi: ExtensionAPI) {
 				},
 				renderResult: (result: any, options: any, theme: any, context: any) => {
 					const terminal = getBackgroundTerminalService();
-					// Foreground managed output streams into this component; after a
-					// yield it keeps ticking once per second until the job completes.
+					// Foreground managed output streams into this component. After a
+					// yield, its transcript row freezes until the job completes.
 					if (options?.isPartial && terminal && result?.details?.managedTerminal) {
 						let component = context.state.managedCommand as ManagedCommandComponent | undefined;
 						if (!component) {
