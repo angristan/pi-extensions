@@ -8,6 +8,7 @@
  * volatile partials) separate from the file tools' WidthAwareLines.
  */
 
+import { resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBashToolDefinition, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Container, truncateToWidth } from "@earendil-works/pi-tui";
@@ -21,7 +22,9 @@ import {
 	type BetterNativeBashIntegration,
 } from "../background-jobs/service.js";
 import { renderCodeBox } from "../code-blocks/index.js";
+import { hyperlinkPath } from "../hyperlinks/index.js";
 import { buildToolBlock, fitToolLine, formatShellCommandForDisplay, highlightedShellLine, renderCommandOutput, withReasoning } from "./core.js";
+import { shortPath } from "./render.js";
 
 const OUTPUT_ROWS = 5;
 const COMMAND_ROWS = 8;
@@ -87,6 +90,14 @@ function withoutCommand(args: any): any {
 	if (!args || typeof args !== "object") return args;
 	const { command: _command, ...rest } = args;
 	return rest;
+}
+
+function renderedWorkingDirectory(args: any, cwd: string | undefined, width: number, theme: any): string {
+	const base = cwd ?? process.cwd();
+	const requested = typeof args?.cwd === "string" && args.cwd.trim() ? args.cwd.trim() : ".";
+	const effective = resolve(base, requested);
+	const label = typeof theme?.fg === "function" ? theme.fg("dim", "in ") : "in ";
+	return fitToolLine(`  └ ${label}${hyperlinkPath(shortPath(effective), effective, base)}`, width);
 }
 
 function renderedCommand(command: string, width: number, expanded: boolean, theme: any): string[] {
@@ -170,11 +181,12 @@ class CommandComponent {
 			theme: this.theme,
 			cwd: this.options.cwd,
 		});
+		const directory = renderedWorkingDirectory(this.args, this.options.cwd, max, this.theme);
 		const command = typeof this.args?.command === "string"
 			? renderedCommand(this.args.command, max, this.options.expanded, this.theme)
 			: [];
 		if (this.options.partial) {
-			this.cachedLines = [...block.map((line) => fitToolLine(line, max)), ...command];
+			this.cachedLines = [...block.map((line) => fitToolLine(line, max)), directory, ...command];
 			this.cachedWidth = max;
 			return this.cachedLines;
 		}
@@ -184,7 +196,7 @@ class CommandComponent {
 			maxRows: this.options.expanded ? undefined : OUTPUT_ROWS,
 		});
 		const fittedBlock = block.map((line) => fitToolLine(line, max));
-		this.cachedLines = [...fittedBlock, ...command, ...output];
+		this.cachedLines = [...fittedBlock, directory, ...command, ...output];
 		this.cachedWidth = max;
 		return this.cachedLines;
 	}
@@ -385,6 +397,7 @@ class ManagedCommandComponent {
 			theme: this.theme,
 			cwd: this.cwd,
 		}).map((line) => fitToolLine(line, max));
+		const directory = renderedWorkingDirectory(this.args, this.cwd, max, this.theme);
 		const command = typeof this.args?.command === "string"
 			? renderedCommand(this.args.command, max, this.expanded, this.theme)
 			: [];
@@ -394,7 +407,7 @@ class ManagedCommandComponent {
 			emptyText: active ? "(waiting for output)" : "(no output)",
 		});
 		if (!details.backgrounded) {
-			const result = [...block, ...command, ...output];
+			const result = [...block, directory, ...command, ...output];
 			this.cachedLines = result;
 			this.cachedWidth = max;
 			return result;
@@ -402,7 +415,7 @@ class ManagedCommandComponent {
 		const color = terminalStatusColor(status);
 		const metadata = [details.id, status, details.tty ? "tty" : undefined, active ? "/ps" : undefined].filter(Boolean).join(" · ");
 		const footer = fitToolLine(`  └ ${this.theme.fg(color, terminalStatusSymbol(status))} ${this.theme.fg("dim", metadata)}`, max);
-		const result = [...block, ...command, ...output, footer];
+		const result = [...block, directory, ...command, ...output, footer];
 		this.cachedLines = result;
 		this.cachedWidth = max;
 		return result;

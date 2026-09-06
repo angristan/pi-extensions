@@ -2,9 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createBashToolDefinition } from "@earendil-works/pi-coding-agent";
 import registerBetterNativeBash from "../better-native-pi/bash";
+import { shortPath } from "../better-native-pi/render";
 import registerBackgroundJobs, { BoundedOutput, CursorOutput, JobOutputViewer } from "./index";
 import { sanitizeTerminalOutput } from "./output";
 import { isPtySupported } from "./terminal-process";
@@ -562,6 +563,7 @@ describe("terminal tools", () => {
 		const args = {
 			command: "printf 'quick-output'",
 			reasoning: "test quick execution",
+			cwd: "extensions",
 		};
 		const result = await tool.execute("exec", args, undefined, undefined, harness.ctx);
 
@@ -576,6 +578,9 @@ describe("terminal tools", () => {
 			state: {}, args, cwd: harness.ctx.cwd, invalidate() {},
 		}).render(120).join("\n");
 		expect(rendered).toContain("quick-output");
+		const renderedCwd = shortPath(resolve(harness.ctx.cwd, args.cwd));
+		const cwdLine = rendered.split("\n").find((line) => line.includes(renderedCwd));
+		expect(cwdLine).toContain("└ in ");
 		expect(rendered).not.toContain(result.details.id);
 	});
 
