@@ -13,7 +13,7 @@ const BRIDGE_COMMAND_TIMEOUT_MS = 30_000;
 const STOP_TIMEOUT_MS = 5_000;
 const MAX_RECORD_BYTES = 2 * 1024 * 1024;
 const REFLOW_DEBOUNCE_MS = 250;
-const EVENT_RECONNECT_MS = 1_000;
+const LAYOUT_POLL_MS = 400;
 const PRIMARY_PANE_RATIO = 0.67;
 const REFLOW_TAB_LABEL = "Reflowing subagents";
 const MAX_HERDR_LABEL_CHARS = 80;
@@ -60,57 +60,65 @@ export function responsiveSplitDirection(layout: HerdrPaneLayout, current?: Spli
 	return width >= 165 && aspect >= 1.9 ? "right" : "down";
 }
 
-/** Subscribe directly to Herdr's socket only while a surface manager needs it. */
-export function subscribeHerdrLayouts(socketPath: string, listener: (layout: HerdrPaneLayout) => void): () => void {
+/**
+ * Watch one parent layout only while its surface manager needs it. Herdr 0.8.2
+ * does not emit layout events for outer terminal resizes and processes one API
+ * request per connection, so each low-frequency poll uses a short local socket.
+ */
+export function watchHerdrLayout(
+	socketPath: string,
+	paneId: string,
+	listener: (layout: HerdrPaneLayout) => void,
+	pollIntervalMs = LAYOUT_POLL_MS,
+): () => void {
 	let disposed = false;
 	let socket: Socket | undefined;
-	let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+	let pollTimer: ReturnType<typeof setInterval> | undefined;
+	let nextRequestId = 0;
 
-	const connect = () => {
-		if (disposed) return;
+	const poll = () => {
+		if (disposed || socket) return;
+		const requestId = `subagents-layout-poll-${++nextRequestId}`;
 		let buffer = "";
 		const decoder = new StringDecoder("utf8");
-		socket = net.createConnection(socketPath);
-		socket.setNoDelay(true);
-		socket.once("connect", () => {
-			socket?.write(`${JSON.stringify({
-				id: `subagents-layout-${randomBytes(8).toString("hex")}`,
-				method: "events.subscribe",
-				params: { subscriptions: [{ type: "layout.updated" }] },
+		const current = net.createConnection(socketPath);
+		socket = current;
+		current.setNoDelay(true);
+		current.setTimeout(HERDR_TIMEOUT_MS, () => current.destroy());
+		current.once("connect", () => {
+			current.write(`${JSON.stringify({
+				id: requestId,
+				method: "pane.layout",
+				params: { pane_id: paneId },
 			})}\n`);
 		});
-		socket.on("data", (chunk) => {
+		current.on("data", (chunk) => {
 			buffer += decoder.write(chunk);
 			if (Buffer.byteLength(buffer) > MAX_RECORD_BYTES) {
-				socket?.destroy(new Error("Herdr layout event exceeded the size limit"));
+				current.destroy(new Error("Herdr pane layout response exceeded the size limit"));
 				return;
 			}
-			for (;;) {
-				const newline = buffer.indexOf("\n");
-				if (newline < 0) break;
-				const line = buffer.slice(0, newline).trim();
-				buffer = buffer.slice(newline + 1);
-				if (!line) continue;
-				try {
-					const message = JSON.parse(line);
-					if (message?.event === "layout_updated" && message?.data?.layout) listener(message.data.layout);
-				} catch { /* Ignore malformed records and keep the subscription alive. */ }
-			}
+			const newline = buffer.indexOf("\n");
+			if (newline < 0) return;
+			try {
+				const message = JSON.parse(buffer.slice(0, newline));
+				if (!disposed && message?.id === requestId && message?.result?.layout) listener(message.result.layout);
+			} catch { /* A later poll retries malformed responses. */ }
+			current.destroy();
 		});
-		socket.on("error", () => { /* Reconnect after close while panes still need updates. */ });
-		socket.once("close", () => {
-			socket = undefined;
-			if (disposed) return;
-			reconnectTimer = setTimeout(connect, EVENT_RECONNECT_MS);
-			reconnectTimer.unref?.();
+		current.on("error", () => { /* A later poll retries transient socket errors. */ });
+		current.once("close", () => {
+			if (socket === current) socket = undefined;
 		});
 	};
 
-	connect();
+	poll();
+	pollTimer = setInterval(poll, pollIntervalMs);
+	pollTimer.unref?.();
 	return () => {
 		disposed = true;
-		if (reconnectTimer) clearTimeout(reconnectTimer);
-		reconnectTimer = undefined;
+		if (pollTimer) clearInterval(pollTimer);
+		pollTimer = undefined;
 		socket?.destroy();
 		socket = undefined;
 	};

@@ -9,7 +9,7 @@ import {
 	HerdrSurfaceManager,
 	responsiveSplitDirection,
 	subagentsTabLabel,
-	subscribeHerdrLayouts,
+	watchHerdrLayout,
 	type ExecResult,
 	type HerdrPaneLayout,
 } from "./herdr";
@@ -178,19 +178,24 @@ describe("Herdr subagent surfaces", () => {
 		expect(calls.at(-1)).toEqual(["tab", "rename", "tab-agents", "Subagents · Renamed Parent"]);
 	});
 
-	test("subscribes to Herdr layout events over newline-delimited JSON", async () => {
-		const directory = await mkdtemp(join(tmpdir(), "pi-herdr-events-test-"));
+	test("polls one parent layout without overlapping socket requests", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-herdr-layout-test-"));
 		const socketPath = join(directory, "herdr.sock");
-		let request: any;
+		const requests: any[] = [];
 		const server = net.createServer((socket) => {
 			let buffer = "";
 			socket.on("data", (chunk) => {
 				buffer += chunk.toString();
-				const newline = buffer.indexOf("\n");
-				if (newline < 0) return;
-				request = JSON.parse(buffer.slice(0, newline));
-				socket.write(`${JSON.stringify({ id: request.id, result: { type: "events_subscribed" } })}\n`);
-				socket.write(`${JSON.stringify({ event: "layout_updated", data: { type: "layout_updated", layout: layout(120, 80, []) } })}\n`);
+				for (;;) {
+					const newline = buffer.indexOf("\n");
+					if (newline < 0) break;
+					const request = JSON.parse(buffer.slice(0, newline));
+					buffer = buffer.slice(newline + 1);
+					requests.push(request);
+					if (request.method === "pane.layout") {
+						setTimeout(() => socket.write(`${JSON.stringify({ id: request.id, result: { layout: layout(120, 80, []) } })}\n`), 50);
+					}
+				}
 			});
 		});
 		await new Promise<void>((resolve, reject) => {
@@ -202,15 +207,17 @@ describe("Herdr subagent surfaces", () => {
 			await rm(directory, { recursive: true, force: true });
 		});
 
+		let unsubscribe = () => {};
 		const received = new Promise<HerdrPaneLayout>((resolve) => {
-			const unsubscribe = subscribeHerdrLayouts(socketPath, (value) => {
-				unsubscribe();
-				resolve(value);
-			});
+			unsubscribe = watchHerdrLayout(socketPath, "parent-pane", resolve, 10);
 		});
 		await expect(received).resolves.toEqual(layout(120, 80, []));
-		expect(request.method).toBe("events.subscribe");
-		expect(request.params).toEqual({ subscriptions: [{ type: "layout.updated" }] });
+		unsubscribe();
+		expect(requests.filter((request) => request.method === "pane.layout")).toEqual([
+			expect.objectContaining({ params: { pane_id: "parent-pane" } }),
+		]);
+		await Bun.sleep(30);
+		expect(requests.filter((request) => request.method === "pane.layout")).toHaveLength(1);
 	});
 
 	test("treats the pane shell as idle after a child exits", async () => {
