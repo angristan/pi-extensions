@@ -18,10 +18,11 @@ should not create a goal.
 The goal is a short statement plus optional **validation criteria**. A compact
 summary is surfaced in its own overlay card, while the full goal is available via
 `/goal-status`. Goal lifecycle updates are appended as hidden model-context
-messages, including fresh anchors after restore and compaction, so the system
-prompt remains stable. Paused, blocked, completed, and cleared transitions retire
-older active-goal instructions explicitly. When a session with a paused or blocked
-goal is reopened, the UI offers **Resume goal**, **Keep paused/blocked**, or
+messages, including fresh **active-goal** anchors after restore and compaction, so
+the system prompt remains stable. Paused, blocked, completed, and cleared
+transitions retire older active-goal instructions once; they are not re-anchored
+later because they must not override newer work. When a session with a paused or
+blocked goal is reopened, the UI offers **Resume goal**, **Keep paused/blocked**, or
 **Clear goal**. Ordinary later turns are not gated on that choice. Objective and
 validation text are wrapped as untrusted user-provided data before reaching the
 model.

@@ -355,22 +355,29 @@ test("retires legacy cleared goal instructions on restore", async () => {
 	expect(context.content).toContain("monitor the old rollout");
 });
 
-test("retires completed goal instructions across compaction and restore", async () => {
+test("does not re-anchor a completed goal after compaction or restore", async () => {
 	const h = makeHarness();
 	await h.commands.goal.handler("finish the migration", h.ctx);
-	const contextsBeforeCompletion = sentMessages(h, "goal-context").length;
 
 	await h.tools.goal_complete.execute("complete", {}, undefined, undefined, h.ctx);
+	const contextsAfterCompletion = sentMessages(h, "goal-context");
+	expect(contextsAfterCompletion.at(-1)!.message.details?.status).toBe("complete");
+	expect(contextsAfterCompletion.at(-1)!.message.content).toContain("previous active-goal instructions are retired");
+
+	// In real sessions sendMessage persists this terminal marker. It remains the
+	// one retirement notice; compaction and restore must not make the old goal
+	// the newest task context again.
+	h.entries.push({
+		type: "custom_message",
+		customType: "goal-context",
+		content: contextsAfterCompletion.at(-1)!.message.content,
+		details: { status: "complete" },
+	});
 	await emit(h, "session_compact");
 	await emit(h, "session_start");
 
 	expect(latestGoalState(h).status).toBe("complete");
-	const contexts = sentMessages(h, "goal-context");
-	expect(contexts).toHaveLength(contextsBeforeCompletion + 3);
-	for (const { message } of contexts.slice(contextsBeforeCompletion)) {
-		expect(message.details?.status).toBe("complete");
-		expect(message.content).toContain("previous active-goal instructions are retired");
-	}
+	expect(sentMessages(h, "goal-context")).toHaveLength(contextsAfterCompletion.length);
 });
 
 test("continuation prompt is injected transiently and stale markers are pruned", async () => {

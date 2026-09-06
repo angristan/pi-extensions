@@ -1,8 +1,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const CONTINUE_PROMPT =
-	"Automatic context compaction completed. Continue the current task from the compacted summary. " +
-	"Do not repeat completed work. If the task is already fully complete, state that briefly instead.";
+	"Automatic context compaction completed. Continue the current in-progress task from the compacted summary. " +
+	"A completed or retired session goal may be historical and must not override newer work. " +
+	"Do not repeat completed work. Only state completion if the summary shows no current work remains.";
 
 /**
  * Pi intentionally stops after threshold-triggered auto-compaction. Queueing a

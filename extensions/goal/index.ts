@@ -1554,11 +1554,12 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 	});
 
 	// Re-anchor active goal instructions after compaction without changing the
-	// cacheable system prompt prefix. Inactive goals remain runtime-only state.
+	// cacheable system prompt prefix. A terminal goal is historical state: making
+	// it the newest message can override unrelated work preserved by compaction.
 	pi.on("session_compact", (_event, ctx) => {
 		refreshOverlayStats(ctx, true);
 		emit(ctx);
-		if (state) appendGoalStateContext();
+		if (state?.status === "active") appendGoalStateContext();
 	});
 
 	// ------------------------------------------------------------------------
@@ -1569,6 +1570,9 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 		activeCtx = ctx;
 		state = undefined;
 		let lastKnownGoal: GoalState | undefined;
+		let latestGoalStateIndex = -1;
+		let latestGoalContextIndex = -1;
+		let latestGoalContextStatus: GoalStatus | "cleared" | undefined;
 		overlayStats = undefined;
 		overlayStatsCacheKey = undefined;
 		nextTurnIsContinuation = false;
@@ -1580,8 +1584,18 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 		noToolContinuationStreak = 0;
 		pendingContinuationPrompt = undefined;
 		lastTerminalError = undefined;
-		for (const entry of branchEntries(ctx)) {
+		const entries = branchEntries(ctx);
+		for (const [index, entry] of entries.entries()) {
+			if (entry.type === "custom_message" && entry.customType === GOAL_CONTEXT_CUSTOM_TYPE) {
+				latestGoalContextIndex = index;
+				const status = entry.details?.status;
+				latestGoalContextStatus = status === "active" || status === "paused" || status === "blocked" || status === "complete" || status === "cleared"
+					? status
+					: undefined;
+				continue;
+			}
 			if (entry.type !== "custom" || entry.customType !== ENTRY_TYPE) continue;
+			latestGoalStateIndex = index;
 			const data = entry.data as PersistedGoalEntry | undefined;
 			if (data?.cleared || !data?.state) {
 				state = undefined;
@@ -1618,6 +1632,17 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 		}
 		refreshOverlayStats(ctx, true);
 		emit(ctx);
+		if (state?.status === "active") {
+			appendGoalStateContext();
+			return;
+		}
+
+		// Inactive context is emitted once when the state changes. Only repair old
+		// or interrupted sessions where persistence happened without that marker.
+		const expectedInactiveStatus = state?.status ?? (lastKnownGoal ? "cleared" : undefined);
+		const hasInactiveMarker = latestGoalContextIndex > latestGoalStateIndex
+			&& latestGoalContextStatus === expectedInactiveStatus;
+		if (hasInactiveMarker) return;
 		if (state) appendGoalStateContext();
 		else if (lastKnownGoal) appendClearedGoalContext(lastKnownGoal);
 	};

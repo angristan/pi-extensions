@@ -13,6 +13,8 @@ test("queues a hidden follow-up after threshold compaction during an active run"
 
 	expect(sent).toHaveLength(1);
 	expect(sent[0].message).toMatchObject({ customType: "auto-compact-continue", display: false, details: { reason: "threshold" } });
+	expect(sent[0].message.content).toContain("completed or retired session goal may be historical");
+	expect(sent[0].message.content).toContain("summary shows no current work remains");
 	expect(sent[0].options).toEqual({ triggerTurn: true, deliverAs: "followUp" });
 });
 
