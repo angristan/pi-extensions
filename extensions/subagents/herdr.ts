@@ -12,7 +12,30 @@ const BRIDGE_START_TIMEOUT_MS = 30_000;
 const BRIDGE_COMMAND_TIMEOUT_MS = 30_000;
 const STOP_TIMEOUT_MS = 5_000;
 const MAX_RECORD_BYTES = 2 * 1024 * 1024;
+const REFLOW_DEBOUNCE_MS = 250;
+const EVENT_RECONNECT_MS = 1_000;
+const PRIMARY_PANE_RATIO = 0.67;
+const REFLOW_TAB_LABEL = "Reflowing subagents";
 const MAX_HERDR_LABEL_CHARS = 80;
+
+export type SplitDirection = "right" | "down";
+
+export interface HerdrLayoutRect {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+}
+
+export interface HerdrPaneLayout {
+	workspace_id: string;
+	tab_id: string;
+	zoomed: boolean;
+	area: HerdrLayoutRect;
+	panes: Array<{ pane_id: string; rect: HerdrLayoutRect }>;
+}
+
+export type HerdrLayoutSubscriber = (listener: (layout: HerdrPaneLayout) => void) => () => void;
 
 export function subagentsTabLabel(parentSessionName: string | undefined): string {
 	const parent = parentSessionName?.replace(/\s+/g, " ").trim() || "Untitled Session";
@@ -22,6 +45,75 @@ export function subagentsTabLabel(parentSessionName: string | undefined): string
 
 export function childSessionName(masterName: string): string {
 	return `Subagent · ${masterName}`;
+}
+
+/**
+ * Keep a little hysteresis between wide and narrow thresholds so a terminal
+ * near the boundary does not repeatedly rebuild its pane tree while resizing.
+ */
+export function responsiveSplitDirection(layout: HerdrPaneLayout, current?: SplitDirection): SplitDirection {
+	const width = Number(layout.area?.width ?? 0);
+	const height = Math.max(1, Number(layout.area?.height ?? 0));
+	const aspect = width / height;
+	if (current === "right") return width <= 150 || aspect <= 1.7 ? "down" : "right";
+	if (current === "down") return width >= 180 && aspect >= 2.1 ? "right" : "down";
+	return width >= 165 && aspect >= 1.9 ? "right" : "down";
+}
+
+/** Subscribe directly to Herdr's socket only while a surface manager needs it. */
+export function subscribeHerdrLayouts(socketPath: string, listener: (layout: HerdrPaneLayout) => void): () => void {
+	let disposed = false;
+	let socket: Socket | undefined;
+	let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+
+	const connect = () => {
+		if (disposed) return;
+		let buffer = "";
+		const decoder = new StringDecoder("utf8");
+		socket = net.createConnection(socketPath);
+		socket.setNoDelay(true);
+		socket.once("connect", () => {
+			socket?.write(`${JSON.stringify({
+				id: `subagents-layout-${randomBytes(8).toString("hex")}`,
+				method: "events.subscribe",
+				params: { subscriptions: [{ type: "layout.updated" }] },
+			})}\n`);
+		});
+		socket.on("data", (chunk) => {
+			buffer += decoder.write(chunk);
+			if (Buffer.byteLength(buffer) > MAX_RECORD_BYTES) {
+				socket?.destroy(new Error("Herdr layout event exceeded the size limit"));
+				return;
+			}
+			for (;;) {
+				const newline = buffer.indexOf("\n");
+				if (newline < 0) break;
+				const line = buffer.slice(0, newline).trim();
+				buffer = buffer.slice(newline + 1);
+				if (!line) continue;
+				try {
+					const message = JSON.parse(line);
+					if (message?.event === "layout_updated" && message?.data?.layout) listener(message.data.layout);
+				} catch { /* Ignore malformed records and keep the subscription alive. */ }
+			}
+		});
+		socket.on("error", () => { /* Reconnect after close while panes still need updates. */ });
+		socket.once("close", () => {
+			socket = undefined;
+			if (disposed) return;
+			reconnectTimer = setTimeout(connect, EVENT_RECONNECT_MS);
+			reconnectTimer.unref?.();
+		});
+	};
+
+	connect();
+	return () => {
+		disposed = true;
+		if (reconnectTimer) clearTimeout(reconnectTimer);
+		reconnectTimer = undefined;
+		socket?.destroy();
+		socket = undefined;
+	};
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
@@ -97,16 +189,22 @@ function launcherScript(options: HerdrAgentClientOptions, socketPath: string, to
 	].join("\n");
 }
 
-/** Owns one dedicated Herdr tab and all child panes created in it. */
+/** Owns responsive child panes beside the Pi pane that created this manager. */
 export class HerdrSurfaceManager {
-	private tabId?: string;
-	private readonly panes = new Set<string>();
+	private readonly surfaces = new Map<string, HerdrSurfaceState>();
+	private parentTabId?: string;
+	private dedicatedTabId?: string;
+	private currentDirection?: SplitDirection;
+	private unsubscribeLayouts?: () => void;
+	private reflowTimer?: ReturnType<typeof setTimeout>;
 	private operationTail: Promise<void> = Promise.resolve();
 
 	constructor(
 		private readonly exec: HerdrExec,
 		private readonly workspaceId: string,
-		private readonly tabLabel: () => string,
+		private readonly parentPaneId: string,
+		private readonly subscribeLayouts?: HerdrLayoutSubscriber,
+		private readonly tabLabel: () => string = () => "Subagents",
 	) {}
 
 	private async execute(args: string[]): Promise<ExecResult> {
@@ -125,24 +223,50 @@ export class HerdrSurfaceManager {
 		return result;
 	}
 
+	private paneIds(): string[] {
+		return [...this.surfaces.values()].flatMap((state) => state.paneId ? [state.paneId] : []);
+	}
+
+	private forgetPane(paneId: string): void {
+		for (const [agentId, state] of this.surfaces) {
+			if (state.paneId !== paneId) continue;
+			state.paneId = undefined;
+			this.surfaces.delete(agentId);
+		}
+	}
+
 	private async paneExists(paneId: string): Promise<boolean> {
 		try {
 			await this.run(["pane", "get", paneId]);
 			return true;
 		} catch (error) {
 			if (!isMissingPaneError(error)) throw error;
-			this.panes.delete(paneId);
+			this.forgetPane(paneId);
 			return false;
 		}
 	}
 
-	private async splitTarget(): Promise<{ paneId: string; direction: "right" | "down" }> {
-		const fallback = [...this.panes][0];
+	private async parentLayout(): Promise<HerdrPaneLayout> {
+		const payload = await this.run(["pane", "layout", "--pane", this.parentPaneId]);
+		const layout = payload?.result?.layout;
+		if (!layout || typeof layout.tab_id !== "string" || !Array.isArray(layout.panes)) {
+			throw new Error("Herdr pane layout did not return the parent tab geometry");
+		}
+		return layout;
+	}
+
+	private hasOnlyOwnedPanes(layout: HerdrPaneLayout): boolean {
+		const allowed = new Set([this.parentPaneId, ...this.paneIds()]);
+		return layout.panes.every((pane) => allowed.has(pane.pane_id));
+	}
+
+	private async splitTarget(candidateIds = new Set(this.paneIds())): Promise<{ paneId: string; direction: SplitDirection }> {
+		const fallback = [...candidateIds][0];
 		if (!fallback) throw new Error("No Herdr subagent pane is available to split");
 		try {
 			const payload = await this.run(["pane", "layout", "--pane", fallback]);
 			const layoutPanes = Array.isArray(payload?.result?.layout?.panes) ? payload.result.layout.panes : [];
-			const candidates = layoutPanes.filter((pane: any) => this.panes.has(pane?.pane_id));
+			const candidates = layoutPanes.filter((pane: any) => candidateIds.has(pane?.pane_id));
 			const largest = candidates.reduce((best: any, pane: any) => {
 				const area = Number(pane?.rect?.width ?? 0) * Number(pane?.rect?.height ?? 0);
 				const bestArea = Number(best?.rect?.width ?? 0) * Number(best?.rect?.height ?? 0);
@@ -154,44 +278,177 @@ export class HerdrSurfaceManager {
 				return { paneId: largest.pane_id, direction: width >= height * 2 ? "right" : "down" };
 			}
 		} catch { /* Layout only improves tiling; pane creation still has a safe fallback. */ }
-		return { paneId: fallback, direction: "right" };
+		return { paneId: fallback, direction: "down" };
+	}
+
+	private startLayoutListener(): void {
+		if (this.dedicatedTabId || this.unsubscribeLayouts || !this.subscribeLayouts || this.surfaces.size === 0) return;
+		this.unsubscribeLayouts = this.subscribeLayouts((layout) => this.onLayout(layout));
+	}
+
+	private stopLayoutListener(): void {
+		if (this.reflowTimer) clearTimeout(this.reflowTimer);
+		this.reflowTimer = undefined;
+		this.unsubscribeLayouts?.();
+		this.unsubscribeLayouts = undefined;
+	}
+
+	private onLayout(layout: HerdrPaneLayout): void {
+		if (this.dedicatedTabId || !this.parentTabId || layout.tab_id !== this.parentTabId || this.surfaces.size === 0) return;
+		if (layout.zoomed || !this.hasOnlyOwnedPanes(layout)) return;
+		const direction = responsiveSplitDirection(layout, this.currentDirection);
+		if (direction === this.currentDirection) return;
+		if (this.reflowTimer) clearTimeout(this.reflowTimer);
+		this.reflowTimer = setTimeout(() => {
+			this.reflowTimer = undefined;
+			void this.serialize(() => this.reflow(direction)).catch(() => {
+				// Keep child PTYs alive if responsive rearrangement is unavailable.
+				// A later child lifecycle operation can still close each owned pane.
+				this.stopLayoutListener();
+			});
+		}, REFLOW_DEBOUNCE_MS);
+		this.reflowTimer.unref?.();
+	}
+
+	private updateMovedPane(state: HerdrSurfaceState, payload: any): { paneId: string; tabId?: string } {
+		const move = payload?.result?.move_result ?? payload?.result;
+		if (move?.changed === false) throw new Error(`Herdr pane move did not change the layout: ${move.reason ?? "unknown reason"}`);
+		const paneId = move?.pane?.pane_id;
+		if (typeof paneId !== "string" || !paneId) throw new Error("Herdr pane move did not return a pane ID");
+		state.paneId = paneId;
+		return { paneId, tabId: move?.pane?.tab_id ?? move?.created_tab?.tab_id };
+	}
+
+	private async moveToParent(
+		state: HerdrSurfaceState,
+		targetPaneId: string,
+		direction: SplitDirection,
+		ratio: number,
+	): Promise<string> {
+		const payload = await this.run([
+			"pane", "move", state.paneId!, "--tab", this.parentTabId!,
+			"--target-pane", targetPaneId, "--split", direction,
+			"--ratio", String(ratio), "--no-focus",
+		]);
+		return this.updateMovedPane(state, payload).paneId;
+	}
+
+	private async restoreChildrenToParent(states: HerdrSurfaceState[], direction: SplitDirection): Promise<void> {
+		const returned = new Set<string>();
+		for (const state of states) {
+			if (!state.paneId) continue;
+			let pane: any;
+			try { pane = (await this.run(["pane", "get", state.paneId]))?.result?.pane; }
+			catch { continue; }
+			if (pane?.tab_id === this.parentTabId) {
+				returned.add(state.paneId);
+				continue;
+			}
+			const target = returned.size === 0
+				? { paneId: this.parentPaneId, direction, ratio: PRIMARY_PANE_RATIO }
+				: { ...(await this.splitTarget(returned)), ratio: 0.5 };
+			try {
+				const paneId = await this.moveToParent(state, target.paneId, target.direction, target.ratio);
+				returned.add(paneId);
+			} catch { /* Preserve any pane that Herdr could not move back. */ }
+		}
+	}
+
+	private async reflow(requestedDirection: SplitDirection): Promise<void> {
+		if (this.dedicatedTabId || this.surfaces.size === 0 || requestedDirection === this.currentDirection) return;
+		const layout = await this.parentLayout();
+		if (layout.tab_id !== this.parentTabId || layout.zoomed || !this.hasOnlyOwnedPanes(layout)) return;
+		const direction = responsiveSplitDirection(layout, this.currentDirection);
+		if (direction === this.currentDirection) return;
+
+		const states = [...this.surfaces.values()].filter((state) => state.paneId);
+		if (states.length === 0) return;
+		let stagingTabId: string | undefined;
+		try {
+			const first = states[0]!;
+			const staged = this.updateMovedPane(first, await this.run([
+				"pane", "move", first.paneId!, "--new-tab", "--workspace", this.workspaceId,
+				"--label", REFLOW_TAB_LABEL, "--no-focus",
+			]));
+			stagingTabId = staged.tabId;
+			if (!stagingTabId) throw new Error("Herdr pane move did not return the staging tab ID");
+			let stagingTarget = staged.paneId;
+			for (const state of states.slice(1)) {
+				const moved = this.updateMovedPane(state, await this.run([
+					"pane", "move", state.paneId!, "--tab", stagingTabId,
+					"--target-pane", stagingTarget, "--split", "down", "--ratio", "0.5", "--no-focus",
+				]));
+				stagingTarget = moved.paneId;
+			}
+
+			const returned = new Set<string>();
+			for (const [index, state] of states.entries()) {
+				const target = index === 0
+					? { paneId: this.parentPaneId, direction, ratio: PRIMARY_PANE_RATIO }
+					: { ...(await this.splitTarget(returned)), ratio: 0.5 };
+				const paneId = await this.moveToParent(state, target.paneId, target.direction, target.ratio);
+				returned.add(paneId);
+			}
+			this.currentDirection = direction;
+		} catch (error) {
+			if (stagingTabId) await this.restoreChildrenToParent(states, direction);
+			throw error;
+		}
 	}
 
 	async ensurePane(state: HerdrSurfaceState, cwd: string): Promise<string> {
 		return this.serialize(async () => {
 			if (state.paneId && await this.paneExists(state.paneId)) return state.paneId;
 			state.paneId = undefined;
-			for (const paneId of [...this.panes]) await this.paneExists(paneId);
+			for (const paneId of this.paneIds()) await this.paneExists(paneId);
 
 			let paneId: string;
-			if (this.panes.size === 0) {
-				const payload = await this.run([
-					"tab", "create", "--workspace", this.workspaceId,
-					"--cwd", cwd, "--label", this.tabLabel(), "--no-focus",
-				]);
-				this.tabId = payload?.result?.tab?.tab_id;
-				paneId = payload?.result?.root_pane?.pane_id;
-				if (!this.tabId || typeof paneId !== "string" || !paneId) {
-					throw new Error("Herdr tab create did not return a tab and root pane");
+			if (this.surfaces.size === 0) {
+				const layout = await this.parentLayout();
+				if (!layout.panes.some((pane) => pane.pane_id === this.parentPaneId)) {
+					throw new Error("The parent Pi pane is not present in its Herdr tab");
+				}
+				this.parentTabId = layout.tab_id;
+				if (this.hasOnlyOwnedPanes(layout)) {
+					this.currentDirection = responsiveSplitDirection(layout);
+					const payload = await this.run([
+						"pane", "split", this.parentPaneId, "--direction", this.currentDirection,
+						"--ratio", String(PRIMARY_PANE_RATIO), "--cwd", cwd, "--no-focus",
+					]);
+					paneId = payload?.result?.pane?.pane_id;
+				} else {
+					const payload = await this.run([
+						"tab", "create", "--workspace", this.workspaceId,
+						"--cwd", cwd, "--label", this.tabLabel(), "--no-focus",
+					]);
+					this.dedicatedTabId = payload?.result?.tab?.tab_id;
+					paneId = payload?.result?.root_pane?.pane_id;
+					if (!this.dedicatedTabId) throw new Error("Herdr tab create did not return a tab ID");
 				}
 			} else {
 				const target = await this.splitTarget();
 				const payload = await this.run([
 					"pane", "split", target.paneId, "--direction", target.direction,
-					"--cwd", cwd, "--no-focus",
+					"--ratio", "0.5", "--cwd", cwd, "--no-focus",
 				]);
 				paneId = payload?.result?.pane?.pane_id;
-				if (typeof paneId !== "string" || !paneId) throw new Error("Herdr pane split did not return a pane ID");
 			}
-			this.panes.add(paneId);
+			if (typeof paneId !== "string" || !paneId) throw new Error("Herdr pane split did not return a pane ID");
 			state.paneId = paneId;
+			this.surfaces.set(state.agentId, state);
 			try {
 				await this.run(["pane", "rename", paneId, state.name]);
+				this.startLayoutListener();
 			} catch (error) {
-				this.panes.delete(paneId);
+				this.surfaces.delete(state.agentId);
 				state.paneId = undefined;
 				try { await this.run(["pane", "close", paneId]); } catch { /* Preserve the rename failure. */ }
-				if (this.panes.size === 0) this.tabId = undefined;
+				if (this.surfaces.size === 0) {
+					this.parentTabId = undefined;
+					this.dedicatedTabId = undefined;
+					this.currentDirection = undefined;
+					this.stopLayoutListener();
+				}
 				throw error;
 			}
 			return paneId;
@@ -204,11 +461,12 @@ export class HerdrSurfaceManager {
 
 	async refreshTabLabel(): Promise<void> {
 		await this.serialize(async () => {
-			if (!this.tabId) return;
-			try { await this.run(["tab", "rename", this.tabId, this.tabLabel()]); }
+			if (!this.dedicatedTabId) return;
+			try { await this.run(["tab", "rename", this.dedicatedTabId, this.tabLabel()]); }
 			catch (error) {
-				if (!/(?:unknown|missing|not found|does not exist).*tab|tab.*(?:unknown|missing|not found|does not exist)/i.test(error instanceof Error ? error.message : String(error))) throw error;
-				this.tabId = undefined;
+				const message = error instanceof Error ? error.message : String(error);
+				if (!/(?:unknown|missing|not found|does not exist).*tab|tab.*(?:unknown|missing|not found|does not exist)/i.test(message)) throw error;
+				this.dedicatedTabId = undefined;
 			}
 		});
 	}
@@ -243,17 +501,22 @@ export class HerdrSurfaceManager {
 			const paneId = state.paneId;
 			if (!paneId) return;
 			state.paneId = undefined;
-			this.panes.delete(paneId);
+			this.surfaces.delete(state.agentId);
 			try {
 				await this.run(["pane", "close", paneId]);
 			} catch (error) {
 				if (!isMissingPaneError(error)) {
 					state.paneId = paneId;
-					this.panes.add(paneId);
+					this.surfaces.set(state.agentId, state);
 					throw error;
 				}
 			}
-			if (this.panes.size === 0) this.tabId = undefined;
+			if (this.surfaces.size === 0) {
+				this.parentTabId = undefined;
+				this.dedicatedTabId = undefined;
+				this.currentDirection = undefined;
+				this.stopLayoutListener();
+			}
 		});
 	}
 }

@@ -3,7 +3,16 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { childSessionName, HerdrAgentClient, HerdrSurfaceManager, subagentsTabLabel, type ExecResult } from "./herdr";
+import {
+	childSessionName,
+	HerdrAgentClient,
+	HerdrSurfaceManager,
+	responsiveSplitDirection,
+	subagentsTabLabel,
+	subscribeHerdrLayouts,
+	type ExecResult,
+	type HerdrPaneLayout,
+} from "./herdr";
 
 const cleanup: Array<() => Promise<void>> = [];
 
@@ -15,30 +24,58 @@ function success(result: unknown): ExecResult {
 	return { code: 0, stdout: JSON.stringify({ result }), stderr: "" };
 }
 
+function layout(
+	width: number,
+	height: number,
+	panes: HerdrPaneLayout["panes"],
+	tabId = "tab-parent",
+): HerdrPaneLayout {
+	return {
+		workspace_id: "workspace-1",
+		tab_id: tabId,
+		zoomed: false,
+		area: { x: 0, y: 0, width, height },
+		panes,
+	};
+}
+
 describe("Herdr subagent surfaces", () => {
-	test("makes parent and child session roles explicit", () => {
+	test("makes parent and child session roles explicit and chooses layouts with hysteresis", () => {
 		expect(subagentsTabLabel("Crawler Review")).toBe("Subagents · Crawler Review");
 		expect(subagentsTabLabel(undefined)).toBe("Subagents · Untitled Session");
 		expect(subagentsTabLabel("x".repeat(100))).toHaveLength(80);
 		expect(childSessionName("reviewer")).toBe("Subagent · reviewer");
+		const wide = layout(240, 80, []);
+		const narrow = layout(120, 80, []);
+		expect(responsiveSplitDirection(wide)).toBe("right");
+		expect(responsiveSplitDirection(narrow)).toBe("down");
+		expect(responsiveSplitDirection(layout(165, 90, []), "right")).toBe("right");
+		expect(responsiveSplitDirection(layout(165, 90, []), "down")).toBe("down");
 	});
 
-	test("serializes concurrent children into one unfocused tab with master names", async () => {
+	test("serializes concurrent children into one adaptive region in the parent tab", async () => {
 		const calls: string[][] = [];
 		let nextPane = 1;
-		let tabLabel = "Subagents · Parent Review";
+		let subscribed = 0;
 		const manager = new HerdrSurfaceManager(async (_command, args) => {
 			calls.push(args);
-			if (args[0] === "tab" && args[1] === "create") {
-				await Bun.sleep(5);
-				return success({ tab: { tab_id: "tab-agents" }, root_pane: { pane_id: `pane-${nextPane++}` } });
-			}
 			if (args[0] === "pane" && args[1] === "layout") {
-				return success({ layout: { panes: [{ pane_id: "pane-1", rect: { width: 120, height: 40 } }] } });
+				if (args[3] === "parent-pane") {
+					return success({ layout: layout(240, 80, [{ pane_id: "parent-pane", rect: { x: 0, y: 0, width: 240, height: 80 } }]) });
+				}
+				return success({
+					layout: layout(240, 80, [
+						{ pane_id: "parent-pane", rect: { x: 0, y: 0, width: 160, height: 80 } },
+						{ pane_id: "pane-1", rect: { x: 160, y: 0, width: 80, height: 80 } },
+					]),
+				});
 			}
 			if (args[0] === "pane" && args[1] === "split") return success({ pane: { pane_id: `pane-${nextPane++}` } });
 			return success({});
-		}, "workspace-1", () => tabLabel);
+		}, "workspace-1", "parent-pane", () => {
+			subscribed += 1;
+			return () => { subscribed -= 1; };
+		});
 		const reviewer = { agentId: "a", name: "reviewer" };
 		const tester = { agentId: "b", name: "tester" };
 
@@ -48,21 +85,132 @@ describe("Herdr subagent surfaces", () => {
 		]);
 
 		expect([first, second]).toEqual(["pane-1", "pane-2"]);
-		expect(calls.filter((args) => args[0] === "tab" && args[1] === "create")).toHaveLength(1);
-		expect(calls.find((args) => args[0] === "tab" && args[1] === "create")).toEqual([
-			"tab", "create", "--workspace", "workspace-1", "--cwd", "/repo", "--label", "Subagents · Parent Review", "--no-focus",
-		]);
-		expect(calls.find((args) => args[0] === "pane" && args[1] === "split")).toEqual([
-			"pane", "split", "pane-1", "--direction", "right", "--cwd", "/repo", "--no-focus",
+		expect(calls.filter((args) => args[0] === "tab" && args[1] === "create")).toHaveLength(0);
+		expect(calls.filter((args) => args[0] === "pane" && args[1] === "split")).toEqual([
+			["pane", "split", "parent-pane", "--direction", "right", "--ratio", "0.67", "--cwd", "/repo", "--no-focus"],
+			["pane", "split", "pane-1", "--direction", "down", "--ratio", "0.5", "--cwd", "/repo", "--no-focus"],
 		]);
 		expect(calls.filter((args) => args[0] === "pane" && args[1] === "rename")).toEqual([
 			["pane", "rename", "pane-1", "reviewer"],
 			["pane", "rename", "pane-2", "tester"],
 		]);
+		expect(subscribed).toBe(1);
 
-		tabLabel = "Subagents · Updated Parent";
+		await manager.closePane(reviewer);
+		expect(subscribed).toBe(1);
+		await manager.closePane(tester);
+		expect(subscribed).toBe(0);
+	});
+
+	test("reflows owned panes after scoped debounced resize events", async () => {
+		const calls: string[][] = [];
+		let listener: ((value: HerdrPaneLayout) => void) | undefined;
+		let unsubscribed = 0;
+		let currentLayout = layout(240, 80, [
+			{ pane_id: "parent-pane", rect: { x: 0, y: 0, width: 240, height: 80 } },
+		]);
+		const manager = new HerdrSurfaceManager(async (_command, args) => {
+			calls.push(args);
+			if (args[0] === "pane" && args[1] === "layout") return success({ layout: currentLayout });
+			if (args[0] === "pane" && args[1] === "split") return success({ pane: { pane_id: "pane-1" } });
+			if (args[0] === "pane" && args[1] === "move" && args.includes("--new-tab")) {
+				return success({ move_result: { changed: true, pane: { pane_id: "pane-1", tab_id: "tab-stage" }, created_tab: { tab_id: "tab-stage" } } });
+			}
+			if (args[0] === "pane" && args[1] === "move") {
+				return success({ move_result: { changed: true, pane: { pane_id: "pane-1", tab_id: "tab-parent" } } });
+			}
+			return success({});
+		}, "workspace-1", "parent-pane", (next) => {
+			listener = next;
+			return () => { unsubscribed += 1; listener = undefined; };
+		});
+		const reviewer = { agentId: "a", name: "reviewer" };
+		await manager.ensurePane(reviewer, "/repo");
+
+		currentLayout = layout(120, 80, [
+			{ pane_id: "parent-pane", rect: { x: 0, y: 0, width: 120, height: 54 } },
+			{ pane_id: "pane-1", rect: { x: 0, y: 54, width: 120, height: 26 } },
+		]);
+		listener?.(layout(120, 80, currentLayout.panes, "another-tab"));
+		await Bun.sleep(300);
+		expect(calls.filter((args) => args[0] === "pane" && args[1] === "move")).toHaveLength(0);
+
+		listener?.(currentLayout);
+		listener?.(currentLayout);
+		await Bun.sleep(350);
+		const moves = calls.filter((args) => args[0] === "pane" && args[1] === "move");
+		expect(moves).toEqual([
+			["pane", "move", "pane-1", "--new-tab", "--workspace", "workspace-1", "--label", "Reflowing subagents", "--no-focus"],
+			["pane", "move", "pane-1", "--tab", "tab-parent", "--target-pane", "parent-pane", "--split", "down", "--ratio", "0.67", "--no-focus"],
+		]);
+
+		await manager.closePane(reviewer);
+		expect(unsubscribed).toBe(1);
+	});
+
+	test("falls back to a named tab instead of resizing unrelated panes", async () => {
+		const calls: string[][] = [];
+		let tabLabel = "Subagents · Parent Review";
+		const manager = new HerdrSurfaceManager(async (_command, args) => {
+			calls.push(args);
+			if (args[0] === "pane" && args[1] === "layout") {
+				return success({
+					layout: layout(240, 80, [
+						{ pane_id: "parent-pane", rect: { x: 0, y: 0, width: 160, height: 80 } },
+						{ pane_id: "user-pane", rect: { x: 160, y: 0, width: 80, height: 80 } },
+					]),
+				});
+			}
+			if (args[0] === "tab" && args[1] === "create") {
+				return success({ tab: { tab_id: "tab-agents" }, root_pane: { pane_id: "pane-1" } });
+			}
+			return success({});
+		}, "workspace-1", "parent-pane", undefined, () => tabLabel);
+		const state = { agentId: "a", name: "reviewer" };
+		await expect(manager.ensurePane(state, "/repo")).resolves.toBe("pane-1");
+		expect(calls.find((args) => args[0] === "tab" && args[1] === "create")).toEqual([
+			"tab", "create", "--workspace", "workspace-1", "--cwd", "/repo",
+			"--label", "Subagents · Parent Review", "--no-focus",
+		]);
+
+		tabLabel = "Subagents · Renamed Parent";
 		await manager.refreshTabLabel();
-		expect(calls.at(-1)).toEqual(["tab", "rename", "tab-agents", "Subagents · Updated Parent"]);
+		expect(calls.at(-1)).toEqual(["tab", "rename", "tab-agents", "Subagents · Renamed Parent"]);
+	});
+
+	test("subscribes to Herdr layout events over newline-delimited JSON", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "pi-herdr-events-test-"));
+		const socketPath = join(directory, "herdr.sock");
+		let request: any;
+		const server = net.createServer((socket) => {
+			let buffer = "";
+			socket.on("data", (chunk) => {
+				buffer += chunk.toString();
+				const newline = buffer.indexOf("\n");
+				if (newline < 0) return;
+				request = JSON.parse(buffer.slice(0, newline));
+				socket.write(`${JSON.stringify({ id: request.id, result: { type: "events_subscribed" } })}\n`);
+				socket.write(`${JSON.stringify({ event: "layout_updated", data: { type: "layout_updated", layout: layout(120, 80, []) } })}\n`);
+			});
+		});
+		await new Promise<void>((resolve, reject) => {
+			server.once("error", reject);
+			server.listen(socketPath, resolve);
+		});
+		cleanup.push(async () => {
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+			await rm(directory, { recursive: true, force: true });
+		});
+
+		const received = new Promise<HerdrPaneLayout>((resolve) => {
+			const unsubscribe = subscribeHerdrLayouts(socketPath, (value) => {
+				unsubscribe();
+				resolve(value);
+			});
+		});
+		await expect(received).resolves.toEqual(layout(120, 80, []));
+		expect(request.method).toBe("events.subscribe");
+		expect(request.params).toEqual({ subscriptions: [{ type: "layout.updated" }] });
 	});
 
 	test("treats the pane shell as idle after a child exits", async () => {
@@ -74,7 +222,7 @@ describe("Herdr subagent surfaces", () => {
 					foreground_processes: [{ pid: 84, name: "zsh", argv: ["zsh", "-l"] }],
 				},
 			});
-		}, "workspace-1", () => "Subagents · Parent Review");
+		}, "workspace-1", "parent-pane");
 		await expect(manager.waitUntilIdle("pane-1")).resolves.toBe(true);
 	});
 
@@ -82,7 +230,7 @@ describe("Herdr subagent surfaces", () => {
 		const manager = new HerdrSurfaceManager(async (_command, args) => {
 			expect(args).toEqual(["pane", "run", "pane-1", "echo ok"]);
 			return { code: 0, stdout: "", stderr: "" };
-		}, "workspace-1", () => "Subagents · Parent Review");
+		}, "workspace-1", "parent-pane");
 		await expect(manager.runCommand("pane-1", "echo ok")).resolves.toBeUndefined();
 	});
 

@@ -34,6 +34,7 @@ import {
 	childSessionName,
 	isHerdrParent,
 	subagentsTabLabel,
+	subscribeHerdrLayouts,
 	type HerdrAgentClientOptions,
 	type HerdrExec,
 } from "./herdr.js";
@@ -178,6 +179,8 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		? new HerdrSurfaceManager(
 			options.herdrExec ?? ((command, args, execOptions) => pi.exec(command, args, execOptions)),
 			env.HERDR_WORKSPACE_ID!,
+			env.HERDR_PANE_ID!,
+			env.HERDR_SOCKET_PATH ? (listener) => subscribeHerdrLayouts(env.HERDR_SOCKET_PATH!, listener) : undefined,
 			() => subagentsTabLabel(pi.getSessionName()),
 		)
 		: undefined;
@@ -1001,7 +1004,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		if (!herdrSurfaces) return;
 		try { await herdrSurfaces.refreshTabLabel(); }
 		catch (error) {
-			ctx.ui.notify(`Could not update the subagent tab title: ${error instanceof Error ? error.message : String(error)}`, "warning");
+			ctx.ui.notify(`Could not update the fallback subagent tab title: ${error instanceof Error ? error.message : String(error)}`, "warning");
 		}
 	});
 	pi.on("before_agent_start", () => {

@@ -48,9 +48,16 @@ needed. Messages sent to one child are serialized in invocation order.
 ## UI
 
 When the parent runs in Herdr, children open automatically as normal Pi TUIs in
-one dedicated, unfocused `Subagents · <parent session>` tab. Each child gets its
-own pane. Concurrent spawns serialize their layout changes and split the largest
-managed pane to keep the tab balanced. Parent title changes update the shared tab.
+an unfocused region of the parent's tab. A wide tab places the region on the
+right; a narrow tab places it below. The parent keeps roughly two-thirds of the
+space, and concurrent spawns split only the managed child region. While an
+inline child region exists, one scoped Herdr layout subscription follows
+parent-tab resizes, debounces updates, and reflows between right and below with
+hysteresis. Idle Pi sessions do not subscribe, and events for other tabs are
+ignored. If the parent
+tab already contains unrelated panes, children use a dedicated, unfocused
+`Subagents · <parent session>` tab instead of changing user-owned layout.
+
 The master-provided name remains the pane and tool identity, while the Pi session
 uses `Subagent · <name>` so child sessions are explicit in session lists.
 Automatic session and tab titles are disabled for children.
@@ -113,7 +120,8 @@ Pi process connected to the parent through structured IPC. In other environments
 it runs through Pi RPC.
 
 - Running children hibernate after completion, interruption, or provider limits.
-- A completed Herdr pane remains visible and is reused for follow-ups.
+- A completed Herdr pane remains visible in the parent tab and is reused for follow-ups.
+- Closing the last child removes the responsive region and its Herdr event subscription.
 - Completed conversations can receive a later follow-up.
 - Provider quota and rate-limit failures become `paused` and can be resumed.
 - Other terminal errors become `failed`.
