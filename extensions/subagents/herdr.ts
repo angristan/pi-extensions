@@ -10,9 +10,19 @@ import type { AgentClient, AgentClientOptions, RpcAgentEvent } from "./rpc.js";
 const HERDR_TIMEOUT_MS = 10_000;
 const BRIDGE_START_TIMEOUT_MS = 30_000;
 const BRIDGE_COMMAND_TIMEOUT_MS = 30_000;
-const STOP_TIMEOUT_MS = 3_000;
+const STOP_TIMEOUT_MS = 5_000;
 const MAX_RECORD_BYTES = 2 * 1024 * 1024;
-const TAB_LABEL = "Subagents";
+const MAX_HERDR_LABEL_CHARS = 80;
+
+export function subagentsTabLabel(parentSessionName: string | undefined): string {
+	const parent = parentSessionName?.replace(/\s+/g, " ").trim() || "Untitled Session";
+	const label = `Subagents · ${parent}`;
+	return label.length <= MAX_HERDR_LABEL_CHARS ? label : `${label.slice(0, MAX_HERDR_LABEL_CHARS - 1)}…`;
+}
+
+export function childSessionName(masterName: string): string {
+	return `Subagent · ${masterName}`;
+}
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
@@ -55,6 +65,11 @@ function parseResult(result: ExecResult, operation: string): any {
 	catch { throw new Error(`Herdr ${operation} returned invalid JSON`); }
 }
 
+function isInteractiveShell(process: any): boolean {
+	const name = String(process?.name ?? "").toLowerCase();
+	return ["bash", "dash", "fish", "nu", "sh", "zsh"].includes(name);
+}
+
 function isMissingPaneError(error: unknown): boolean {
 	const message = error instanceof Error ? error.message : String(error);
 	return /(?:unknown|missing|not found|does not exist).*pane|pane.*(?:unknown|missing|not found|does not exist)/i.test(message);
@@ -74,7 +89,10 @@ function launcherScript(options: HerdrAgentClientOptions, socketPath: string, to
 	return [
 		"#!/bin/sh",
 		...Object.entries(env).map(([key, value]) => `export ${key}=${shellQuote(value)}`),
-		`exec ${[shellQuote(options.command), ...options.args.map(shellQuote)].join(" ")}`,
+		[shellQuote(options.command), ...options.args.map(shellQuote)].join(" "),
+		// `pane run` owns the pane process. Return to an interactive shell after
+		// Pi exits so completed output remains visible and follow-ups can reuse it.
+		'exec "${SHELL:-/bin/sh}" -l',
 		"",
 	].join("\n");
 }
@@ -88,6 +106,7 @@ export class HerdrSurfaceManager {
 	constructor(
 		private readonly exec: HerdrExec,
 		private readonly workspaceId: string,
+		private readonly tabLabel: () => string,
 	) {}
 
 	private async execute(args: string[]): Promise<ExecResult> {
@@ -148,7 +167,7 @@ export class HerdrSurfaceManager {
 			if (this.panes.size === 0) {
 				const payload = await this.run([
 					"tab", "create", "--workspace", this.workspaceId,
-					"--cwd", cwd, "--label", TAB_LABEL, "--no-focus",
+					"--cwd", cwd, "--label", this.tabLabel(), "--no-focus",
 				]);
 				this.tabId = payload?.result?.tab?.tab_id;
 				paneId = payload?.result?.root_pane?.pane_id;
@@ -183,6 +202,17 @@ export class HerdrSurfaceManager {
 		await this.execute(["pane", "run", paneId, command]);
 	}
 
+	async refreshTabLabel(): Promise<void> {
+		await this.serialize(async () => {
+			if (!this.tabId) return;
+			try { await this.run(["tab", "rename", this.tabId, this.tabLabel()]); }
+			catch (error) {
+				if (!/(?:unknown|missing|not found|does not exist).*tab|tab.*(?:unknown|missing|not found|does not exist)/i.test(error instanceof Error ? error.message : String(error))) throw error;
+				this.tabId = undefined;
+			}
+		});
+	}
+
 	async interrupt(paneId: string): Promise<void> {
 		try { await this.run(["pane", "send-keys", paneId, "ctrl+c"]); }
 		catch { /* The pane may already be back at its shell. */ }
@@ -193,9 +223,12 @@ export class HerdrSurfaceManager {
 		do {
 			try {
 				const payload = await this.run(["pane", "process-info", "--pane", paneId]);
-				const processes = payload?.result?.process_info?.foreground_processes;
+				const processInfo = payload?.result?.process_info;
+				const processes = processInfo?.foreground_processes;
 				if (!Array.isArray(processes)) throw new Error("Herdr pane process-info omitted foreground processes");
-				if (processes.length === 0) return true;
+				const shellPid = processInfo?.shell_pid;
+				const foregroundWork = processes.filter((process: any) => process?.pid !== shellPid);
+				if (foregroundWork.length === 0 || (foregroundWork.length === 1 && isInteractiveShell(foregroundWork[0]))) return true;
 			} catch (error) {
 				if (isMissingPaneError(error)) return true;
 				throw error;

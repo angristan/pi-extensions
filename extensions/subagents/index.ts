@@ -31,7 +31,9 @@ import { registerChildBridge } from "./bridge.js";
 import {
 	HerdrAgentClient,
 	HerdrSurfaceManager,
+	childSessionName,
 	isHerdrParent,
+	subagentsTabLabel,
 	type HerdrAgentClientOptions,
 	type HerdrExec,
 } from "./herdr.js";
@@ -145,7 +147,7 @@ export function buildChildArgs(
 	visible = false,
 ): string[] {
 	const args = visible ? [] : ["--mode", "rpc"];
-	args.push("--session", fork.sessionFile, "--session-dir", fork.directory, "--name", name);
+	args.push("--session", fork.sessionFile, "--session-dir", fork.directory, "--name", childSessionName(name));
 	if (modelOverride) args.push("--model", modelOverride);
 	else if (ctx.model) args.push("--model", `${ctx.model.provider}/${ctx.model.id}`);
 	const thinking = pi.getThinkingLevel();
@@ -176,6 +178,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		? new HerdrSurfaceManager(
 			options.herdrExec ?? ((command, args, execOptions) => pi.exec(command, args, execOptions)),
 			env.HERDR_WORKSPACE_ID!,
+			() => subagentsTabLabel(pi.getSessionName()),
 		)
 		: undefined;
 	const createClient = options.createClient ?? ((clientOptions: AgentClientOptions) => clientOptions.herdr && herdrSurfaces
@@ -993,6 +996,13 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			ctx.ui.setEditorComponent(installedEditorFactory);
 		}
 		for (const event of mailbox.peek()) queueMicrotask(() => deliverMailboxEvent(event));
+	});
+	pi.on("session_info_changed", async (_event, ctx) => {
+		if (!herdrSurfaces) return;
+		try { await herdrSurfaces.refreshTabLabel(); }
+		catch (error) {
+			ctx.ui.notify(`Could not update the subagent tab title: ${error instanceof Error ? error.message : String(error)}`, "warning");
+		}
 	});
 	pi.on("before_agent_start", () => {
 		const delivery = takeAutomaticMailboxDelivery();

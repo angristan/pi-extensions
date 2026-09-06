@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HerdrAgentClient, HerdrSurfaceManager, type ExecResult } from "./herdr";
+import { childSessionName, HerdrAgentClient, HerdrSurfaceManager, subagentsTabLabel, type ExecResult } from "./herdr";
 
 const cleanup: Array<() => Promise<void>> = [];
 
@@ -16,9 +16,17 @@ function success(result: unknown): ExecResult {
 }
 
 describe("Herdr subagent surfaces", () => {
+	test("makes parent and child session roles explicit", () => {
+		expect(subagentsTabLabel("Crawler Review")).toBe("Subagents · Crawler Review");
+		expect(subagentsTabLabel(undefined)).toBe("Subagents · Untitled Session");
+		expect(subagentsTabLabel("x".repeat(100))).toHaveLength(80);
+		expect(childSessionName("reviewer")).toBe("Subagent · reviewer");
+	});
+
 	test("serializes concurrent children into one unfocused tab with master names", async () => {
 		const calls: string[][] = [];
 		let nextPane = 1;
+		let tabLabel = "Subagents · Parent Review";
 		const manager = new HerdrSurfaceManager(async (_command, args) => {
 			calls.push(args);
 			if (args[0] === "tab" && args[1] === "create") {
@@ -30,7 +38,7 @@ describe("Herdr subagent surfaces", () => {
 			}
 			if (args[0] === "pane" && args[1] === "split") return success({ pane: { pane_id: `pane-${nextPane++}` } });
 			return success({});
-		}, "workspace-1");
+		}, "workspace-1", () => tabLabel);
 		const reviewer = { agentId: "a", name: "reviewer" };
 		const tester = { agentId: "b", name: "tester" };
 
@@ -42,7 +50,7 @@ describe("Herdr subagent surfaces", () => {
 		expect([first, second]).toEqual(["pane-1", "pane-2"]);
 		expect(calls.filter((args) => args[0] === "tab" && args[1] === "create")).toHaveLength(1);
 		expect(calls.find((args) => args[0] === "tab" && args[1] === "create")).toEqual([
-			"tab", "create", "--workspace", "workspace-1", "--cwd", "/repo", "--label", "Subagents", "--no-focus",
+			"tab", "create", "--workspace", "workspace-1", "--cwd", "/repo", "--label", "Subagents · Parent Review", "--no-focus",
 		]);
 		expect(calls.find((args) => args[0] === "pane" && args[1] === "split")).toEqual([
 			"pane", "split", "pane-1", "--direction", "right", "--cwd", "/repo", "--no-focus",
@@ -51,13 +59,30 @@ describe("Herdr subagent surfaces", () => {
 			["pane", "rename", "pane-1", "reviewer"],
 			["pane", "rename", "pane-2", "tester"],
 		]);
+
+		tabLabel = "Subagents · Updated Parent";
+		await manager.refreshTabLabel();
+		expect(calls.at(-1)).toEqual(["tab", "rename", "tab-agents", "Subagents · Updated Parent"]);
+	});
+
+	test("treats the pane shell as idle after a child exits", async () => {
+		const manager = new HerdrSurfaceManager(async (_command, args) => {
+			expect(args).toEqual(["pane", "process-info", "--pane", "pane-1"]);
+			return success({
+				process_info: {
+					shell_pid: 42,
+					foreground_processes: [{ pid: 84, name: "zsh", argv: ["zsh", "-l"] }],
+				},
+			});
+		}, "workspace-1", () => "Subagents · Parent Review");
+		await expect(manager.waitUntilIdle("pane-1")).resolves.toBe(true);
 	});
 
 	test("accepts Herdr pane run success without JSON output", async () => {
 		const manager = new HerdrSurfaceManager(async (_command, args) => {
 			expect(args).toEqual(["pane", "run", "pane-1", "echo ok"]);
 			return { code: 0, stdout: "", stderr: "" };
-		}, "workspace-1");
+		}, "workspace-1", () => "Subagents · Parent Review");
 		await expect(manager.runCommand("pane-1", "echo ok")).resolves.toBeUndefined();
 	});
 
@@ -65,6 +90,7 @@ describe("Herdr subagent surfaces", () => {
 		const directory = await mkdtemp(join(tmpdir(), "pi-herdr-client-test-"));
 		cleanup.push(() => rm(directory, { recursive: true, force: true }));
 		let command = "";
+		let launcherContents = "";
 		let interrupted = false;
 		const surfaces = {
 			async ensurePane(state: any) { state.paneId = "pane-visible"; return state.paneId; },
@@ -73,6 +99,7 @@ describe("Herdr subagent surfaces", () => {
 				const launcherPath = value.match(/^'([^']+)'$/)?.[1];
 				if (!launcherPath) throw new Error("missing private launcher path");
 				const launcher = await readFile(launcherPath, "utf8");
+				launcherContents = launcher;
 				const socketPath = launcher.match(/PI_SUBAGENT_BRIDGE_SOCKET='([^']+)'/)?.[1];
 				const token = launcher.match(/PI_SUBAGENT_BRIDGE_TOKEN='([^']+)'/)?.[1];
 				const agentId = launcher.match(/PI_SUBAGENT_PARENT_ID='([^']+)'/)?.[1];
@@ -101,7 +128,7 @@ describe("Herdr subagent surfaces", () => {
 		};
 		const client = new HerdrAgentClient({
 			command: "pi",
-			args: ["--session", join(directory, "context.jsonl"), "--name", "reviewer", "--no-auto-title"],
+			args: ["--session", join(directory, "context.jsonl"), "--name", "reviewer"],
 			cwd: "/repo",
 			env: { PI_SUBAGENT_CHILD: "1", PI_SUBAGENT_PARENT_ID: "reviewer-1" },
 			herdr: { agentId: "reviewer-1", name: "reviewer" },
@@ -114,6 +141,8 @@ describe("Herdr subagent surfaces", () => {
 		await Bun.sleep(0);
 		expect(command).toMatch(/pi-subagent-bridge-.+\/run-child/);
 		expect(command).not.toContain("PI_SUBAGENT_BRIDGE_TOKEN");
+		expect(launcherContents).toContain("'--name' 'reviewer'");
+		expect(launcherContents).toContain('exec "${SHELL:-/bin/sh}" -l');
 		expect(events).toContainEqual(expect.objectContaining({ type: "message_end", message: expect.objectContaining({ role: "assistant" }) }));
 		await client.stop();
 		expect(interrupted).toBe(false);

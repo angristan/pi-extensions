@@ -252,7 +252,7 @@ describe("subagents", () => {
 		expect(visible).not.toContain("rpc");
 		expect(rpc.slice(0, 2)).toEqual(["--mode", "rpc"]);
 		for (const args of [visible, rpc]) {
-			expect(args.slice(args.indexOf("--name"), args.indexOf("--name") + 2)).toEqual(["--name", "reviewer"]);
+			expect(args.slice(args.indexOf("--name"), args.indexOf("--name") + 2)).toEqual(["--name", "Subagent · reviewer"]);
 			expect(args[args.indexOf("--tools") + 1]).toBe("read,report_to_parent");
 		}
 	});

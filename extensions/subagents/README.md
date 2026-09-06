@@ -48,10 +48,12 @@ needed. Messages sent to one child are serialized in invocation order.
 ## UI
 
 When the parent runs in Herdr, children open automatically as normal Pi TUIs in
-one dedicated, unfocused `Subagents` tab. Each child gets its own pane. Concurrent
-spawns serialize their layout changes and split the largest managed pane to keep
-the tab balanced. The master-provided agent name becomes both the Pi session name
-and pane label; automatic session and tab titles are disabled for children.
+one dedicated, unfocused `Subagents · <parent session>` tab. Each child gets its
+own pane. Concurrent spawns serialize their layout changes and split the largest
+managed pane to keep the tab balanced. Parent title changes update the shared tab.
+The master-provided name remains the pane and tool identity, while the Pi session
+uses `Subagent · <name>` so child sessions are explicit in session lists.
+Automatic session and tab titles are disabled for children.
 
 Herdr is presentation only. Prompts, steering, lifecycle events, and final results
 use an authenticated local socket, so the parent never scrapes or rereads terminal
