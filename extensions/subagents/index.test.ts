@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { initTheme, SessionManager } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { compactContext, createContextFork, forkableMessages, type CompactContext, type ContextMode } from "./context";
-import registerSubagents, { boundedText } from "./index";
+import registerSubagents, { boundedText, buildChildArgs } from "./index";
 import { isProviderLimitError } from "./lifecycle";
 import { RpcProcessClient, type AgentClient, type AgentClientFactory, type AgentClientOptions, type RpcAgentEvent } from "./rpc";
 
@@ -242,6 +242,21 @@ function rendered(component: any, width = 100): string[] {
 }
 
 describe("subagents", () => {
+	test("uses the master name for visible and RPC child sessions", () => {
+		const pi = { getThinkingLevel: () => "medium", getActiveTools: () => ["read", "agents"] };
+		const ctx = { model: { provider: "test-provider", id: "test-model" } };
+		const fork = { sessionFile: "/state/context.jsonl", directory: "/state" } as any;
+		const visible = buildChildArgs(pi as any, ctx, fork, "reviewer", undefined, true);
+		const rpc = buildChildArgs(pi as any, ctx, fork, "reviewer", undefined, false);
+
+		expect(visible).not.toContain("rpc");
+		expect(rpc.slice(0, 2)).toEqual(["--mode", "rpc"]);
+		for (const args of [visible, rpc]) {
+			expect(args.slice(args.indexOf("--name"), args.indexOf("--name") + 2)).toEqual(["--name", "reviewer"]);
+			expect(args[args.indexOf("--tools") + 1]).toBe("read,report_to_parent");
+		}
+	});
+
 	test("compacts inherited context through Pi's model registry", async () => {
 		const model = { provider: "test-provider", id: "test-model" };
 		const calls: any[][] = [];
@@ -1836,6 +1851,41 @@ setInterval(() => {}, 1000);
 		expect(error?.message).toContain("Parent session ended");
 		expect(harness.clients).toHaveLength(0);
 		expect(harness.overlay.unregistered).toBe(true);
+	});
+
+	test("waits for in-flight client startup before shutdown cleanup", async () => {
+		let releaseStart!: () => void;
+		const startGate = new Promise<void>((resolve) => { releaseStart = resolve; });
+		let client: FakeClient | undefined;
+		const harness = createHarness({
+			clientFactory: (clientOptions) => {
+				client = new class extends FakeClient {
+					async start() {
+						await startGate;
+						await super.start();
+					}
+				}(clientOptions);
+				return client;
+			},
+		});
+		const spawning = spawnAgent(harness, "Start while parent shuts down");
+		while (!client) await Bun.sleep(0);
+		const observed = spawning.then(
+			() => undefined,
+			(error) => error instanceof Error ? error : new Error(String(error)),
+		);
+		let shutdownFinished = false;
+		const shutdown = harness.handlers.get("session_shutdown")?.({ reason: "reload" }, harness.ctx)
+			.then(() => { shutdownFinished = true; });
+		await Bun.sleep(0);
+		expect(shutdownFinished).toBe(false);
+		releaseStart();
+		await shutdown;
+		const error = await observed;
+		expect(error?.message).toContain("Parent session ended");
+		expect(client?.stopped).toBe(true);
+		expect(harness.overlay.unregistered).toBe(true);
+		harnesses.splice(harnesses.indexOf(harness), 1);
 	});
 
 	test("retries close after hibernation fails and still clears live UI", async () => {

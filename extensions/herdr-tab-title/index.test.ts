@@ -69,3 +69,14 @@ test("does nothing outside a Herdr-managed TUI", async () => {
 	await headless.handlers.get("session_info_changed")?.({ name: "   " }, { mode: "tui" });
 	expect(headless.requests).toHaveLength(0);
 });
+
+test("does not let visible children rename their shared tab", () => {
+	const child = createHarness({
+		HERDR_ENV: "1",
+		HERDR_SOCKET_PATH: "/tmp/herdr.sock",
+		HERDR_TAB_ID: "wA:t2",
+		PI_SUBAGENT_CHILD: "1",
+	});
+	expect(child.handlers.size).toBe(0);
+	expect(child.requests).toHaveLength(0);
+});

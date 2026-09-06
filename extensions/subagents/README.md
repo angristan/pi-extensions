@@ -47,8 +47,18 @@ needed. Messages sent to one child are serialized in invocation order.
 
 ## UI
 
-Running children appear in the shared top-right overlay with their task, latest
-activity, and token usage.
+When the parent runs in Herdr, children open automatically as normal Pi TUIs in
+one dedicated, unfocused `Subagents` tab. Each child gets its own pane. Concurrent
+spawns serialize their layout changes and split the largest managed pane to keep
+the tab balanced. The master-provided agent name becomes both the Pi session name
+and pane label; automatic session and tab titles are disabled for children.
+
+Herdr is presentation only. Prompts, steering, lifecycle events, and final results
+use an authenticated local socket, so the parent never scrapes or rereads terminal
+output. Outside Herdr, the same tool API uses Pi's process RPC transport.
+
+Running children also appear in the shared top-right overlay with their task,
+latest activity, and token usage.
 
 Use `/agents` to inspect mailbox metrics or open any retained child transcript.
 The read-only full-screen viewer follows live messages, renders agent responses as
@@ -96,17 +106,20 @@ token and cost totals. Parent and child context windows remain independent.
 
 ## Lifecycle
 
-Each child runs as `pi --mode rpc` with its own session file.
+Each child has its own persistent session file. In Herdr, it runs as an interactive
+Pi process connected to the parent through structured IPC. In other environments,
+it runs through Pi RPC.
 
 - Running children hibernate after completion, interruption, or provider limits.
+- A completed Herdr pane remains visible and is reused for follow-ups.
 - Completed conversations can receive a later follow-up.
 - Provider quota and rate-limit failures become `paused` and can be resumed.
 - Other terminal errors become `failed`.
-- `/reload`, quit, and session replacement checkpoint open children and stop their processes.
-- Hard-exit cleanup uses one process-global reaper across reloads and retains callbacks only while child PIDs are live.
+- `/reload`, quit, and session replacement checkpoint open children, stop their processes, and close extension-owned panes.
+- Hard-exit cleanup for process-RPC children uses one process-global reaper across reloads and retains callbacks only while child PIDs are live.
 - Resuming the same parent session restores open children in a hibernated state.
 - `close` deletes the managed child session and prevents later restoration.
-- Child dialogs are cancelled because the RPC process has no direct interactive UI.
+- Child dialogs are cancelled only when the process-RPC transport has no direct interactive UI.
 
 ## Configuration
 
@@ -130,7 +143,7 @@ default values.
 - Interim reports: 4,000 characters
 - Final child result: 24 KiB
 - Combined tool output: below Pi's 50 KiB limit
-- RPC record: 2 MiB
+- Structured transport record: 2 MiB
 - Retained stderr: 16 KiB tail
 - Queue-only messages per idle child: 4
 - Open child conversations: 6
@@ -140,7 +153,8 @@ must use separate file scopes.
 
 ## Dependencies
 
-- **Runtime:** Pi extension, session, TUI, and RPC APIs
+- **Runtime:** Pi extension, session, TUI, RPC, and local socket APIs
+- **Optional executable:** `herdr` when Pi runs inside Herdr
 - **Depends on extensions:** [`better-native-pi`](../better-native-pi/), [`overlay-stack`](../overlay-stack/), [`transcript`](../transcript/).
 - **npm packages:** None
 - **External services:** The configured model provider only

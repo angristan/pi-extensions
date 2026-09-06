@@ -395,6 +395,17 @@ describe("auto-session-title model requests", () => {
 		expect(notifications.at(-1)).toContain("last skip: disabled by --no-auto-title");
 	});
 
+	test("does not register automatic naming inside child agents", () => {
+		let registrations = 0;
+		const pi = {
+			registerFlag() { registrations += 1; },
+			registerCommand() { registrations += 1; },
+			on() { registrations += 1; },
+		};
+		autoSessionTitle(pi as any, { env: { PI_SUBAGENT_CHILD: "1" } });
+		expect(registrations).toBe(0);
+	});
+
 	test("recognizes only the Apple system model backend", () => {
 		expect(isAppleTitleModel("apple-foundation-models", "system")).toBe(true);
 		expect(isAppleTitleModel("apple-foundation-models", "other")).toBe(false);

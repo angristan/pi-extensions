@@ -177,9 +177,14 @@ export interface AgentLifecycleOptions {
 	updateOverlay(): void;
 	refreshTranscript(): void;
 	trimClosed(): void;
+	cleanupClientOptions?(clientOptions: AgentClientOptions): Promise<void>;
 }
 
 export function createAgentLifecycle(options: AgentLifecycleOptions) {
+	const disposeAgentSurface = async (agent: ManagedAgent): Promise<void> => {
+		await options.cleanupClientOptions?.(agent.clientOptions);
+	};
+
 	const hibernateAgent = async (agent: ManagedAgent): Promise<void> => {
 		if (agent.hibernatePromise) return agent.hibernatePromise;
 		const client = agent.client;
@@ -342,6 +347,7 @@ export function createAgentLifecycle(options: AgentLifecycleOptions) {
 				const client = agent.client;
 				await client?.stop();
 				if (agent.client === client) agent.client = undefined;
+				await disposeAgentSurface(agent);
 				await agent.fork.cleanup();
 				agent.cleanupComplete = true;
 			} finally {
@@ -415,5 +421,5 @@ export function createAgentLifecycle(options: AgentLifecycleOptions) {
 		await hibernateAgent(agent);
 	};
 
-	return { attachClient, closeAgent, ensureClient, finishRun, hibernateAgent, interruptAgent, suspendAgent };
+	return { attachClient, closeAgent, disposeAgentSurface, ensureClient, finishRun, hibernateAgent, interruptAgent, suspendAgent };
 }

@@ -214,6 +214,7 @@ export interface TitleRequestDependencies {
 	completeRequest?: any;
 	requestCompletion?: typeof requestTitleCompletion;
 	requestAppleCompletion?: typeof requestAppleTitleCompletion;
+	env?: NodeJS.ProcessEnv;
 }
 
 export async function requestTitleWithFallback(
@@ -300,6 +301,10 @@ export function sessionTitleIsManual(currentTitle: string | undefined, latestGen
 }
 
 export default function (pi: ExtensionAPI, requestDependencies: TitleRequestDependencies = {}) {
+	// The parent agents extension assigns child session names. Do not spend a
+	// model request or replace that stable identity with a generated title.
+	if ((requestDependencies.env ?? process.env).PI_SUBAGENT_CHILD === "1") return;
+
 	pi.registerFlag(DISABLE_AUTO_TITLE_FLAG, {
 		description: "Disable automatic session title generation for this run",
 		type: "boolean",
