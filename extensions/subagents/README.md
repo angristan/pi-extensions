@@ -47,26 +47,10 @@ needed. Messages sent to one child are serialized in invocation order.
 
 ## UI
 
-When the parent runs in Herdr, children open automatically as normal Pi TUIs in
-an unfocused region of the parent's tab. A wide tab places the region on the
-right; a narrow tab places it below. The parent keeps roughly two-thirds of the
-space, and concurrent spawns split only the managed child region. While an
-inline child region exists, one native listener follows the parent PTY's resize
-events. Each debounced resize reads the Herdr geometry once and reflows between
-right and below with hysteresis. Idle Pi sessions do not install a listener or
-poll. If the parent
-tab already contains unrelated panes, children use a dedicated, unfocused
-`Subagents · <parent session>` tab instead of changing user-owned layout.
+Children run as background Pi RPC processes. Their sessions use
+`Subagent · <name>` so delegated conversations are explicit in session lists.
 
-The master-provided name remains the pane and tool identity, while the Pi session
-uses `Subagent · <name>` so child sessions are explicit in session lists.
-Automatic session and tab titles are disabled for children.
-
-Herdr is presentation only. Prompts, steering, lifecycle events, and final results
-use an authenticated local socket, so the parent never scrapes or rereads terminal
-output. Outside Herdr, the same tool API uses Pi's process RPC transport.
-
-Running children also appear in the shared top-right overlay with their task,
+Running children appear in the shared top-right overlay with their task,
 latest activity, and token usage.
 
 Use `/agents` to inspect mailbox metrics or open any retained child transcript.
@@ -115,22 +99,19 @@ token and cost totals. Parent and child context windows remain independent.
 
 ## Lifecycle
 
-Each child has its own persistent session file. In Herdr, it runs as an interactive
-Pi process connected to the parent through structured IPC. In other environments,
-it runs through Pi RPC. Child processes receive their parent session ID so compatible
-telemetry collectors can classify and link delegated sessions without reading content.
+Each child has its own persistent session file and runs through Pi RPC. Child
+processes receive their parent session ID so compatible telemetry collectors can
+classify and link delegated sessions without reading content.
 
 - Running children hibernate after completion, interruption, or provider limits.
-- A completed Herdr pane remains visible in the parent tab and is reused for follow-ups.
-- Closing the last child removes the responsive region and its Herdr event subscription.
 - Completed conversations can receive a later follow-up.
 - Provider quota and rate-limit failures become `paused` and can be resumed.
 - Other terminal errors become `failed`.
-- `/reload`, quit, and session replacement checkpoint open children, stop their processes, and close extension-owned panes.
-- Hard-exit cleanup for process-RPC children uses one process-global reaper across reloads and retains callbacks only while child PIDs are live.
+- `/reload`, quit, and session replacement checkpoint open children and stop their processes.
+- Hard-exit cleanup uses one process-global reaper across reloads and retains callbacks only while child PIDs are live.
 - Resuming the same parent session restores open children in a hibernated state.
 - `close` deletes the managed child session and prevents later restoration.
-- Child dialogs are cancelled only when the process-RPC transport has no direct interactive UI.
+- Child dialogs are cancelled because the RPC transport has no direct interactive UI.
 
 ## Configuration
 
@@ -164,8 +145,7 @@ must use separate file scopes.
 
 ## Dependencies
 
-- **Runtime:** Pi extension, session, TUI, RPC, and local socket APIs
-- **Optional executable:** `herdr` when Pi runs inside Herdr
+- **Runtime:** Pi extension, session, TUI, and RPC APIs
 - **Depends on extensions:** [`better-native-pi`](../better-native-pi/), [`overlay-stack`](../overlay-stack/), [`transcript`](../transcript/).
 - **npm packages:** None
 - **External services:** The configured model provider only

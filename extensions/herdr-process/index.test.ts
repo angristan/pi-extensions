@@ -77,6 +77,13 @@ describe("herdr-process", () => {
 		expect(tui.tools.size).toBe(0);
 		await tui.start();
 		expect([...tui.tools.keys()]).toEqual(["herdr_process"]);
+		const tool = tui.tools.get("herdr_process");
+		expect(tool.promptSnippet).toBeUndefined();
+		const guidelines = tool.promptGuidelines as string[];
+		expect(guidelines).toEqual([
+			"Keep Herdr processes in the foreground. Use herdr_process action=interrupt to stop one; do not close its pane unless the user asks.",
+		]);
+		expect(guidelines.join(" ")).not.toContain("instead of bash");
 	});
 
 	test("starts a labeled command in an automatically placed sibling pane", async () => {

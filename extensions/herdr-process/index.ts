@@ -416,9 +416,7 @@ export default function herdrProcessExtension(pi: ExtensionAPI, dependencies: Ru
 			name: TOOL_NAME,
 			label: "Herdr Process",
 			description: "Start and control long-running foreground commands in visible sibling Herdr panes. Processes remain attached to Herdr instead of blocking Pi. Control actions accept only pane IDs created by this Pi session. Read output is capped at 2,000 lines or 50KB.",
-			promptSnippet: "Run visible long-lived commands in sibling Herdr panes",
 			promptGuidelines: [
-				"Use herdr_process action=start instead of bash for long-running processes the user should see live, such as dev servers, watch tasks, and log tails.",
 				"Keep Herdr processes in the foreground. Use herdr_process action=interrupt to stop one; do not close its pane unless the user asks.",
 			],
 			parameters,

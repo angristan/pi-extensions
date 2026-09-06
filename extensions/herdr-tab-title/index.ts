@@ -60,9 +60,7 @@ export default function herdrTabTitle(pi: ExtensionAPI, deps: RuntimeDependencie
 	const env = deps.env ?? process.env;
 	const socketPath = env.HERDR_SOCKET_PATH;
 	const tabId = env.HERDR_TAB_ID;
-	// Visible subagents share one dedicated tab. Their parent owns that tab label;
-	// individual child session names belong to pane labels instead.
-	if (env.PI_SUBAGENT_CHILD === "1" || env.HERDR_ENV !== "1" || !socketPath || !tabId) return;
+	if (env.HERDR_ENV !== "1" || !socketPath || !tabId) return;
 
 	const socketEndpoint = process.platform === "win32" ? `\\\\.\\pipe\\${socketPath}` : socketPath;
 	const sendRequest = deps.sendRequest ?? createSocketSender(socketEndpoint);

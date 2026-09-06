@@ -34,11 +34,6 @@ export interface AgentClientOptions {
 	args: string[];
 	cwd: string;
 	env?: Record<string, string>;
-	herdr?: {
-		agentId: string;
-		name: string;
-		paneId?: string;
-	};
 }
 
 export type AgentClientFactory = (options: AgentClientOptions) => AgentClient;

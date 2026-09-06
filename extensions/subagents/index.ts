@@ -27,17 +27,6 @@ import {
 	type AgentClientOptions,
 } from "./rpc.js";
 import { loadSubagentsConfig, type SubagentsRuntimeConfig } from "./config.js";
-import { registerChildBridge } from "./bridge.js";
-import {
-	HerdrAgentClient,
-	HerdrSurfaceManager,
-	childSessionName,
-	isHerdrParent,
-	subagentsTabLabel,
-	subscribeTerminalResize,
-	type HerdrAgentClientOptions,
-	type HerdrExec,
-} from "./herdr.js";
 import {
 	agentNameKey,
 	boundedInput,
@@ -113,8 +102,6 @@ export interface SubagentsOptions {
 	maxAgents?: number;
 	config?: SubagentsRuntimeConfig;
 	storageRoot?: string;
-	env?: NodeJS.ProcessEnv;
-	herdrExec?: HerdrExec;
 }
 
 
@@ -145,10 +132,13 @@ export function buildChildArgs(
 	fork: ContextFork,
 	name: string,
 	modelOverride?: string,
-	visible = false,
 ): string[] {
-	const args = visible ? [] : ["--mode", "rpc"];
-	args.push("--session", fork.sessionFile, "--session-dir", fork.directory, "--name", childSessionName(name));
+	const args = [
+		"--mode", "rpc",
+		"--session", fork.sessionFile,
+		"--session-dir", fork.directory,
+		"--name", `Subagent · ${name}`,
+	];
 	if (modelOverride) args.push("--model", modelOverride);
 	else if (ctx.model) args.push("--model", `${ctx.model.provider}/${ctx.model.id}`);
 	const thinking = pi.getThinkingLevel();
@@ -170,23 +160,10 @@ function childTask(name: string, task: string, contextMode: ContextMode): string
 export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOptions = {}) {
 	if (isSubagentChild()) {
 		registerChildReporter(pi);
-		registerChildBridge(pi);
 		return;
 	}
-	const env = options.env ?? process.env;
 	const agents = new Map<string, ManagedAgent>();
-	const herdrSurfaces = !options.createClient && isHerdrParent(env)
-		? new HerdrSurfaceManager(
-			options.herdrExec ?? ((command, args, execOptions) => pi.exec(command, args, execOptions)),
-			env.HERDR_WORKSPACE_ID!,
-			env.HERDR_PANE_ID!,
-			(listener) => subscribeTerminalResize(listener),
-			() => subagentsTabLabel(pi.getSessionName()),
-		)
-		: undefined;
-	const createClient = options.createClient ?? ((clientOptions: AgentClientOptions) => clientOptions.herdr && herdrSurfaces
-		? new HerdrAgentClient(clientOptions as HerdrAgentClientOptions, herdrSurfaces)
-		: new RpcProcessClient(clientOptions));
+	const createClient = options.createClient ?? ((clientOptions: AgentClientOptions) => new RpcProcessClient(clientOptions));
 	const forkContext = options.createContextFork ?? createContextFork;
 	const summarizeContext = options.compactContext ?? compactContext;
 	const registerCard = options.registerOverlayCard ?? registerOverlayCard;
@@ -393,14 +370,12 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		cwd: string,
 		modelOverride?: string,
 	): AgentClientOptions => {
-		const visible = Boolean(herdrSurfaces && ctx.mode === "tui");
-		const invocation = getPiInvocation(buildChildArgs(pi, ctx, fork, name, modelOverride, visible));
+		const invocation = getPiInvocation(buildChildArgs(pi, ctx, fork, name, modelOverride));
 		return {
 			command: invocation.command,
 			args: invocation.args,
 			cwd,
 			env: childEnvironment(id, ctx.sessionManager.getSessionId()),
-			...(visible ? { herdr: { agentId: id, name } } : {}),
 		};
 	};
 	const compactedContextFor = (ctx: any, signal?: AbortSignal): Promise<string> => {
@@ -522,7 +497,6 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	const {
 		attachClient,
 		closeAgent,
-		disposeAgentSurface,
 		ensureClient,
 		finishRun,
 		hibernateAgent,
@@ -547,9 +521,6 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		updateOverlay,
 		refreshTranscript() { activeTranscriptRefresh?.(); },
 		trimClosed,
-		async cleanupClientOptions(clientOptions) {
-			if (clientOptions.herdr) await herdrSurfaces?.closePane(clientOptions.herdr);
-		},
 	});
 	const restorePersistedAgents = (ctx: any): void => {
 		if (agents.size > 0) return;
@@ -1000,13 +971,6 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		}
 		for (const event of mailbox.peek()) queueMicrotask(() => deliverMailboxEvent(event));
 	});
-	pi.on("session_info_changed", async (_event, ctx) => {
-		if (!herdrSurfaces) return;
-		try { await herdrSurfaces.refreshTabLabel(); }
-		catch (error) {
-			ctx.ui.notify(`Could not update the fallback subagent tab title: ${error instanceof Error ? error.message : String(error)}`, "warning");
-		}
-	});
 	pi.on("before_agent_start", () => {
 		const delivery = takeAutomaticMailboxDelivery();
 		if (!delivery) return;
@@ -1034,30 +998,13 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		const settled = await Promise.allSettled(current.map(async (agent) => {
 			if (agent.status === "closed" || agent.cleanupComplete) return;
 			if (agent.status === "starting") {
-				try {
-					await closeAgent(agent, true);
-				} catch (closeError) {
-					// A visible child is still contained by its extension-owned pane even
-					// when graceful process shutdown fails. Close that pane before removing
-					// its never-checkpointed startup context.
-					if (!agent.clientOptions.herdr) throw closeError;
-					try {
-						await disposeAgentSurface(agent);
-						await agent.fork.cleanup();
-						agent.client = undefined;
-						agent.cleanupComplete = true;
-					} catch (recoveryError) {
-						throw new AggregateError([closeError, recoveryError], `Failed to close starting agent ${agent.name}`);
-					}
-				}
+				await closeAgent(agent, true);
 				return;
 			}
 			const failures: unknown[] = [];
 			try { await suspendAgent(agent, `parent session ${event.reason}`); }
 			catch (error) { failures.push(error); }
 			try { persistAgentCheckpoint(agent); }
-			catch (error) { failures.push(error); }
-			try { await disposeAgentSurface(agent); }
 			catch (error) { failures.push(error); }
 			if (failures.length > 0) throw new AggregateError(failures, `Failed to checkpoint ${agent.name}`);
 		}));

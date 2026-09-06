@@ -66,7 +66,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | [`plan-progress`](extensions/plan-progress/) | Track flat or nested plans with derived group progress in a collapsible overlay |
 | [`questions`](extensions/questions/) | Ask structured questions, preserve answers, and report pending input as blocked to Herdr |
 | [`side-chat`](extensions/side-chat/) | An ephemeral, read-only side question about the current conversation, without changing the main transcript |
-| [`subagents`](extensions/subagents/) | Spawn isolated child agents with structured results and automatic visible Herdr panes |
+| [`subagents`](extensions/subagents/) | Spawn isolated child agents with persistent sessions and structured results |
 
 ### Tools & integrations
 
