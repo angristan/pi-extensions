@@ -179,7 +179,7 @@ export function restoreContextManagementState(entries: readonly any[]): Restored
 // Tool rendering
 // ============================================================================
 
-const TOOL_BRANCH = "  ";
+const TOOL_BRANCH = "  └ ";
 const TOOL_INDENT = "    ";
 
 type ContextToolKind = "notes" | "history" | "remaining" | "rollover";
