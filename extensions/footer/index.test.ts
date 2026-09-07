@@ -184,6 +184,55 @@ test("renders model and extension badges responsively", () => {
 	handlers.get("session_shutdown")?.({}, ctx);
 });
 
+test("refreshes stale context usage immediately after a reset compaction", () => {
+	const handlers = new Map<string, (event: any, ctx: any) => void>();
+	let footerFactory: any;
+	let renders = 0;
+	let usage: any = { tokens: 90_000, contextWindow: 100_000, percent: 90 };
+	footer({
+		on: (name: string, handler: (event: any, ctx: any) => void) => { handlers.set(name, handler); },
+		events: { on: () => {} },
+		getThinkingLevel: () => "high",
+		exec: async () => ({ code: 1, stdout: "", stderr: "" }),
+	} as any);
+	const ctx = {
+		mode: "tui",
+		cwd: "/tmp/project",
+		model: { provider: "test", id: "model", name: "Test Model", reasoning: true, contextWindow: 100_000 },
+		getContextUsage: () => usage,
+		modelRegistry: { find: () => undefined },
+		sessionManager: {
+			getSessionName: () => "Current session",
+			getSessionId: () => "session-id",
+			getEntries: () => [],
+		},
+		ui: {
+			setTitle: () => {},
+			setFooter: (factory: any) => { footerFactory = factory; },
+		},
+	};
+
+	handlers.get("session_start")?.({}, ctx);
+	const component = footerFactory(
+		{ requestRender: () => { renders += 1; } },
+		{ fg: (_token: string, text: string) => text },
+		{
+			onBranchChange: () => () => {},
+			getGitBranch: () => undefined,
+			getExtensionStatuses: () => new Map(),
+		},
+	);
+	const plain = () => component.render(160)[0].replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
+	expect(plain()).toContain("ctx 89%/100K");
+
+	usage = { tokens: null, contextWindow: 100_000, percent: null };
+	handlers.get("session_compact")?.({ compactionEntry: { details: { contextManagement: true } } }, ctx);
+	expect(renders).toBe(1);
+	expect(plain()).toContain("ctx 0%/100K");
+
+	handlers.get("session_shutdown")?.({}, ctx);
+});
+
 test("reapplies the idle session title after startup settles", () => {
 	const handlers = new Map<string, (event: any, ctx: any) => void>();
 	const titles: string[] = [];

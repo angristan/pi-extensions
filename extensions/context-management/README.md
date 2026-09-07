@@ -31,13 +31,20 @@ available:
 | `get_context_remaining` | Report Pi's current context usage estimate |
 | `new_context` | Start a fresh model context without summarizing the earlier transcript |
 
-At 75% usage, the extension sends the model one hidden reminder to update durable
-notes. At 90%, it automatically starts a new context window. Each rollover adds
-a visible, durable reset divider to the transcript while keeping that divider
-out of model context. While the mode is enabled, Pi's threshold-triggered
-compaction is cancelled and replaced by this summary-free rollover, so no
-compaction entry or generated summary is created. Manual `/compact` and overflow
-recovery retain Pi's native summarization behavior.
+The normal working budget is 90% of the model context window. The extension sends
+one hidden reminder when 6,144 tokens remain in that budget. If an active tool
+chain exhausts the budget, it reserves up to 16,384 additional tokens only for a
+durable `context_notes` checkpoint and `new_context`; unrelated tool calls are
+blocked. A completed response is never interrupted: rollover waits for the next
+idle user input. Only exhaustion of the emergency buffer aborts active work.
+
+Each rollover adds a visible reset divider and a real Pi compaction boundary with
+a fixed handoff message. No LLM-generated conversation summary is created. This
+also resets the footer's context percentage immediately; the first response in
+the new window replaces that provisional zero with provider-reported usage.
+Native threshold compaction is cancelled while the emergency checkpoint runs.
+Manual `/compact` and overflow recovery retain Pi's native behavior when no
+rollover is pending.
 
 A rollover preserves:
 

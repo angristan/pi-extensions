@@ -2,9 +2,11 @@ import { expect, test } from "bun:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { BOLD, CYAN, GREEN, RESET } from "../better-native-pi/render";
 import contextManagement, {
+	BASE_BUDGET_PERCENT,
+	CONTEXT_ROLLOVER_ENTRY,
+	FALLBACK_BUFFER_TOKENS,
 	filterContextAfterRollover,
-	REMINDER_PERCENT,
-	ROLLOVER_PERCENT,
+	REMINDER_REMAINING_TOKENS,
 	restoreContextManagementState,
 } from "./index";
 
@@ -20,8 +22,10 @@ function makeHarness(initialEntries: any[] = []) {
 	const statuses: Array<[string, string | undefined]> = [];
 	const activeTools = new Set<string>();
 	let nextId = entries.length + 1;
-	let usage: any = { tokens: 10, contextWindow: 100, percent: 10 };
+	let usage: any = { tokens: 10_000, contextWindow: 100_000, percent: 10 };
 	let idle = false;
+	let abortCalls = 0;
+	let compactCalls = 0;
 
 	const sessionManager = {
 		getBranch: () => entries,
@@ -31,6 +35,8 @@ function makeHarness(initialEntries: any[] = []) {
 		sessionManager,
 		getContextUsage: () => usage,
 		isIdle: () => idle,
+		abort: () => { abortCalls += 1; },
+		compact: () => { compactCalls += 1; },
 		ui: {
 			notify: (message: string, level: string) => notices.push([message, level]),
 			setStatus: (key: string, value: string | undefined) => statuses.push([key, value]),
@@ -76,6 +82,8 @@ function makeHarness(initialEntries: any[] = []) {
 		notices,
 		statuses,
 		tools,
+		get abortCalls() { return abortCalls; },
+		get compactCalls() { return compactCalls; },
 		setIdle(value: boolean) { idle = value; },
 		setUsage(value: any) { usage = value; },
 		async emit(name: string, event: any = {}) {
@@ -160,7 +168,7 @@ test("new_context drops the tool call and result while retaining the durable han
 	const harness = makeHarness();
 	await enable(harness);
 	await harness.tools.get("context_notes").execute("n1", { action: "write", key: "checkpoint", content: "Tests are passing" });
-	const result = await harness.tools.get("new_context").execute("r1", { reason: "budget" });
+	const result = await harness.tools.get("new_context").execute("r1", { reason: "budget" }, undefined, undefined, harness.ctx);
 	const marker = harness.entries.findLast((entry) => entry.customType === "context-management-rollover");
 	const handoff = harness.messages.at(-1);
 	const oldMessages = [
@@ -177,37 +185,87 @@ test("new_context drops the tool call and result while retaining the durable han
 	expect(filtered[0].customType).toBe("context-management-handoff");
 	expect(filtered[0].content).toContain("checkpoint");
 	expect(filtered[1].content).toBe("continued work");
+
+	harness.setIdle(true);
+	await harness.emit("agent_settled", {});
+	expect(harness.compactCalls).toBe(1);
 });
 
-test("usage thresholds issue one reminder and then create a rollover", async () => {
+test("issues one reminder then reserves the emergency buffer for a durable note", async () => {
 	const harness = makeHarness();
 	await enable(harness);
+	const toolTurn = { message: { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", name: "read" }] } };
+	const baseLimit = 100_000 * BASE_BUDGET_PERCENT / 100;
 
-	harness.setUsage({ tokens: REMINDER_PERCENT, contextWindow: 100, percent: REMINDER_PERCENT });
-	await harness.emit("turn_end", {});
-	await harness.emit("turn_end", {});
+	harness.setUsage({
+		tokens: baseLimit - REMINDER_REMAINING_TOKENS,
+		contextWindow: 100_000,
+		percent: (baseLimit - REMINDER_REMAINING_TOKENS) / 1_000,
+	});
+	await harness.emit("turn_end", toolTurn);
+	await harness.emit("turn_end", toolTurn);
 	expect(harness.entries.filter((entry) => entry.customType === "context-management-reminder")).toHaveLength(1);
 
-	harness.setUsage({ tokens: ROLLOVER_PERCENT, contextWindow: 100, percent: ROLLOVER_PERCENT });
-	await harness.emit("turn_end", {});
-	const rollover = harness.entries.find((entry) => entry.customType === "context-management-rollover");
-	expect(harness.entries.filter((entry) => entry.customType === "context-management-rollover")).toHaveLength(1);
-	expect(rollover.data).toMatchObject({ reason: "automatic", percent: ROLLOVER_PERCENT });
-	expect(harness.entries.at(-1)?.customType).toBe("context-management-handoff");
+	harness.setUsage({ tokens: baseLimit, contextWindow: 100_000, percent: BASE_BUDGET_PERCENT });
+	await harness.emit("turn_end", toolTurn);
+	expect(harness.entries.filter((entry) => entry.customType === "context-management-fallback")).toHaveLength(1);
+	expect(harness.entries.some((entry) => entry.customType === CONTEXT_ROLLOVER_ENTRY)).toBe(false);
+	expect(harness.messageOptions.at(-1)).toEqual({ triggerTurn: true, deliverAs: "steer" });
 
-	const renderer = harness.entryRenderers.get("context-management-rollover");
+	expect(await harness.emit("tool_call", { toolName: "bash", input: {} })).toMatchObject({ block: true, terminate: true });
+	expect(await harness.emit("tool_call", { toolName: "new_context", input: {} })).toMatchObject({ block: true, terminate: true });
+	await harness.tools.get("context_notes").execute("checkpoint", {
+		action: "write",
+		key: "task",
+		content: "Preserve current progress",
+	});
+	expect(await harness.emit("tool_call", { toolName: "new_context", input: {} })).toBeUndefined();
+
+	const restored = restoreContextManagementState(harness.entries);
+	expect(restored.fallbackPrompted).toBe(true);
+	expect(restored.fallbackNoteSaved).toBe(true);
+});
+
+test("does not reset after a final response and resets before the next idle input", async () => {
+	const harness = makeHarness();
+	await enable(harness);
+	harness.setUsage({ tokens: 90_500, contextWindow: 100_000, percent: 90.5 });
+
+	await harness.emit("turn_end", { message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "done" }] } });
+	expect(harness.entries.some((entry) => entry.customType === CONTEXT_ROLLOVER_ENTRY)).toBe(false);
+
+	await harness.emit("input", { source: "interactive", text: "queued while busy" });
+	expect(harness.entries.some((entry) => entry.customType === CONTEXT_ROLLOVER_ENTRY)).toBe(false);
+
+	harness.setIdle(true);
+	await harness.emit("input", { source: "interactive", text: "next task" });
+	const rollover = harness.entries.find((entry) => entry.customType === CONTEXT_ROLLOVER_ENTRY);
+	expect(rollover.data).toMatchObject({ reason: "automatic", percent: 90.5, tokens: 90_500, contextWindow: 100_000 });
+	expect(harness.compactCalls).toBe(1);
+	expect(harness.messageOptions.at(-1)).toEqual({ triggerTurn: false });
+
+	const renderer = harness.entryRenderers.get(CONTEXT_ROLLOVER_ENTRY);
 	const line = rendered(renderer(rollover, { expanded: false }, renderTheme), 72)[0];
-	expect(line).toContain("Context reset — automatic at 90.0% — no summary");
+	expect(line).toContain("Context reset — automatic at 90.5% — no summary");
 	expect(line).toStartWith("─");
 	expect(line).toEndWith("─");
 	expect(visibleWidth(line)).toBe(70);
-
-	const narrow = rendered(renderer(rollover, { expanded: false }, renderTheme), 24)[0];
-	expect(narrow).toContain("Context reset");
-	expect(visibleWidth(narrow)).toBeLessThanOrEqual(22);
 });
 
-test("threshold compaction is cancelled and replaced by a summary-free rollover", async () => {
+test("aborts and rolls over only when the emergency buffer is exhausted", async () => {
+	const harness = makeHarness();
+	await enable(harness);
+	const hardLimit = Math.min(100_000, 90_000 + FALLBACK_BUFFER_TOKENS);
+	const toolTurn = { message: { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", name: "read" }] } };
+	harness.setUsage({ tokens: hardLimit, contextWindow: 100_000, percent: 100 });
+
+	await harness.emit("turn_end", toolTurn);
+	expect(harness.abortCalls).toBe(1);
+	expect(harness.entries.filter((entry) => entry.customType === CONTEXT_ROLLOVER_ENTRY)).toHaveLength(1);
+	expect(harness.messageOptions.at(-1)).toEqual({ triggerTurn: true, deliverAs: "steer" });
+});
+
+test("active threshold compaction is cancelled while the fallback saves state", async () => {
 	const branch = [
 		{ id: "u1", type: "message", message: { role: "user", content: "old" } },
 		{ id: "a1", type: "message", message: { role: "assistant", content: "working", stopReason: "toolUse" } },
@@ -215,21 +273,19 @@ test("threshold compaction is cancelled and replaced by a summary-free rollover"
 	];
 	const harness = makeHarness(branch);
 	await enable(harness);
+	harness.setUsage({ tokens: 90_000, contextWindow: 100_000, percent: 90 });
 	const result = await harness.emit("session_before_compact", {
 		reason: "threshold",
 		branchEntries: branch,
-		preparation: { firstKeptEntryId: "a1", tokensBefore: 91 },
+		preparation: { firstKeptEntryId: "a1", tokensBefore: 90_000 },
 	});
 
 	expect(result).toEqual({ cancel: true });
-	const rollover = harness.entries.find((entry) => entry.customType === "context-management-rollover");
-	expect(rollover.data.reason).toBe("threshold");
-	expect(harness.entries.some((entry) => entry.type === "compaction")).toBe(false);
-	expect(harness.messages.at(-1)?.customType).toBe("context-management-handoff");
-	expect(harness.messageOptions.at(-1)).toEqual({ triggerTurn: true, deliverAs: "steer" });
+	expect(harness.entries.some((entry) => entry.customType === CONTEXT_ROLLOVER_ENTRY)).toBe(false);
+	expect(harness.messages.at(-1)?.customType).toBe("context-management-fallback");
 });
 
-test("idle threshold preflight resets context without starting an extra turn", async () => {
+test("idle threshold preflight creates a real no-summary compaction boundary", async () => {
 	const branch = [
 		{ id: "u1", type: "message", message: { role: "user", content: "old" } },
 		{ id: "a1", type: "message", message: { role: "assistant", content: "done", stopReason: "stop" } },
@@ -237,13 +293,21 @@ test("idle threshold preflight resets context without starting an extra turn", a
 	const harness = makeHarness(branch);
 	await enable(harness);
 	harness.setIdle(true);
+	harness.setUsage({ tokens: 90_500, contextWindow: 100_000, percent: 90.5 });
 	const result = await harness.emit("session_before_compact", {
 		reason: "threshold",
 		branchEntries: branch,
-		preparation: { firstKeptEntryId: "u1", tokensBefore: 91 },
+		preparation: { firstKeptEntryId: "u1", tokensBefore: 90_500 },
 	});
 
-	expect(result).toEqual({ cancel: true });
+	const marker = harness.entries.find((entry) => entry.customType === CONTEXT_ROLLOVER_ENTRY);
+	expect(result.compaction).toMatchObject({
+		firstKeptEntryId: marker.id,
+		tokensBefore: 90_500,
+		estimatedTokensAfter: 0,
+		details: { contextManagement: true, noSummary: true },
+	});
+	expect(result.compaction.summary).toStartWith("[context-management:no-summary]");
 	expect(harness.messageOptions.at(-1)).toEqual({ triggerTurn: false });
 });
 
@@ -360,7 +424,7 @@ test("renders every context tool as compact native-style blocks", async () => {
 	const styledRemaining = remaining.renderResult(remainingResult, { isPartial: false, expanded: false }, renderTheme, { args: {}, isError: false });
 	expect(rendered(styledRemaining)).toEqual([
 		"• Checked context window",
-		"  └ 10.0% used · 90 tokens remain",
+		"  └ 10.0% used · 80K tokens remain",
 	]);
 	expect(styledRemaining.render(120).join("\n")).toContain(`${GREEN}10.0%${RESET}`);
 
@@ -369,7 +433,7 @@ test("renders every context tool as compact native-style blocks", async () => {
 		"• Resetting model context",
 		"  └ refresh model context",
 	]);
-	const rolloverResult = await rollover.execute("rollover", rolloverArgs);
+	const rolloverResult = await rollover.execute("rollover", rolloverArgs, undefined, undefined, harness.ctx);
 	expect(rendered(rollover.renderResult(rolloverResult, { isPartial: false, expanded: false }, renderTheme, { args: rolloverArgs, isError: false }))).toEqual([
 		"• Reset model context",
 		"  └ refresh model context · without conversation summary",

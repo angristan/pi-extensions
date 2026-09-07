@@ -8,13 +8,15 @@ import { CYAN, DIM, GREEN, MAGENTA, RED, RESET } from "../better-native-pi/rende
 
 const STATE_ENTRY = "context-management-state";
 const NOTE_ENTRY = "context-management-note";
-const ROLLOVER_ENTRY = "context-management-rollover";
+export const CONTEXT_ROLLOVER_ENTRY = "context-management-rollover";
 const HANDOFF_MESSAGE = "context-management-handoff";
 const REMINDER_MESSAGE = "context-management-reminder";
+const FALLBACK_MESSAGE = "context-management-fallback";
 const RESET_SUMMARY_PREFIX = "[context-management:no-summary]\n";
 
-export const REMINDER_PERCENT = 75;
-export const ROLLOVER_PERCENT = 90;
+export const BASE_BUDGET_PERCENT = 90;
+export const REMINDER_REMAINING_TOKENS = 6_144;
+export const FALLBACK_BUFFER_TOKENS = 16_384;
 
 const TOOL_NAMES = ["context_notes", "context_history", "get_context_remaining", "new_context"] as const;
 const TOOL_NAME_SET = new Set<string>(TOOL_NAMES);
@@ -33,6 +35,8 @@ interface RolloverEntryData {
 	id?: string;
 	reason?: "automatic" | "tool" | "user" | "threshold";
 	percent?: number;
+	tokens?: number;
+	contextWindow?: number;
 }
 
 export interface RestoredContextManagementState {
@@ -40,6 +44,44 @@ export interface RestoredContextManagementState {
 	notes: Map<string, string>;
 	rolloverId?: string;
 	reminded: boolean;
+	fallbackPrompted: boolean;
+	fallbackNoteSaved: boolean;
+}
+
+interface ContextUsage {
+	tokens: number;
+	contextWindow: number;
+	percent: number;
+}
+
+interface ContextBudgetStatus {
+	baseLimit: number;
+	baseRemaining: number;
+	hardLimit: number;
+	hardRemaining: number;
+}
+
+function contextBudgetStatus(usage: ContextUsage): ContextBudgetStatus {
+	const baseLimit = Math.floor(usage.contextWindow * BASE_BUDGET_PERCENT / 100);
+	const hardLimit = Math.min(usage.contextWindow, baseLimit + FALLBACK_BUFFER_TOKENS);
+	return {
+		baseLimit,
+		baseRemaining: Math.max(0, baseLimit - usage.tokens),
+		hardLimit,
+		hardRemaining: Math.max(0, hardLimit - usage.tokens),
+	};
+}
+
+function knownContextUsage(usage: any): ContextUsage | undefined {
+	return usage?.tokens != null && usage.contextWindow != null && usage.percent != null
+		? usage as ContextUsage
+		: undefined;
+}
+
+function needsFollowUp(message: any): boolean {
+	if (message?.role !== "assistant") return false;
+	if (message.stopReason === "toolUse") return true;
+	return Array.isArray(message.content) && message.content.some((part: any) => part?.type === "toolCall");
 }
 
 function textResult(text: string, details?: unknown) {
@@ -142,6 +184,8 @@ export function restoreContextManagementState(entries: readonly any[]): Restored
 	let enabled = false;
 	let rolloverId: string | undefined;
 	let reminded = false;
+	let fallbackPrompted = false;
+	let fallbackNoteSaved = false;
 	const notes = new Map<string, string>();
 
 	for (const entry of entries) {
@@ -154,21 +198,27 @@ export function restoreContextManagementState(entries: readonly any[]): Restored
 			const key = data?.key?.trim();
 			if (!key) continue;
 			if (data.deleted) notes.delete(key);
-			else if (typeof data.content === "string") notes.set(key, data.content);
+			else if (typeof data.content === "string") {
+				notes.set(key, data.content);
+				if (fallbackPrompted) fallbackNoteSaved = true;
+			}
 			continue;
 		}
-		if (entry?.type === "custom" && entry.customType === ROLLOVER_ENTRY) {
+		if (entry?.type === "custom" && entry.customType === CONTEXT_ROLLOVER_ENTRY) {
 			const id = (entry.data as RolloverEntryData | undefined)?.id;
 			if (typeof id === "string" && id) {
 				rolloverId = id;
 				reminded = false;
+				fallbackPrompted = false;
+				fallbackNoteSaved = false;
 			}
 			continue;
 		}
 		if (entry?.type === "custom_message" && entry.customType === REMINDER_MESSAGE) reminded = true;
+		if (entry?.type === "custom_message" && entry.customType === FALLBACK_MESSAGE) fallbackPrompted = true;
 	}
 
-	return { enabled, notes, rolloverId, reminded };
+	return { enabled, notes, rolloverId, reminded, fallbackPrompted, fallbackNoteSaved };
 }
 
 // ============================================================================
@@ -492,7 +542,7 @@ function inactiveResult() {
 export default function contextManagement(pi: ExtensionAPI, dependencies: ContextManagementDependencies = {}) {
 	const formatKeyHint = dependencies.keyHint ?? keyHint;
 
-	pi.registerEntryRenderer<RolloverEntryData>(ROLLOVER_ENTRY, (entry, _options, theme) => {
+	pi.registerEntryRenderer<RolloverEntryData>(CONTEXT_ROLLOVER_ENTRY, (entry, _options, theme) => {
 		const data = entry.data ?? {};
 		const dim = (text: string) => theme.fg("dim", text);
 		return new ContextResetLine(contextResetLabel(data), dim);
@@ -502,7 +552,10 @@ export default function contextManagement(pi: ExtensionAPI, dependencies: Contex
 	let notes = new Map<string, string>();
 	let rolloverId: string | undefined;
 	let reminded = false;
+	let fallbackPrompted = false;
+	let fallbackNoteSaved = false;
 	let rolloverPending = false;
+	let compactionPending = false;
 
 	const syncTools = () => {
 		const active = pi.getActiveTools();
@@ -526,7 +579,10 @@ export default function contextManagement(pi: ExtensionAPI, dependencies: Contex
 		notes = restored.notes;
 		rolloverId = restored.rolloverId;
 		reminded = restored.reminded;
+		fallbackPrompted = restored.fallbackPrompted;
+		fallbackNoteSaved = restored.fallbackNoteSaved;
 		rolloverPending = false;
+		compactionPending = false;
 		syncTools();
 		updateStatus(ctx);
 	};
@@ -539,14 +595,25 @@ export default function contextManagement(pi: ExtensionAPI, dependencies: Contex
 
 	const startRollover = (
 		reason: RolloverEntryData["reason"],
-		percent?: number,
+		usage?: ContextUsage,
 		continueInterruptedTurn = false,
+		ctx?: any,
 	) => {
+		if (rolloverPending && rolloverId) return rolloverId;
 		const id = randomUUID();
 		rolloverId = id;
 		reminded = false;
+		fallbackPrompted = false;
+		fallbackNoteSaved = false;
 		rolloverPending = true;
-		pi.appendEntry(ROLLOVER_ENTRY, { id, reason, percent } satisfies RolloverEntryData);
+		compactionPending = true;
+		pi.appendEntry(CONTEXT_ROLLOVER_ENTRY, {
+			id,
+			reason,
+			percent: usage?.percent,
+			tokens: usage?.tokens,
+			contextWindow: usage?.contextWindow,
+		} satisfies RolloverEntryData);
 		pi.sendMessage({
 			customType: HANDOFF_MESSAGE,
 			content: handoffText(notes),
@@ -555,7 +622,31 @@ export default function contextManagement(pi: ExtensionAPI, dependencies: Contex
 		}, continueInterruptedTurn
 			? { triggerTurn: true, deliverAs: "steer" }
 			: { triggerTurn: false });
+		if (ctx?.isIdle?.()) ctx.compact();
 		return id;
+	};
+
+	const sendReminder = (remaining: number) => {
+		if (reminded) return;
+		reminded = true;
+		pi.sendMessage({
+			customType: REMINDER_MESSAGE,
+			content: `Only ${remaining} tokens remain before the context emergency buffer. Save concise context_notes with the goal, decisions, progress, learnings, and next steps, then call new_context before the base budget is exhausted.`,
+			display: false,
+			details: { remaining },
+		}, { triggerTurn: false });
+	};
+
+	const sendFallback = () => {
+		if (fallbackPrompted) return;
+		fallbackPrompted = true;
+		fallbackNoteSaved = false;
+		pi.sendMessage({
+			customType: FALLBACK_MESSAGE,
+			content: "The base context budget is exhausted. Do not continue the task or give a final answer in this window. Make exactly one context_notes write now with the goal, decisions, progress, learnings, and next steps. After the note result, call new_context; do not use other tools.",
+			display: false,
+			details: { bufferTokens: FALLBACK_BUFFER_TOKENS },
+		}, { triggerTurn: true, deliverAs: "steer" });
 	};
 
 	pi.registerCommand("context-management", {
@@ -579,7 +670,7 @@ export default function contextManagement(pi: ExtensionAPI, dependencies: Contex
 					ctx.ui.notify("Enable context management before resetting context.", "warning");
 					return;
 				}
-				startRollover("user");
+				startRollover("user", knownContextUsage(ctx.getContextUsage()), false, ctx);
 				ctx.ui.notify("The next model request will use a fresh context window.", "info");
 				return;
 			}
@@ -620,6 +711,7 @@ export default function contextManagement(pi: ExtensionAPI, dependencies: Contex
 			}
 			notes.set(key, params.content);
 			pi.appendEntry(NOTE_ENTRY, { key, content: params.content } satisfies NoteEntryData);
+			if (fallbackPrompted) fallbackNoteSaved = true;
 			return textResult(`Saved durable note ${key}.`, { saved: true, key });
 		},
 	});
@@ -655,16 +747,17 @@ export default function contextManagement(pi: ExtensionAPI, dependencies: Contex
 		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
 			if (!enabled) return inactiveResult();
 			const usage = ctx.getContextUsage();
-			if (!usage || usage.tokens == null || usage.percent == null) {
+			if (!usage || usage.tokens == null || usage.contextWindow == null || usage.percent == null) {
 				return textResult("Context usage is unknown until the model completes another response.", { known: false });
 			}
-			const remaining = Math.max(0, usage.contextWindow - usage.tokens);
-			return textResult(`${usage.tokens} / ${usage.contextWindow} tokens used (${usage.percent.toFixed(1)}%); approximately ${remaining} tokens remain.`, {
+			const budget = contextBudgetStatus(usage);
+			return textResult(`${usage.tokens} / ${budget.baseLimit} budget tokens used (${usage.percent.toFixed(1)}% of the full context); approximately ${budget.baseRemaining} tokens remain before the emergency buffer.`, {
 				known: true,
 				tokens: usage.tokens,
 				contextWindow: usage.contextWindow,
 				percent: usage.percent,
-				remaining,
+				remaining: budget.baseRemaining,
+				hardRemaining: budget.hardRemaining,
 			});
 		},
 	});
@@ -683,10 +776,10 @@ export default function contextManagement(pi: ExtensionAPI, dependencies: Contex
 		renderShell: "self",
 		renderCall: (args, theme, context) => renderContextToolCall("rollover", args, theme, context),
 		renderResult: (result, options, theme, context) => renderContextToolResult("rollover", result, options, theme, context, formatKeyHint("app.tools.expand", "to expand")),
-		async execute() {
+		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
 			if (!enabled) return inactiveResult();
-			if (!rolloverPending) startRollover("tool");
-			return textResult("A new context window will start without summarizing conversation history.", {
+			if (!rolloverPending) startRollover("tool", knownContextUsage(ctx.getContextUsage()), true);
+			return textResult("A new context window will start without summarizing conversation history. End this response now; continue only after the rollover handoff starts the next turn.", {
 				rolloverId,
 			});
 		},
@@ -698,38 +791,108 @@ export default function contextManagement(pi: ExtensionAPI, dependencies: Contex
 		return { messages: filtered };
 	});
 
-	pi.on("turn_end", (_event, ctx) => {
-		if (!enabled || rolloverPending) return;
-		const usage = ctx.getContextUsage();
-		if (usage?.percent == null) return;
-		if (usage.percent >= ROLLOVER_PERCENT) {
-			startRollover("automatic", usage.percent);
+	pi.on("tool_call", (event) => {
+		if (!enabled) return;
+		if (rolloverPending) {
+			return { block: true, terminate: true, reason: "Context rollover is pending; wait for the fresh-context handoff." };
+		}
+		if (!fallbackPrompted) return;
+		if (event.toolName === "context_notes" && (event.input as any)?.action === "write") return;
+		if (event.toolName === "new_context" && fallbackNoteSaved) return;
+		return {
+			block: true,
+			terminate: true,
+			reason: fallbackNoteSaved
+				? "The emergency checkpoint is saved; call new_context before doing more work."
+				: "The context emergency buffer is active; write one context_notes checkpoint before doing more work.",
+		};
+	});
+
+	pi.on("input", (_event, ctx) => {
+		if (!enabled || rolloverPending || !ctx.isIdle()) return;
+		const usage = knownContextUsage(ctx.getContextUsage());
+		if (!usage) return;
+		if (contextBudgetStatus(usage).baseRemaining === 0) startRollover("automatic", usage, false, ctx);
+	});
+
+	pi.on("turn_end", (event, ctx) => {
+		if (!enabled || rolloverPending || !needsFollowUp(event.message)) return;
+		const usage = knownContextUsage(ctx.getContextUsage());
+		if (!usage) return;
+		const budget = contextBudgetStatus(usage);
+		if (budget.hardRemaining === 0) {
+			ctx.abort();
+			startRollover("automatic", usage, true);
 			return;
 		}
-		if (usage.percent < REMINDER_PERCENT || reminded) return;
-		reminded = true;
-		pi.sendMessage({
-			customType: REMINDER_MESSAGE,
-			content: `Context is ${usage.percent.toFixed(1)}% full. Update durable context_notes now and prepare to call new_context before important task state is lost.`,
-			display: false,
-			details: { percent: usage.percent },
-		}, { triggerTurn: false });
+		if (budget.baseRemaining === 0) {
+			sendFallback();
+			return;
+		}
+		if (budget.baseRemaining <= REMINDER_REMAINING_TOKENS) sendReminder(budget.baseRemaining);
+	});
+
+	pi.on("agent_settled", (_event, ctx) => {
+		if (!enabled) return;
+		if (compactionPending) {
+			ctx.compact();
+			return;
+		}
+		if (!fallbackPrompted) return;
+		const usage = knownContextUsage(ctx.getContextUsage());
+		if (usage && contextBudgetStatus(usage).baseRemaining === 0) {
+			startRollover("automatic", usage, true, ctx);
+		}
 	});
 
 	pi.on("session_before_compact", (event, ctx) => {
-		if (!enabled || event.reason !== "threshold") return;
+		if (!enabled) return;
 
-		if (!rolloverPending) {
+		if (!rolloverPending && !compactionPending && event.reason === "threshold") {
+			const usage = knownContextUsage(ctx.getContextUsage());
+			const budget = usage ? contextBudgetStatus(usage) : undefined;
 			const lastAssistant = [...event.branchEntries].reverse().find((entry: any) =>
 				entry?.type === "message" && entry.message?.role === "assistant",
 			) as any;
-			const continueInterruptedTurn = !ctx.isIdle() && lastAssistant?.message?.stopReason === "toolUse";
-			startRollover("threshold", ctx.getContextUsage()?.percent, continueInterruptedTurn);
+			const interruptedToolTurn = !ctx.isIdle() && needsFollowUp(lastAssistant?.message);
+
+			if (ctx.isIdle()) {
+				startRollover("threshold", usage);
+			} else if (interruptedToolTurn && budget?.hardRemaining === 0) {
+				ctx.abort();
+				startRollover("threshold", usage, true);
+			} else if (interruptedToolTurn && !fallbackPrompted) {
+				sendFallback();
+			}
 		}
 
-		// Context management owns threshold rollover. Cancelling here prevents Pi
-		// from creating a compaction entry or generating a conversation summary.
-		return { cancel: true };
+		if (rolloverPending || compactionPending) {
+			const marker = [...ctx.sessionManager.getBranch()].reverse().find((entry: any) =>
+				entry?.type === "custom"
+				&& entry.customType === CONTEXT_ROLLOVER_ENTRY
+				&& entry.data?.id === rolloverId,
+			) as any;
+			return {
+				compaction: {
+					summary: `${RESET_SUMMARY_PREFIX}${handoffText(notes)}`,
+					firstKeptEntryId: marker?.id ?? event.preparation.firstKeptEntryId,
+					tokensBefore: event.preparation.tokensBefore,
+					estimatedTokensAfter: 0,
+					details: { contextManagement: true, noSummary: true, rolloverId },
+				},
+			};
+		}
+
+		// Keep native manual and overflow behavior. At the base threshold during an
+		// active tool chain, cancel summary compaction while the fallback saves state.
+		if (event.reason === "threshold") return { cancel: true };
+	});
+
+	pi.on("session_compact", (event) => {
+		const details = event.compactionEntry?.details as any;
+		if (details?.contextManagement !== true || details.rolloverId !== rolloverId) return;
+		rolloverPending = false;
+		compactionPending = false;
 	});
 
 	pi.on("session_start", (_event, ctx) => restore(ctx));

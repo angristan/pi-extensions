@@ -677,7 +677,10 @@ export default function (pi: ExtensionAPI, dependencies: RuntimeDependencies = {
 		invalidateUsageTotals();
 		updateActivity(false);
 	});
-	pi.on("session_compact", () => invalidateUsageTotals());
+	pi.on("session_compact", () => {
+		invalidateUsageTotals();
+		requestRender?.();
+	});
 	pi.on("session_tree", () => {
 		invalidateUsageTotals();
 	});
