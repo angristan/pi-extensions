@@ -11,6 +11,7 @@ import contextManagement, {
 function makeHarness(initialEntries: any[] = []) {
 	const entries = [...initialEntries];
 	const messages: any[] = [];
+	const messageOptions: any[] = [];
 	const handlers = new Map<string, Array<(event: any, ctx: any) => any>>();
 	const commands = new Map<string, any>();
 	const entryRenderers = new Map<string, any>();
@@ -20,6 +21,7 @@ function makeHarness(initialEntries: any[] = []) {
 	const activeTools = new Set<string>();
 	let nextId = entries.length + 1;
 	let usage: any = { tokens: 10, contextWindow: 100, percent: 10 };
+	let idle = false;
 
 	const sessionManager = {
 		getBranch: () => entries,
@@ -28,6 +30,7 @@ function makeHarness(initialEntries: any[] = []) {
 	const ctx = {
 		sessionManager,
 		getContextUsage: () => usage,
+		isIdle: () => idle,
 		ui: {
 			notify: (message: string, level: string) => notices.push([message, level]),
 			setStatus: (key: string, value: string | undefined) => statuses.push([key, value]),
@@ -50,10 +53,11 @@ function makeHarness(initialEntries: any[] = []) {
 		appendEntry(customType: string, data: any) {
 			entries.push({ type: "custom", id: `e${nextId++}`, customType, data });
 		},
-		sendMessage(message: any) {
+		sendMessage(message: any, options?: any) {
 			const persisted = { type: "custom_message", id: `e${nextId++}`, ...message };
 			entries.push(persisted);
 			messages.push({ role: "custom", timestamp: nextId, ...message });
+			messageOptions.push(options);
 		},
 	};
 	contextManagement(pi as any, {
@@ -68,9 +72,11 @@ function makeHarness(initialEntries: any[] = []) {
 		entryRenderers,
 		handlers,
 		messages,
+		messageOptions,
 		notices,
 		statuses,
 		tools,
+		setIdle(value: boolean) { idle = value; },
 		setUsage(value: any) { usage = value; },
 		async emit(name: string, event: any = {}) {
 			let result: any;
@@ -201,11 +207,11 @@ test("usage thresholds issue one reminder and then create a rollover", async () 
 	expect(visibleWidth(narrow)).toBeLessThanOrEqual(22);
 });
 
-test("threshold compaction skips summarization and preserves a pending user prompt", async () => {
+test("threshold compaction is cancelled and replaced by a summary-free rollover", async () => {
 	const branch = [
 		{ id: "u1", type: "message", message: { role: "user", content: "old" } },
-		{ id: "a1", type: "message", message: { role: "assistant", content: "done" } },
-		{ id: "u2", type: "message", message: { role: "user", content: "current request" } },
+		{ id: "a1", type: "message", message: { role: "assistant", content: "working", stopReason: "toolUse" } },
+		{ id: "t1", type: "message", message: { role: "toolResult", content: "result" } },
 	];
 	const harness = makeHarness(branch);
 	await enable(harness);
@@ -215,16 +221,30 @@ test("threshold compaction skips summarization and preserves a pending user prom
 		preparation: { firstKeptEntryId: "a1", tokensBefore: 91 },
 	});
 
-	expect(result.compaction.firstKeptEntryId).toBe("u2");
-	expect(result.compaction.tokensBefore).toBe(91);
-	expect(result.compaction.details.noSummary).toBe(true);
+	expect(result).toEqual({ cancel: true });
+	const rollover = harness.entries.find((entry) => entry.customType === "context-management-rollover");
+	expect(rollover.data.reason).toBe("threshold");
+	expect(harness.entries.some((entry) => entry.type === "compaction")).toBe(false);
+	expect(harness.messages.at(-1)?.customType).toBe("context-management-handoff");
+	expect(harness.messageOptions.at(-1)).toEqual({ triggerTurn: true, deliverAs: "steer" });
+});
 
-	const transformed = filterContextAfterRollover([
-		{ role: "compactionSummary", summary: result.compaction.summary, tokensBefore: 91, timestamp: 1 },
-		{ role: "user", content: "current request", timestamp: 2 },
-	] as any, harness.entries.at(-1)?.data.id) as any[];
-	expect(transformed.map((message) => message.role)).toEqual(["custom", "user"]);
-	expect(transformed[0].content).toContain("without a summary");
+test("idle threshold preflight resets context without starting an extra turn", async () => {
+	const branch = [
+		{ id: "u1", type: "message", message: { role: "user", content: "old" } },
+		{ id: "a1", type: "message", message: { role: "assistant", content: "done", stopReason: "stop" } },
+	];
+	const harness = makeHarness(branch);
+	await enable(harness);
+	harness.setIdle(true);
+	const result = await harness.emit("session_before_compact", {
+		reason: "threshold",
+		branchEntries: branch,
+		preparation: { firstKeptEntryId: "u1", tokensBefore: 91 },
+	});
+
+	expect(result).toEqual({ cancel: true });
+	expect(harness.messageOptions.at(-1)).toEqual({ triggerTurn: false });
 });
 
 test("manual and overflow compaction keep Pi's native behavior", async () => {

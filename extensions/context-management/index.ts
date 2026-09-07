@@ -100,10 +100,6 @@ function handoffText(notes: ReadonlyMap<string, string>): string {
 	].join(" ");
 }
 
-function resetSummary(notes: ReadonlyMap<string, string>): string {
-	return `${RESET_SUMMARY_PREFIX}${handoffText(notes)}`;
-}
-
 function isMatchingHandoff(message: any, rolloverId: string): boolean {
 	return message?.role === "custom"
 		&& message.customType === HANDOFF_MESSAGE
@@ -541,7 +537,11 @@ export default function contextManagement(pi: ExtensionAPI, dependencies: Contex
 		syncTools();
 	};
 
-	const startRollover = (reason: RolloverEntryData["reason"], percent?: number) => {
+	const startRollover = (
+		reason: RolloverEntryData["reason"],
+		percent?: number,
+		continueInterruptedTurn = false,
+	) => {
 		const id = randomUUID();
 		rolloverId = id;
 		reminded = false;
@@ -552,7 +552,9 @@ export default function contextManagement(pi: ExtensionAPI, dependencies: Contex
 			content: handoffText(notes),
 			display: false,
 			details: { rolloverId: id, reason },
-		}, { triggerTurn: false });
+		}, continueInterruptedTurn
+			? { triggerTurn: true, deliverAs: "steer" }
+			: { triggerTurn: false });
 		return id;
 	};
 
@@ -717,28 +719,17 @@ export default function contextManagement(pi: ExtensionAPI, dependencies: Contex
 	pi.on("session_before_compact", (event, ctx) => {
 		if (!enabled || event.reason !== "threshold") return;
 
-		const lastContextEntry = [...event.branchEntries].reverse().find((entry: any) =>
-			entry?.type === "message" || entry?.type === "custom_message",
-		) as any;
-		const pendingUserEntryId = lastContextEntry?.type === "message" && lastContextEntry.message?.role === "user"
-			? String(lastContextEntry.id)
-			: undefined;
-		const id = randomUUID();
-		const percent = ctx.getContextUsage()?.percent;
-		pi.appendEntry(ROLLOVER_ENTRY, { id, reason: "threshold", percent } satisfies RolloverEntryData);
-		rolloverId = id;
-		reminded = false;
-		rolloverPending = false;
-		const markerEntryId = ctx.sessionManager.getLeafId();
+		if (!rolloverPending) {
+			const lastAssistant = [...event.branchEntries].reverse().find((entry: any) =>
+				entry?.type === "message" && entry.message?.role === "assistant",
+			) as any;
+			const continueInterruptedTurn = !ctx.isIdle() && lastAssistant?.message?.stopReason === "toolUse";
+			startRollover("threshold", ctx.getContextUsage()?.percent, continueInterruptedTurn);
+		}
 
-		return {
-			compaction: {
-				summary: resetSummary(notes),
-				firstKeptEntryId: pendingUserEntryId ?? markerEntryId ?? event.preparation.firstKeptEntryId,
-				tokensBefore: event.preparation.tokensBefore,
-				details: { contextManagement: true, noSummary: true, rolloverId: id },
-			},
-		};
+		// Context management owns threshold rollover. Cancelling here prevents Pi
+		// from creating a compaction entry or generating a conversation summary.
+		return { cancel: true };
 	});
 
 	pi.on("session_start", (_event, ctx) => restore(ctx));

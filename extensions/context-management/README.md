@@ -34,9 +34,10 @@ available:
 At 75% usage, the extension sends the model one hidden reminder to update durable
 notes. At 90%, it automatically starts a new context window. Each rollover adds
 a visible, durable reset divider to the transcript while keeping that divider
-out of model context. Pi's own threshold-triggered compaction is also converted
-to a no-summary rollover while the mode is enabled. Manual `/compact` and
-overflow recovery retain Pi's native summarization behavior.
+out of model context. While the mode is enabled, Pi's threshold-triggered
+compaction is cancelled and replaced by this summary-free rollover, so no
+compaction entry or generated summary is created. Manual `/compact` and overflow
+recovery retain Pi's native summarization behavior.
 
 A rollover preserves:
 
