@@ -143,15 +143,12 @@ function formatCostCents(cost: number): string {
  * First-output detection for TTFT.
  *
  * Pi surfaces semantic stream events rather than raw provider token callbacks.
- * Treat the first content-block boundary as the first token, with delta/end
- * fallbacks for providers that never emit explicit start events for a block.
+ * Block starts can precede generated content by several seconds, especially for
+ * hidden reasoning. Wait for non-empty content, with completed-block fallbacks
+ * for providers that do not stream deltas.
  */
 function isFirstOutputEvent(event: AssistantMessageEvent): boolean {
 	switch (event.type) {
-		case "text_start":
-		case "thinking_start":
-		case "toolcall_start":
-			return true;
 		case "text_delta":
 		case "thinking_delta":
 		case "toolcall_delta":
