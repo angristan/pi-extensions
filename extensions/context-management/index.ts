@@ -468,14 +468,15 @@ function renderContextToolResult(
 	const state = resultState(kind, result, context);
 	component.update((width) => {
 		const expanded = Boolean(options.expanded && state.expandedText);
+		const hidden = !expanded && hasHiddenExpandedText(state, width);
 		const lines = [toolHeadline(false, Boolean(state.error), state.headline)];
 		if (expanded) {
 			lines.push(...expandedRows(state.expandedText!, width, theme));
 		} else if (state.branch) {
-			lines.push(`${TOOL_BRANCH}${theme.fg(state.error ? "error" : "dim", state.branch)}`);
-		}
-		if (!expanded && hasHiddenExpandedText(state, width)) {
-			lines.push(`${TOOL_INDENT}${theme.fg("dim", `↳ ${expandHint}`)}`);
+			const hint = hidden ? theme.fg("dim", ` · ${expandHint}`) : "";
+			lines.push(`${TOOL_BRANCH}${theme.fg(state.error ? "error" : "dim", state.branch)}${hint}`);
+		} else if (hidden) {
+			lines[0] += theme.fg("dim", ` · ${expandHint}`);
 		}
 		return lines;
 	});

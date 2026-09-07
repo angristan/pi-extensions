@@ -255,8 +255,7 @@ test("renders every context tool as compact native-style blocks", async () => {
 	const styledNote = notes.renderResult(noteResult, { isPartial: false, expanded: false }, renderTheme, { args: noteArgs, isError: false });
 	expect(rendered(styledNote)).toEqual([
 		"• Saved context note task",
-		"  └ Inspect warehouse seven Then verify output",
-		"    ↳ Ctrl+O to expand",
+		"  └ Inspect warehouse seven Then verify output · Ctrl+O to expand",
 	]);
 	const styledNoteText = styledNote.render(120).join("\n");
 	expect(styledNoteText).toContain(`${CYAN}task${RESET}`);
@@ -283,9 +282,10 @@ test("renders every context tool as compact native-style blocks", async () => {
 		{ args: longNoteArgs, isError: false },
 	), 48);
 	expect(narrowNote[0]).toContain("Saved context note");
+	expect(narrowNote).toHaveLength(2);
 	expect(narrowNote[1]?.trimStart()).toStartWith("└ Context management");
 	expect(narrowNote[1]?.trimStart()).not.toStartWith("·");
-	expect(narrowNote.at(-1)).toContain("Ctrl+O to expand");
+	expect(narrowNote[1]).toContain("Ctrl+O to expand");
 
 	const historyArgs = { query: "warehouse", limit: 5 };
 	expect(rendered(history.renderCall(historyArgs, renderTheme, { isPartial: true }))).toEqual([
