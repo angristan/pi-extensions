@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Container, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import { Container, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { randomUUID } from "node:crypto";
 import { fitToolLine } from "../better-native-pi/core.js";
@@ -32,6 +32,7 @@ interface NoteEntryData {
 interface RolloverEntryData {
 	id?: string;
 	reason?: "automatic" | "tool" | "user" | "threshold";
+	percent?: number;
 }
 
 export interface RestoredContextManagementState {
@@ -228,6 +229,46 @@ class ContextToolLines implements Component {
 	}
 }
 
+/** A durable, width-aware transcript boundary for no-summary rollover. */
+class ContextResetLine implements Component {
+	constructor(
+		private readonly label: string,
+		private readonly dim: (text: string) => string,
+	) {}
+
+	render(width: number): string[] {
+		// Leave two columns of slack to prevent full-width styled rows from
+		// wrapping into an extra terminal line.
+		const available = Math.max(0, width - 2);
+		if (available <= 0) return [];
+		const centeredLabel = ` ${this.label} `;
+		const labelWidth = visibleWidth(centeredLabel);
+		if (labelWidth >= available) {
+			return [this.dim(truncateToWidth(this.label, available, "…"))];
+		}
+		const fill = available - labelWidth;
+		const left = Math.floor(fill / 2);
+		const right = fill - left;
+		return [this.dim(`${"─".repeat(left)}${centeredLabel}${"─".repeat(right)}`)];
+	}
+
+	invalidate(): void {}
+}
+
+function contextResetLabel(data: RolloverEntryData): string {
+	const percent = typeof data.percent === "number" && Number.isFinite(data.percent)
+		? ` at ${data.percent.toFixed(1)}%`
+		: "";
+	const cause = data.reason === "user"
+		? "manual"
+		: data.reason === "tool"
+			? "requested by agent"
+			: data.reason === "automatic" || data.reason === "threshold"
+				? `automatic${percent}`
+				: "";
+	return ["Context reset", cause, "no summary"].filter(Boolean).join(" — ");
+}
+
 function contextToolLines(context: ContextToolRenderContext): ContextToolLines {
 	return context.lastComponent instanceof ContextToolLines ? context.lastComponent : new ContextToolLines();
 }
@@ -289,14 +330,14 @@ function callState(kind: ContextToolKind, args: Record<string, unknown>): Render
 				: action === "delete"
 					? "Deleting context note"
 					: "Listing context notes";
-		return { headline, branch: [key, preview].filter(Boolean).join(" · ") || undefined };
+		return { headline, branch: [key, preview].filter(Boolean).join(" — ") || undefined };
 	}
 	if (kind === "history") {
 		const query = oneLine(args.query);
 		const limit = typeof args.limit === "number" ? `last ${args.limit}` : "";
 		return {
 			headline: query ? "Searching context history" : "Reading recent context history",
-			branch: [query, limit].filter(Boolean).join(" · ") || undefined,
+			branch: [query, limit].filter(Boolean).join(" — ") || undefined,
 		};
 	}
 	if (kind === "remaining") return { headline: "Checking context remaining" };
@@ -337,11 +378,11 @@ function resultState(
 			return { headline: "Context note not found", branch: key || oneLine(text), error: true };
 		}
 		if (action === "read") {
-			return { headline: "Read context note", branch: [key, oneLine(text)].filter(Boolean).join(" · "), expandedText: text };
+			return { headline: "Read context note", branch: [key, oneLine(text)].filter(Boolean).join(" — "), expandedText: text };
 		}
 		if (action === "delete") return { headline: "Deleted context note", branch: key || undefined };
 		const content = typeof context.args?.content === "string" ? context.args.content : "";
-		return { headline: "Saved context note", branch: [key, oneLine(content)].filter(Boolean).join(" · "), expandedText: content };
+		return { headline: "Saved context note", branch: [key, oneLine(content)].filter(Boolean).join(" — "), expandedText: content };
 	}
 
 	if (kind === "history") {
@@ -357,12 +398,12 @@ function resultState(
 		if (details.known === false) return { headline: "Context usage unavailable", branch: oneLine(text) || undefined };
 		const percent = typeof details.percent === "number" ? `${details.percent.toFixed(1)}% used` : undefined;
 		const remaining = typeof details.remaining === "number" ? `${formatCount(details.remaining)} tokens remain` : undefined;
-		return { headline: "Checked context remaining", branch: [percent, remaining].filter(Boolean).join(" · ") || oneLine(text) };
+		return { headline: "Checked context remaining", branch: [percent, remaining].filter(Boolean).join(" — ") || oneLine(text) };
 	}
 
 	return {
 		headline: "Started new context",
-		branch: [oneLine(context.args?.reason), "without conversation summary"].filter(Boolean).join(" · "),
+		branch: [oneLine(context.args?.reason), "without conversation summary"].filter(Boolean).join(" — "),
 	};
 }
 
@@ -407,6 +448,12 @@ function inactiveResult() {
 }
 
 export default function contextManagement(pi: ExtensionAPI) {
+	pi.registerEntryRenderer<RolloverEntryData>(ROLLOVER_ENTRY, (entry, _options, theme) => {
+		const data = entry.data ?? {};
+		const dim = (text: string) => theme.fg("dim", text);
+		return new ContextResetLine(contextResetLabel(data), dim);
+	});
+
 	let enabled = false;
 	let notes = new Map<string, string>();
 	let rolloverId: string | undefined;
@@ -446,12 +493,12 @@ export default function contextManagement(pi: ExtensionAPI) {
 		syncTools();
 	};
 
-	const startRollover = (reason: RolloverEntryData["reason"]) => {
+	const startRollover = (reason: RolloverEntryData["reason"], percent?: number) => {
 		const id = randomUUID();
 		rolloverId = id;
 		reminded = false;
 		rolloverPending = true;
-		pi.appendEntry(ROLLOVER_ENTRY, { id, reason } satisfies RolloverEntryData);
+		pi.appendEntry(ROLLOVER_ENTRY, { id, reason, percent } satisfies RolloverEntryData);
 		pi.sendMessage({
 			customType: HANDOFF_MESSAGE,
 			content: handoffText(notes),
@@ -606,7 +653,7 @@ export default function contextManagement(pi: ExtensionAPI) {
 		const usage = ctx.getContextUsage();
 		if (usage?.percent == null) return;
 		if (usage.percent >= ROLLOVER_PERCENT) {
-			startRollover("automatic");
+			startRollover("automatic", usage.percent);
 			return;
 		}
 		if (usage.percent < REMINDER_PERCENT || reminded) return;
@@ -629,7 +676,8 @@ export default function contextManagement(pi: ExtensionAPI) {
 			? String(lastContextEntry.id)
 			: undefined;
 		const id = randomUUID();
-		pi.appendEntry(ROLLOVER_ENTRY, { id, reason: "threshold" } satisfies RolloverEntryData);
+		const percent = ctx.getContextUsage()?.percent;
+		pi.appendEntry(ROLLOVER_ENTRY, { id, reason: "threshold", percent } satisfies RolloverEntryData);
 		rolloverId = id;
 		reminded = false;
 		rolloverPending = false;

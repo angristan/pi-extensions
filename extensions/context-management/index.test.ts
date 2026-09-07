@@ -12,6 +12,7 @@ function makeHarness(initialEntries: any[] = []) {
 	const messages: any[] = [];
 	const handlers = new Map<string, Array<(event: any, ctx: any) => any>>();
 	const commands = new Map<string, any>();
+	const entryRenderers = new Map<string, any>();
 	const tools = new Map<string, any>();
 	const notices: Array<[string, string]> = [];
 	const statuses: Array<[string, string | undefined]> = [];
@@ -33,6 +34,7 @@ function makeHarness(initialEntries: any[] = []) {
 	};
 	const pi = {
 		registerCommand(name: string, command: any) { commands.set(name, command); },
+		registerEntryRenderer(name: string, renderer: any) { entryRenderers.set(name, renderer); },
 		registerTool(tool: any) { tools.set(tool.name, tool); activeTools.add(tool.name); },
 		on(name: string, handler: any) {
 			const list = handlers.get(name) ?? [];
@@ -60,6 +62,7 @@ function makeHarness(initialEntries: any[] = []) {
 		commands,
 		ctx,
 		entries,
+		entryRenderers,
 		handlers,
 		messages,
 		notices,
@@ -178,8 +181,21 @@ test("usage thresholds issue one reminder and then create a rollover", async () 
 
 	harness.setUsage({ tokens: ROLLOVER_PERCENT, contextWindow: 100, percent: ROLLOVER_PERCENT });
 	await harness.emit("turn_end", {});
+	const rollover = harness.entries.find((entry) => entry.customType === "context-management-rollover");
 	expect(harness.entries.filter((entry) => entry.customType === "context-management-rollover")).toHaveLength(1);
+	expect(rollover.data).toMatchObject({ reason: "automatic", percent: ROLLOVER_PERCENT });
 	expect(harness.entries.at(-1)?.customType).toBe("context-management-handoff");
+
+	const renderer = harness.entryRenderers.get("context-management-rollover");
+	const line = rendered(renderer(rollover, { expanded: false }, renderTheme), 72)[0];
+	expect(line).toContain("Context reset — automatic at 90.0% — no summary");
+	expect(line).toStartWith("─");
+	expect(line).toEndWith("─");
+	expect(visibleWidth(line)).toBe(70);
+
+	const narrow = rendered(renderer(rollover, { expanded: false }, renderTheme), 24)[0];
+	expect(narrow).toContain("Context reset");
+	expect(visibleWidth(narrow)).toBeLessThanOrEqual(22);
 });
 
 test("threshold compaction skips summarization and preserves a pending user prompt", async () => {
@@ -230,12 +246,12 @@ test("renders every context tool as compact native-style blocks", async () => {
 	const noteArgs = { action: "write", key: "task", content: "Inspect warehouse seven\nThen verify output" };
 	expect(rendered(notes.renderCall(noteArgs, renderTheme, { isPartial: true }))).toEqual([
 		"• Saving context note",
-		"  └ task · Inspect warehouse seven Then verify output",
+		"  └ task — Inspect warehouse seven Then verify output",
 	]);
 	const noteResult = await notes.execute("note", noteArgs);
 	expect(rendered(notes.renderResult(noteResult, { isPartial: false, expanded: false }, renderTheme, { args: noteArgs, isError: false }))).toEqual([
 		"• Saved context note",
-		"  └ task · Inspect warehouse seven Then verify output",
+		"  └ task — Inspect warehouse seven Then verify output",
 	]);
 	const expandedNote = notes.renderResult(noteResult, { isPartial: false, expanded: true }, renderTheme, { args: noteArgs, isError: false }).render(36);
 	expect(expandedNote.every((line: string) => visibleWidth(line) <= 36)).toBe(true);
@@ -244,7 +260,7 @@ test("renders every context tool as compact native-style blocks", async () => {
 	const historyArgs = { query: "warehouse", limit: 5 };
 	expect(rendered(history.renderCall(historyArgs, renderTheme, { isPartial: true }))).toEqual([
 		"• Searching context history",
-		"  └ warehouse · last 5",
+		"  └ warehouse — last 5",
 	]);
 	const historyResult = await history.execute("history", historyArgs, undefined, undefined, harness.ctx);
 	expect(rendered(history.renderResult(historyResult, { isPartial: false, expanded: false }, renderTheme, { args: historyArgs, isError: false }))).toEqual([
@@ -265,7 +281,7 @@ test("renders every context tool as compact native-style blocks", async () => {
 	const remainingResult = await remaining.execute("remaining", {}, undefined, undefined, harness.ctx);
 	expect(rendered(remaining.renderResult(remainingResult, { isPartial: false, expanded: false }, renderTheme, { args: {}, isError: false }))).toEqual([
 		"• Checked context remaining",
-		"  └ 10.0% used · 90 tokens remain",
+		"  └ 10.0% used — 90 tokens remain",
 	]);
 
 	const rolloverArgs = { reason: "refresh model context" };
@@ -276,7 +292,7 @@ test("renders every context tool as compact native-style blocks", async () => {
 	const rolloverResult = await rollover.execute("rollover", rolloverArgs);
 	expect(rendered(rollover.renderResult(rolloverResult, { isPartial: false, expanded: false }, renderTheme, { args: rolloverArgs, isError: false }))).toEqual([
 		"• Started new context",
-		"  └ refresh model context · without conversation summary",
+		"  └ refresh model context — without conversation summary",
 	]);
 });
 
