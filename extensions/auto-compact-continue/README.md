@@ -2,9 +2,9 @@
 
 Automatically continues the agent after pi triggers threshold-based context compaction.
 
-Pi can stop when threshold compaction interrupts a tool-use turn before its next assistant response. This extension waits for the run to settle, then sends a hidden fallback continuation only if Pi did not resume the turn itself.
+Pi intentionally stops after auto-compaction so you can review. This extension queues a hidden follow-up so the agent resumes on its own — without repeating already-completed work.
 
-Only **threshold** compaction during an interrupted tool-use turn is eligible. Completed assistant responses, native continuations, manual `/compact`, and overflow recovery are left untouched. When `context-management` replaces threshold compaction with a no-summary rollover, the fallback points the model to durable notes and searchable session history instead of claiming that a summary exists.
+Only acts on **threshold** compaction. Manual `/compact` and overflow recovery are left untouched. When `context-management` replaces threshold compaction with a no-summary rollover, the continuation points the model to durable notes and searchable session history instead of claiming that a summary exists.
 
 ```
 [context threshold reached → pi compacts or rolls over]

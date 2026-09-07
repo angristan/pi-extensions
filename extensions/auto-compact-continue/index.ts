@@ -9,75 +9,36 @@ const NO_SUMMARY_CONTINUE_PROMPT =
 	"Automatic context rollover completed without a conversation summary. Continue the current in-progress task from durable context notes, " +
 	"and retrieve older session history only when needed. Do not repeat completed work.";
 
-interface PendingContinuation {
-	compactionEntryId: string;
-	noSummary: boolean;
-}
-
-function entryIndex(entries: readonly any[], id: string): number {
-	return entries.findIndex((entry) => entry?.id === id);
-}
-
-function latestAssistantBefore(entries: readonly any[], index: number): any | undefined {
-	for (let current = index - 1; current >= 0; current -= 1) {
-		const entry = entries[current];
-		if (entry?.type === "message" && entry.message?.role === "assistant") return entry.message;
-	}
-	return undefined;
-}
-
-function hasAssistantAfter(entries: readonly any[], index: number): boolean {
-	return entries.slice(index + 1).some((entry) =>
-		entry?.type === "message" && entry.message?.role === "assistant",
-	);
-}
-
 /**
- * Threshold compaction can interrupt a tool-use turn before its next assistant
- * response. Pi normally resumes that turn itself. Wait until the run settles
- * before adding a fallback continuation so a native response can never leave a
- * stale follow-up queued behind the completed task.
+ * Pi intentionally stops after threshold-triggered auto-compaction. Queueing a
+ * hidden follow-up from session_compact lets Pi's existing post-run loop call
+ * agent.continue() after the compacted context has been installed.
  *
- * Overflow recovery already retries natively, final assistant responses are
- * complete, and manual /compact should remain user-controlled.
+ * Overflow recovery already retries natively, and manual /compact should remain
+ * user-controlled, so neither path is changed here.
  */
 export default function (pi: ExtensionAPI) {
-	let pending: PendingContinuation | undefined;
-
 	pi.on("session_compact", (event, ctx) => {
-		if (event.reason !== "threshold" || event.willRetry || ctx.isIdle()) return;
+		if (event.reason !== "threshold" || event.willRetry) return;
 
-		const compactionEntryId = event.compactionEntry?.id;
-		if (typeof compactionEntryId !== "string") return;
-		const entries = ctx.sessionManager.getBranch();
-		const index = entryIndex(entries, compactionEntryId);
-		const assistant = index < 0 ? undefined : latestAssistantBefore(entries, index);
-		if (assistant?.stopReason !== "toolUse") return;
+		// Threshold compaction may also run as preflight for a newly submitted
+		// user prompt. That prompt already continues the session, so only inject
+		// a follow-up while the previous agent run is still active.
+		if (ctx.isIdle()) return;
 
-		const details = event.compactionEntry.details as { contextManagement?: boolean; noSummary?: boolean } | undefined;
-		pending = {
-			compactionEntryId,
-			noSummary: details?.contextManagement === true && details.noSummary === true,
-		};
-	});
-
-	pi.on("agent_settled", (_event, ctx) => {
-		const continuation = pending;
-		pending = undefined;
-		if (!continuation) return;
-
-		const entries = ctx.sessionManager.getBranch();
-		const index = entryIndex(entries, continuation.compactionEntryId);
-		if (index < 0 || hasAssistantAfter(entries, index)) return;
-
+		const details = event.compactionEntry?.details as { contextManagement?: boolean; noSummary?: boolean } | undefined;
+		const noSummary = details?.contextManagement === true && details.noSummary === true;
 		pi.sendMessage(
 			{
 				customType: "auto-compact-continue",
-				content: continuation.noSummary ? NO_SUMMARY_CONTINUE_PROMPT : CONTINUE_PROMPT,
+				content: noSummary ? NO_SUMMARY_CONTINUE_PROMPT : CONTINUE_PROMPT,
 				display: false,
-				details: { reason: "threshold", noSummary: continuation.noSummary },
+				details: { reason: event.reason, noSummary },
 			},
-			{ triggerTurn: true },
+			{
+				triggerTurn: true,
+				deliverAs: "followUp",
+			},
 		);
 	});
 }
