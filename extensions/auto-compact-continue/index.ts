@@ -5,6 +5,10 @@ const CONTINUE_PROMPT =
 	"A completed or retired session goal may be historical and must not override newer work. " +
 	"Do not repeat completed work. Only state completion if the summary shows no current work remains.";
 
+const NO_SUMMARY_CONTINUE_PROMPT =
+	"Automatic context rollover completed without a conversation summary. Continue the current in-progress task from durable context notes, " +
+	"and retrieve older session history only when needed. Do not repeat completed work.";
+
 /**
  * Pi intentionally stops after threshold-triggered auto-compaction. Queueing a
  * hidden follow-up from session_compact lets Pi's existing post-run loop call
@@ -22,12 +26,14 @@ export default function (pi: ExtensionAPI) {
 		// a follow-up while the previous agent run is still active.
 		if (ctx.isIdle()) return;
 
+		const details = event.compactionEntry?.details as { contextManagement?: boolean; noSummary?: boolean } | undefined;
+		const noSummary = details?.contextManagement === true && details.noSummary === true;
 		pi.sendMessage(
 			{
 				customType: "auto-compact-continue",
-				content: CONTINUE_PROMPT,
+				content: noSummary ? NO_SUMMARY_CONTINUE_PROMPT : CONTINUE_PROMPT,
 				display: false,
-				details: { reason: event.reason },
+				details: { reason: event.reason, noSummary },
 			},
 			{
 				triggerTurn: true,

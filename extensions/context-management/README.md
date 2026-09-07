@@ -1,0 +1,64 @@
+# context-management
+
+Opt-in, per-session context rollover without an LLM-generated conversation summary.
+The complete Pi session transcript remains on disk and visible in the TUI, while
+model requests after a rollover contain only a small handoff message and newer
+conversation entries.
+
+## Usage
+
+Context management is disabled in new sessions.
+
+```text
+/context-management on
+/context-management off
+/context-management status
+/context-management reset
+```
+
+The setting is stored in the session's append-only history. Resumed sessions and
+branches restore the latest setting on their active branch. Disabling the mode
+stops future reminders and rollovers; it does not undo a rollover that already
+removed older messages from the model-visible context.
+
+When enabled, the footer status area shows `ctx:auto` and these tools become
+available:
+
+| Tool | Purpose |
+|---|---|
+| `context_notes` | List, read, replace, or delete durable keyed notes |
+| `context_history` | Search the complete active session branch, including messages hidden by rollover |
+| `get_context_remaining` | Report Pi's current context usage estimate |
+| `new_context` | Start a fresh model context without summarizing the earlier transcript |
+
+At 75% usage, the extension sends the model one hidden reminder to update durable
+notes. At 90%, it automatically starts a new context window. Pi's own
+threshold-triggered compaction is also converted to a no-summary rollover while
+the mode is enabled. Manual `/compact` and overflow recovery retain Pi's native
+summarization behavior.
+
+A rollover preserves:
+
+- Pi's system prompt, project instructions, skills, and active tools
+- append-only session history and inactive branches
+- durable `context_notes`
+- messages created after the rollover handoff
+
+It excludes earlier conversation messages from subsequent provider requests.
+The model can recover selected details with `context_history`, but reliable
+continuation still depends on it writing useful notes before rollover.
+
+## Limitations
+
+- Usage is based on Pi's provider-backed estimate and can be temporarily unknown.
+- Turning the mode on does not immediately reset context; use
+  `/context-management reset` when an immediate rollover is wanted.
+- The feature does not train or modify the selected model. It only supplies the
+  tools, reminders, and context boundaries needed for context-aware behavior.
+- Older transcript content remains in the session file and is not a secrecy or
+  deletion boundary.
+
+## Dependencies
+
+- **Runtime:** Pi extension APIs only.
+- **External services:** None.

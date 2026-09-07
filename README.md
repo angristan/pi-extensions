@@ -61,6 +61,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | Extension | What it does |
 |---|---|
 | [`context-inspector`](extensions/context-inspector/) | Inspect where your context window is being spent |
+| [`context-management`](extensions/context-management/) | Opt into per-session durable notes, history retrieval, and no-summary context rollover |
 | [`edit-summary`](extensions/edit-summary/) | Show a passive overlay with net file changes for the current or last agent turn |
 | [`goal`](extensions/goal/) | Track an explicit objective for the session |
 | [`plan-progress`](extensions/plan-progress/) | Track flat or nested plans with derived group progress in a collapsible overlay |
