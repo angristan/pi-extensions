@@ -342,12 +342,12 @@ function callState(kind: ContextToolKind, args: Record<string, unknown>): Render
 		const key = oneLine(args.key);
 		const preview = oneLine(args.content);
 		const headline = action === "read"
-			? "Reading context note"
+			? "Reading context checkpoint"
 			: action === "write"
-				? "Saving context note"
+				? "Saving context checkpoint"
 				: action === "delete"
-					? "Deleting context note"
-					: "Listing context notes";
+					? "Deleting context checkpoint"
+					: "Listing saved context checkpoints";
 		return {
 			headline: [headline, key ? `${CYAN}${key}${RESET}` : ""].filter(Boolean).join(" "),
 			branch: action === "write" ? preview || undefined : undefined,
@@ -357,22 +357,22 @@ function callState(kind: ContextToolKind, args: Record<string, unknown>): Render
 		const query = oneLine(args.query);
 		const limit = typeof args.limit === "number" ? `last ${MAGENTA}${args.limit}${RESET}` : "";
 		return {
-			headline: query ? "Searching context history" : "Reading recent context history",
+			headline: query ? "Searching full session transcript" : "Reading recent session transcript",
 			branch: [query ? `${CYAN}${query}${RESET}` : "", limit].filter(Boolean).join(` ${DIM}·${RESET} `) || undefined,
 		};
 	}
-	if (kind === "remaining") return { headline: "Checking context remaining" };
-	return { headline: "Starting new context", branch: oneLine(args.reason) || undefined };
+	if (kind === "remaining") return { headline: "Checking context window" };
+	return { headline: "Resetting model context", branch: oneLine(args.reason) || undefined };
 }
 
 function failureState(kind: ContextToolKind, text: string): RenderedToolState {
 	const label = kind === "notes"
-		? "Context note failed"
+		? "Context checkpoint failed"
 		: kind === "history"
-			? "Context history failed"
+			? "Transcript search failed"
 			: kind === "remaining"
-				? "Context check failed"
-				: "Context rollover failed";
+				? "Context window check failed"
+				: "Context reset failed";
 	return { headline: label, branch: oneLine(text) || "Unknown error", expandedText: text, error: true };
 }
 
@@ -392,22 +392,22 @@ function resultState(
 		if (action === "list") {
 			const keys = Array.isArray(details.keys) ? details.keys.map(oneLine).filter(Boolean) : [];
 			return {
-				headline: keys.length ? `Listed ${GREEN}${keys.length}${RESET} context note${keys.length === 1 ? "" : "s"}` : "No context notes saved",
+				headline: keys.length ? `Found ${GREEN}${keys.length}${RESET} saved context checkpoint${keys.length === 1 ? "" : "s"}` : "No saved context checkpoints",
 				branch: keys.length ? keys.map((item: string) => `${CYAN}${item}${RESET}`).join(", ") : undefined,
 			};
 		}
 		if (action === "read" && details.found === false) {
-			return { headline: ["Context note not found", coloredKey].filter(Boolean).join(" "), branch: oneLine(text) || undefined, error: true };
+			return { headline: ["Context checkpoint not found", coloredKey].filter(Boolean).join(" "), branch: oneLine(text) || undefined, error: true };
 		}
 		if (action === "read") {
-			return { headline: ["Read context note", coloredKey].filter(Boolean).join(" "), branch: oneLine(text) || undefined, expandedText: text };
+			return { headline: ["Loaded context checkpoint", coloredKey].filter(Boolean).join(" "), branch: oneLine(text) || undefined, expandedText: text };
 		}
 		if (action === "delete") {
-			return { headline: ["Deleted context note", coloredKey].filter(Boolean).join(" ") };
+			return { headline: ["Deleted context checkpoint", coloredKey].filter(Boolean).join(" ") };
 		}
 		const content = typeof context.args?.content === "string" ? context.args.content : "";
 		return {
-			headline: ["Saved context note", coloredKey].filter(Boolean).join(" "),
+			headline: ["Saved context checkpoint", coloredKey].filter(Boolean).join(" "),
 			branch: oneLine(content) || undefined,
 			expandedText: content,
 		};
@@ -416,7 +416,9 @@ function resultState(
 	if (kind === "history") {
 		const matches = typeof details.matches === "number" ? Math.max(0, details.matches) : 0;
 		return {
-			headline: matches ? `Found ${GREEN}${matches}${RESET} history match${matches === 1 ? "" : "es"}` : "No matching context history",
+			headline: matches
+				? `Found ${GREEN}${matches}${RESET} matching message${matches === 1 ? "" : "s"} in full transcript`
+				: "No matching messages in full transcript",
 			branch: matches ? oneLine(text.split("\n")[0]) : undefined,
 			expandedText: matches ? text : undefined,
 		};
@@ -430,11 +432,11 @@ function resultState(
 		const remaining = typeof details.remaining === "number"
 			? `${CYAN}${formatCount(details.remaining)}${RESET}${DIM} tokens remain${RESET}`
 			: undefined;
-		return { headline: "Checked context remaining", branch: [percent, remaining].filter(Boolean).join(` ${DIM}·${RESET} `) || oneLine(text) };
+		return { headline: "Checked context window", branch: [percent, remaining].filter(Boolean).join(` ${DIM}·${RESET} `) || oneLine(text) };
 	}
 
 	return {
-		headline: "Started new context",
+		headline: "Reset model context",
 		branch: [oneLine(context.args?.reason), "without conversation summary"].filter(Boolean).join(" · "),
 	};
 }
