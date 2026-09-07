@@ -129,7 +129,7 @@ test("merges persisted subagent tokens and cost into session totals", () => {
 	expect(resolved).toEqual(["test-provider/child-model"]);
 });
 
-test("renders extension badges beside the model", () => {
+test("renders model and extension badges responsively", () => {
 	const handlers = new Map<string, (event: any, ctx: any) => void>();
 	const eventHandlers = new Map<string, (event: unknown) => void>();
 	let footerFactory: any;
@@ -158,16 +158,17 @@ test("renders extension badges beside the model", () => {
 	};
 
 	handlers.get("session_start")?.({}, ctx);
+	const extensionStatuses = new Map<string, string>();
 	const component = footerFactory(
 		{ requestRender: () => { renders += 1; } },
 		{ fg: (_token: string, text: string) => text },
 		{
 			onBranchChange: () => () => {},
 			getGitBranch: () => undefined,
-			getExtensionStatuses: () => new Map(),
+			getExtensionStatuses: () => extensionStatuses,
 		},
 	);
-	const plain = () => component.render(160)[0].replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
+	const plain = (width = 160) => component.render(width)[0].replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
 
 	eventHandlers.get(FOOTER_MODEL_BADGE_EVENT)?.({ source: "routing", text: "priority\nbadge" });
 	expect(plain()).toContain("Test Model high priority badge");
@@ -175,6 +176,10 @@ test("renders extension badges beside the model", () => {
 
 	eventHandlers.get(FOOTER_MODEL_BADGE_EVENT)?.({ source: "routing" });
 	expect(plain()).not.toContain("priority badge");
+
+	extensionStatuses.set("plan", "plan 2/3 with a deliberately long description");
+	extensionStatuses.set("context-management", "ctx:auto");
+	expect(plain(32)).toContain("ctx:auto");
 
 	handlers.get("session_shutdown")?.({}, ctx);
 });
