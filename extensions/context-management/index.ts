@@ -392,7 +392,7 @@ function resultState(
 		if (action === "list") {
 			const keys = Array.isArray(details.keys) ? details.keys.map(oneLine).filter(Boolean) : [];
 			return {
-				headline: keys.length ? `Found ${GREEN}${keys.length}${RESET} saved context checkpoint${keys.length === 1 ? "" : "s"}` : "No saved context checkpoints",
+				headline: keys.length ? `Listed ${GREEN}${keys.length}${RESET} saved context checkpoint${keys.length === 1 ? "" : "s"}` : "No saved context checkpoints",
 				branch: keys.length ? keys.map((item: string) => `${CYAN}${item}${RESET}`).join(", ") : undefined,
 			};
 		}
@@ -415,10 +415,12 @@ function resultState(
 
 	if (kind === "history") {
 		const matches = typeof details.matches === "number" ? Math.max(0, details.matches) : 0;
+		const query = oneLine(context.args?.query);
+		const target = query ? ` matching ${CYAN}${query}${RESET}` : "";
 		return {
 			headline: matches
-				? `Found ${GREEN}${matches}${RESET} matching message${matches === 1 ? "" : "s"} in full transcript`
-				: "No matching messages in full transcript",
+				? `Found ${GREEN}${matches}${RESET} message${matches === 1 ? "" : "s"}${target} in full transcript`
+				: `No messages${target} in full transcript`,
 			branch: matches ? oneLine(text.split("\n")[0]) : undefined,
 			expandedText: matches ? text : undefined,
 		};

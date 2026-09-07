@@ -252,6 +252,11 @@ test("renders every context tool as compact native-style blocks", async () => {
 		"  └ Inspect warehouse seven Then verify output",
 	]);
 	const noteResult = await notes.execute("note", noteArgs);
+	const listedNotes = await notes.execute("list", { action: "list" });
+	expect(rendered(notes.renderResult(listedNotes, { isPartial: false, expanded: false }, renderTheme, { args: { action: "list" }, isError: false }))).toEqual([
+		"• Listed 1 saved context checkpoint",
+		"  └ task",
+	]);
 	const styledNote = notes.renderResult(noteResult, { isPartial: false, expanded: false }, renderTheme, { args: noteArgs, isError: false });
 	expect(rendered(styledNote)).toEqual([
 		"• Saved context checkpoint task",
@@ -295,7 +300,7 @@ test("renders every context tool as compact native-style blocks", async () => {
 	const historyResult = await history.execute("history", historyArgs, undefined, undefined, harness.ctx);
 	const styledHistory = history.renderResult(historyResult, { isPartial: false, expanded: false }, renderTheme, { args: historyArgs, isError: false });
 	expect(rendered(styledHistory)).toEqual([
-		"• Found 1 matching message in full transcript",
+		"• Found 1 message matching warehouse in full transcript",
 		"  └ [u1 user] inspect warehouse seven",
 	]);
 	expect(styledHistory.render(120).join("\n")).toContain(`${GREEN}1${RESET}`);
@@ -325,7 +330,7 @@ test("renders every context tool as compact native-style blocks", async () => {
 
 	const emptyHistory = await history.execute("empty", { query: "missing", limit: 5 }, undefined, undefined, harness.ctx);
 	expect(rendered(history.renderResult(emptyHistory, { isPartial: false, expanded: false }, renderTheme, { args: { query: "missing", limit: 5 }, isError: false }))).toEqual([
-		"• No matching messages in full transcript",
+		"• No messages matching missing in full transcript",
 	]);
 
 	expect(rendered(remaining.renderCall({}, renderTheme, { isPartial: true }))).toEqual([
