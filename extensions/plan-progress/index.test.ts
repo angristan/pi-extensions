@@ -332,7 +332,7 @@ for (const [label, payload, expectedField] of [
 	});
 }
 
-test("keeps a non-empty plan visible after the agent settles until cleared", async () => {
+test("keeps an unfinished plan visible across prompts until cleared", async () => {
 	const harness = createHarness();
 	await executePlan(harness, {
 		plan: [{ step: "Continue work", status: "in_progress" }],
@@ -340,13 +340,14 @@ test("keeps a non-empty plan visible after the agent settles until cleared", asy
 
 	expect(harness.overlayCardDefinition.visible()).toBe(true);
 	await harness.handlers.agent_settled[0]({}, harness.ctx);
+	await harness.handlers.input[0]({ source: "interactive" }, harness.ctx);
 	expect(harness.overlayCardDefinition.visible()).toBe(true);
 
 	await harness.commands["plan-clear"].handler("", harness.ctx);
 	expect(harness.overlayCardDefinition.visible()).toBe(false);
 });
 
-test("keeps a completed plan visible until cleared", async () => {
+test("clears a completed plan on the next user prompt", async () => {
 	const harness = createHarness();
 	await executePlan(harness, {
 		plan: [{ step: "Finished work", status: "completed" }],
@@ -355,6 +356,13 @@ test("keeps a completed plan visible until cleared", async () => {
 	expect(harness.overlayCardDefinition.visible()).toBe(true);
 	await harness.handlers.agent_settled[0]({}, harness.ctx);
 	expect(harness.overlayCardDefinition.visible()).toBe(true);
+
+	await harness.handlers.input[0]({ source: "extension" }, harness.ctx);
+	expect(harness.overlayCardDefinition.visible()).toBe(true);
+
+	await harness.handlers.input[0]({ source: "interactive" }, harness.ctx);
+	expect(harness.overlayCardDefinition.visible()).toBe(false);
+	expect(harness.appended.at(-1)).toEqual({ customType: "plan-progress", data: { items: [] } });
 });
 
 test("restores the latest plan state from the active session branch", async () => {

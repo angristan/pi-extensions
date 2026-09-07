@@ -272,6 +272,11 @@ function modelPlanText(plan: PlanState): string {
 	return modelPlanLines(plan).join("\n");
 }
 
+function planIsCompleted(plan: PlanState): boolean {
+	const stats = planStats(plan.items);
+	return stats.total > 0 && stats.incomplete === 0;
+}
+
 function planIsFinalizable(plan: PlanState): boolean {
 	const stats = planStats(plan.items);
 	return stats.incomplete === 0 || explainsInactiveWork(plan.explanation);
@@ -514,6 +519,11 @@ export default function (pi: ExtensionAPI, dependencies: PlanProgressDependencie
 		// confuse with a finalization guard and tends to linger visually.
 		ctx.ui.setStatus("plan", undefined);
 	};
+	const clearPlan = (ctx: any) => {
+		state = { items: [] };
+		persist();
+		updateUi(ctx);
+	};
 
 	pi.registerTool({
 		name: "update_plan",
@@ -545,7 +555,15 @@ export default function (pi: ExtensionAPI, dependencies: PlanProgressDependencie
 	});
 	pi.registerCommand("plan-clear", {
 		description: "Clear the current plan",
-		handler: async (_args, ctx) => { state = { items: [] }; persist(); updateUi(ctx); },
+		handler: async (_args, ctx) => clearPlan(ctx),
+	});
+
+	pi.on("input", (event: any, ctx: any) => {
+		// Leave the completed summary visible through the response that finished
+		// it, then retire it when the user starts their next prompt. Extension-
+		// injected input must not consume that one-turn acknowledgement window.
+		if (event.source !== "extension" && planIsCompleted(state)) clearPlan(ctx);
+		return { action: "continue" };
 	});
 
 	pi.on("message_end", (event: any, _ctx: any) => {

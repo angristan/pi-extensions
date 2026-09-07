@@ -6,10 +6,12 @@ editor, and expose a tool the agent can call to maintain it.
 The agent maintains the plan via the `update_plan` tool; this extension owns the
 tool logic, validation, persistence, agent guidance, and plan-section rendering.
 Each update remains in its append-only tool result instead of rebuilding the
-system prompt with mutable plan state, preserving prompt-prefix cache reuse. The
-package's generic `overlay-stack` only supplies consistent card framing and places
-that section on screen. If the `goal` extension is active, its separate card can
-appear above the plan.
+system prompt with mutable plan state, preserving prompt-prefix cache reuse. An
+unfinished plan remains visible across turns. A completed plan remains visible
+through the response that finished it, then clears when the next user prompt
+starts. The package's generic `overlay-stack` only supplies consistent card
+framing and places that section on screen. If the `goal` extension is active,
+its separate card can appear above the plan.
 
 `/plan-status` shows the complete hierarchy:
 
