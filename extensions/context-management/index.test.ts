@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { BOLD, CYAN, GREEN, RESET } from "../better-native-pi/render";
 import contextManagement, {
 	filterContextAfterRollover,
 	REMINDER_PERCENT,
@@ -249,10 +250,14 @@ test("renders every context tool as compact native-style blocks", async () => {
 		"  └ Inspect warehouse seven Then verify output",
 	]);
 	const noteResult = await notes.execute("note", noteArgs);
-	expect(rendered(notes.renderResult(noteResult, { isPartial: false, expanded: false }, renderTheme, { args: noteArgs, isError: false }))).toEqual([
+	const styledNote = notes.renderResult(noteResult, { isPartial: false, expanded: false }, renderTheme, { args: noteArgs, isError: false });
+	expect(rendered(styledNote)).toEqual([
 		"• Saved context note task",
 		"  └ Inspect warehouse seven Then verify output",
 	]);
+	const styledNoteText = styledNote.render(120).join("\n");
+	expect(styledNoteText).toContain(`${CYAN}task${RESET}`);
+	expect(styledNoteText).not.toContain(BOLD);
 	const expandedNote = notes.renderResult(noteResult, { isPartial: false, expanded: true }, renderTheme, { args: noteArgs, isError: false }).render(36);
 	expect(expandedNote.every((line: string) => visibleWidth(line) <= 36)).toBe(true);
 	expect(expandedNote.join("\n")).toContain("Then verify output");
@@ -279,10 +284,12 @@ test("renders every context tool as compact native-style blocks", async () => {
 		"  └ warehouse · last 5",
 	]);
 	const historyResult = await history.execute("history", historyArgs, undefined, undefined, harness.ctx);
-	expect(rendered(history.renderResult(historyResult, { isPartial: false, expanded: false }, renderTheme, { args: historyArgs, isError: false }))).toEqual([
+	const styledHistory = history.renderResult(historyResult, { isPartial: false, expanded: false }, renderTheme, { args: historyArgs, isError: false });
+	expect(rendered(styledHistory)).toEqual([
 		"• Found 1 history match",
 		"  └ [u1 user] inspect warehouse seven",
 	]);
+	expect(styledHistory.render(120).join("\n")).toContain(`${GREEN}1${RESET}`);
 	const expandedHistory = history.renderResult(historyResult, { isPartial: false, expanded: true }, renderTheme, { args: historyArgs, isError: false }).render(32);
 	expect(expandedHistory.every((line: string) => visibleWidth(line) <= 32)).toBe(true);
 	expect(stripAnsi(expandedHistory.join(" ")).replace(/\s+/g, " ")).toContain("inspect warehouse seven");
@@ -295,10 +302,12 @@ test("renders every context tool as compact native-style blocks", async () => {
 		"• Checking context remaining",
 	]);
 	const remainingResult = await remaining.execute("remaining", {}, undefined, undefined, harness.ctx);
-	expect(rendered(remaining.renderResult(remainingResult, { isPartial: false, expanded: false }, renderTheme, { args: {}, isError: false }))).toEqual([
+	const styledRemaining = remaining.renderResult(remainingResult, { isPartial: false, expanded: false }, renderTheme, { args: {}, isError: false });
+	expect(rendered(styledRemaining)).toEqual([
 		"• Checked context remaining",
 		"  └ 10.0% used · 90 tokens remain",
 	]);
+	expect(styledRemaining.render(120).join("\n")).toContain(`${GREEN}10.0%${RESET}`);
 
 	const rolloverArgs = { reason: "refresh model context" };
 	expect(rendered(rollover.renderCall(rolloverArgs, renderTheme, { isPartial: true }))).toEqual([

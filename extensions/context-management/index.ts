@@ -4,7 +4,7 @@ import { Container, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Compon
 import { Type } from "typebox";
 import { randomUUID } from "node:crypto";
 import { fitToolLine } from "../better-native-pi/core.js";
-import { BOLD, GREEN, MAGENTA, RED, RESET } from "../better-native-pi/render.js";
+import { CYAN, DIM, GREEN, MAGENTA, RED, RESET } from "../better-native-pi/render.js";
 
 const STATE_ENTRY = "context-management-state";
 const NOTE_ENTRY = "context-management-note";
@@ -300,7 +300,7 @@ function toolResultText(result: any): string {
 
 function toolHeadline(partial: boolean, error: boolean, text: string): string {
 	const mark = partial ? `${MAGENTA}•${RESET}` : error ? `${RED}•${RESET}` : `${GREEN}•${RESET}`;
-	return `${mark} ${BOLD}${text}${RESET}`;
+	return `${mark} ${text}`;
 }
 
 function expandedRows(text: string, width: number, theme: any): string[] {
@@ -331,16 +331,16 @@ function callState(kind: ContextToolKind, args: Record<string, unknown>): Render
 					? "Deleting context note"
 					: "Listing context notes";
 		return {
-			headline: [headline, key].filter(Boolean).join(" "),
+			headline: [headline, key ? `${CYAN}${key}${RESET}` : ""].filter(Boolean).join(" "),
 			branch: action === "write" ? preview || undefined : undefined,
 		};
 	}
 	if (kind === "history") {
 		const query = oneLine(args.query);
-		const limit = typeof args.limit === "number" ? `last ${args.limit}` : "";
+		const limit = typeof args.limit === "number" ? `last ${MAGENTA}${args.limit}${RESET}` : "";
 		return {
 			headline: query ? "Searching context history" : "Reading recent context history",
-			branch: [query, limit].filter(Boolean).join(" · ") || undefined,
+			branch: [query ? `${CYAN}${query}${RESET}` : "", limit].filter(Boolean).join(` ${DIM}·${RESET} `) || undefined,
 		};
 	}
 	if (kind === "remaining") return { headline: "Checking context remaining" };
@@ -370,25 +370,26 @@ function resultState(
 	if (kind === "notes") {
 		const action = typeof context.args?.action === "string" ? context.args.action : "list";
 		const key = oneLine(details.key ?? context.args?.key);
+		const coloredKey = key ? `${CYAN}${key}${RESET}` : "";
 		if (action === "list") {
 			const keys = Array.isArray(details.keys) ? details.keys.map(oneLine).filter(Boolean) : [];
 			return {
-				headline: keys.length ? `Listed ${keys.length} context note${keys.length === 1 ? "" : "s"}` : "No context notes saved",
-				branch: keys.join(", ") || undefined,
+				headline: keys.length ? `Listed ${GREEN}${keys.length}${RESET} context note${keys.length === 1 ? "" : "s"}` : "No context notes saved",
+				branch: keys.length ? keys.map((item: string) => `${CYAN}${item}${RESET}`).join(", ") : undefined,
 			};
 		}
 		if (action === "read" && details.found === false) {
-			return { headline: ["Context note not found", key].filter(Boolean).join(" "), branch: oneLine(text) || undefined, error: true };
+			return { headline: ["Context note not found", coloredKey].filter(Boolean).join(" "), branch: oneLine(text) || undefined, error: true };
 		}
 		if (action === "read") {
-			return { headline: ["Read context note", key].filter(Boolean).join(" "), branch: oneLine(text) || undefined, expandedText: text };
+			return { headline: ["Read context note", coloredKey].filter(Boolean).join(" "), branch: oneLine(text) || undefined, expandedText: text };
 		}
 		if (action === "delete") {
-			return { headline: ["Deleted context note", key].filter(Boolean).join(" ") };
+			return { headline: ["Deleted context note", coloredKey].filter(Boolean).join(" ") };
 		}
 		const content = typeof context.args?.content === "string" ? context.args.content : "";
 		return {
-			headline: ["Saved context note", key].filter(Boolean).join(" "),
+			headline: ["Saved context note", coloredKey].filter(Boolean).join(" "),
 			branch: oneLine(content) || undefined,
 			expandedText: content,
 		};
@@ -397,7 +398,7 @@ function resultState(
 	if (kind === "history") {
 		const matches = typeof details.matches === "number" ? Math.max(0, details.matches) : 0;
 		return {
-			headline: matches ? `Found ${matches} history match${matches === 1 ? "" : "es"}` : "No matching context history",
+			headline: matches ? `Found ${GREEN}${matches}${RESET} history match${matches === 1 ? "" : "es"}` : "No matching context history",
 			branch: matches ? oneLine(text.split("\n")[0]) : undefined,
 			expandedText: matches ? text : undefined,
 		};
@@ -405,9 +406,13 @@ function resultState(
 
 	if (kind === "remaining") {
 		if (details.known === false) return { headline: "Context usage unavailable", branch: oneLine(text) || undefined };
-		const percent = typeof details.percent === "number" ? `${details.percent.toFixed(1)}% used` : undefined;
-		const remaining = typeof details.remaining === "number" ? `${formatCount(details.remaining)} tokens remain` : undefined;
-		return { headline: "Checked context remaining", branch: [percent, remaining].filter(Boolean).join(" · ") || oneLine(text) };
+		const percent = typeof details.percent === "number"
+			? `${GREEN}${details.percent.toFixed(1)}%${RESET}${DIM} used${RESET}`
+			: undefined;
+		const remaining = typeof details.remaining === "number"
+			? `${CYAN}${formatCount(details.remaining)}${RESET}${DIM} tokens remain${RESET}`
+			: undefined;
+		return { headline: "Checked context remaining", branch: [percent, remaining].filter(Boolean).join(` ${DIM}·${RESET} `) || oneLine(text) };
 	}
 
 	return {
