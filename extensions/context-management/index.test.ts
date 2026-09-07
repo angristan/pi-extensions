@@ -246,12 +246,12 @@ test("renders every context tool as compact native-style blocks", async () => {
 	const noteArgs = { action: "write", key: "task", content: "Inspect warehouse seven\nThen verify output" };
 	expect(rendered(notes.renderCall(noteArgs, renderTheme, { isPartial: true }))).toEqual([
 		"• Saving context note",
-		"  └ task — Inspect warehouse seven Then verify output",
+		"  task · Inspect warehouse seven Then verify output",
 	]);
 	const noteResult = await notes.execute("note", noteArgs);
 	expect(rendered(notes.renderResult(noteResult, { isPartial: false, expanded: false }, renderTheme, { args: noteArgs, isError: false }))).toEqual([
 		"• Saved context note",
-		"  └ task — Inspect warehouse seven Then verify output",
+		"  task · Inspect warehouse seven Then verify output",
 	]);
 	const expandedNote = notes.renderResult(noteResult, { isPartial: false, expanded: true }, renderTheme, { args: noteArgs, isError: false }).render(36);
 	expect(expandedNote.every((line: string) => visibleWidth(line) <= 36)).toBe(true);
@@ -260,12 +260,12 @@ test("renders every context tool as compact native-style blocks", async () => {
 	const historyArgs = { query: "warehouse", limit: 5 };
 	expect(rendered(history.renderCall(historyArgs, renderTheme, { isPartial: true }))).toEqual([
 		"• Searching context history",
-		"  └ warehouse — last 5",
+		"  warehouse · last 5",
 	]);
 	const historyResult = await history.execute("history", historyArgs, undefined, undefined, harness.ctx);
 	expect(rendered(history.renderResult(historyResult, { isPartial: false, expanded: false }, renderTheme, { args: historyArgs, isError: false }))).toEqual([
 		"• Found 1 history match",
-		"  └ [u1 user] inspect warehouse seven",
+		"  [u1 user] inspect warehouse seven",
 	]);
 	const expandedHistory = history.renderResult(historyResult, { isPartial: false, expanded: true }, renderTheme, { args: historyArgs, isError: false }).render(32);
 	expect(expandedHistory.every((line: string) => visibleWidth(line) <= 32)).toBe(true);
@@ -281,18 +281,18 @@ test("renders every context tool as compact native-style blocks", async () => {
 	const remainingResult = await remaining.execute("remaining", {}, undefined, undefined, harness.ctx);
 	expect(rendered(remaining.renderResult(remainingResult, { isPartial: false, expanded: false }, renderTheme, { args: {}, isError: false }))).toEqual([
 		"• Checked context remaining",
-		"  └ 10.0% used — 90 tokens remain",
+		"  10.0% used · 90 tokens remain",
 	]);
 
 	const rolloverArgs = { reason: "refresh model context" };
 	expect(rendered(rollover.renderCall(rolloverArgs, renderTheme, { isPartial: true }))).toEqual([
 		"• Starting new context",
-		"  └ refresh model context",
+		"  refresh model context",
 	]);
 	const rolloverResult = await rollover.execute("rollover", rolloverArgs);
 	expect(rendered(rollover.renderResult(rolloverResult, { isPartial: false, expanded: false }, renderTheme, { args: rolloverArgs, isError: false }))).toEqual([
 		"• Started new context",
-		"  └ refresh model context — without conversation summary",
+		"  refresh model context · without conversation summary",
 	]);
 });
 
@@ -303,7 +303,7 @@ test("renders disabled and failed context operations distinctly", async () => {
 	const disabled = await notes.execute("disabled", { action: "list" });
 	expect(rendered(notes.renderResult(disabled, { isPartial: false, expanded: false }, renderTheme, { args: { action: "list" }, isError: false }))).toEqual([
 		"• Context note failed",
-		"  └ Context management is disabled for this session. Enable it with /context-management on.",
+		"  Context management is disabled for this session. Enable it with /context-management on.",
 	]);
 
 	const history = harness.tools.get("context_history");
@@ -314,6 +314,6 @@ test("renders disabled and failed context operations distinctly", async () => {
 		{ args: { query: "failure" }, isError: true },
 	))).toEqual([
 		"• Context history failed",
-		"  └ Provider failed badly",
+		"  Provider failed badly",
 	]);
 });

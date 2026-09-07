@@ -179,7 +179,7 @@ export function restoreContextManagementState(entries: readonly any[]): Restored
 // Tool rendering
 // ============================================================================
 
-const TOOL_BRANCH = "  └ ";
+const TOOL_BRANCH = "  ";
 const TOOL_INDENT = "    ";
 
 type ContextToolKind = "notes" | "history" | "remaining" | "rollover";
@@ -330,14 +330,14 @@ function callState(kind: ContextToolKind, args: Record<string, unknown>): Render
 				: action === "delete"
 					? "Deleting context note"
 					: "Listing context notes";
-		return { headline, branch: [key, preview].filter(Boolean).join(" — ") || undefined };
+		return { headline, branch: [key, preview].filter(Boolean).join(" · ") || undefined };
 	}
 	if (kind === "history") {
 		const query = oneLine(args.query);
 		const limit = typeof args.limit === "number" ? `last ${args.limit}` : "";
 		return {
 			headline: query ? "Searching context history" : "Reading recent context history",
-			branch: [query, limit].filter(Boolean).join(" — ") || undefined,
+			branch: [query, limit].filter(Boolean).join(" · ") || undefined,
 		};
 	}
 	if (kind === "remaining") return { headline: "Checking context remaining" };
@@ -378,11 +378,11 @@ function resultState(
 			return { headline: "Context note not found", branch: key || oneLine(text), error: true };
 		}
 		if (action === "read") {
-			return { headline: "Read context note", branch: [key, oneLine(text)].filter(Boolean).join(" — "), expandedText: text };
+			return { headline: "Read context note", branch: [key, oneLine(text)].filter(Boolean).join(" · "), expandedText: text };
 		}
 		if (action === "delete") return { headline: "Deleted context note", branch: key || undefined };
 		const content = typeof context.args?.content === "string" ? context.args.content : "";
-		return { headline: "Saved context note", branch: [key, oneLine(content)].filter(Boolean).join(" — "), expandedText: content };
+		return { headline: "Saved context note", branch: [key, oneLine(content)].filter(Boolean).join(" · "), expandedText: content };
 	}
 
 	if (kind === "history") {
@@ -398,12 +398,12 @@ function resultState(
 		if (details.known === false) return { headline: "Context usage unavailable", branch: oneLine(text) || undefined };
 		const percent = typeof details.percent === "number" ? `${details.percent.toFixed(1)}% used` : undefined;
 		const remaining = typeof details.remaining === "number" ? `${formatCount(details.remaining)} tokens remain` : undefined;
-		return { headline: "Checked context remaining", branch: [percent, remaining].filter(Boolean).join(" — ") || oneLine(text) };
+		return { headline: "Checked context remaining", branch: [percent, remaining].filter(Boolean).join(" · ") || oneLine(text) };
 	}
 
 	return {
 		headline: "Started new context",
-		branch: [oneLine(context.args?.reason), "without conversation summary"].filter(Boolean).join(" — "),
+		branch: [oneLine(context.args?.reason), "without conversation summary"].filter(Boolean).join(" · "),
 	};
 }
 
