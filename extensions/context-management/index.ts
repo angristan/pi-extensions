@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { keyHint, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Container, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { randomUUID } from "node:crypto";
@@ -196,6 +196,10 @@ interface ContextToolRenderOptions {
 	expanded?: boolean;
 }
 
+interface ContextManagementDependencies {
+	keyHint?: (binding: string, description: string) => string;
+}
+
 interface RenderedToolState {
 	headline: string;
 	branch?: string;
@@ -307,8 +311,22 @@ function expandedRows(text: string, width: number, theme: any): string[] {
 	const cleaned = sanitizeRenderedText(text).replace(/\s+$/g, "");
 	if (!cleaned) return [];
 	const available = Math.max(1, width - visibleWidth(TOOL_INDENT));
+	let first = true;
 	return cleaned.split("\n").flatMap((line) =>
-		wrapTextWithAnsi(theme.fg("dim", line || " "), available).map((row) => `${TOOL_INDENT}${row}`));
+		wrapTextWithAnsi(theme.fg("dim", line || " "), available).map((row) => {
+			const prefix = first ? TOOL_BRANCH : TOOL_INDENT;
+			first = false;
+			return `${prefix}${row}`;
+		}));
+}
+
+function hasHiddenExpandedText(state: RenderedToolState, width: number): boolean {
+	if (!state.expandedText) return false;
+	const text = sanitizeRenderedText(state.expandedText).replace(/\s+$/g, "");
+	if (!text) return false;
+	if (text.includes("\n")) return true;
+	if (!state.branch) return true;
+	return visibleWidth(`${TOOL_BRANCH}${state.branch}`) > Math.max(1, width);
 }
 
 function formatCount(value: unknown): string {
@@ -443,15 +461,24 @@ function renderContextToolResult(
 	options: ContextToolRenderOptions,
 	theme: any,
 	context: ContextToolRenderContext,
+	expandHint: string,
 ): Component {
 	if (options.isPartial) return new Container();
 	const component = contextToolLines(context);
 	const state = resultState(kind, result, context);
-	component.update((width) => [
-		toolHeadline(false, Boolean(state.error), state.headline),
-		...(state.branch ? [`${TOOL_BRANCH}${theme.fg(state.error ? "error" : "dim", state.branch)}`] : []),
-		...(options.expanded && state.expandedText ? expandedRows(state.expandedText, width, theme) : []),
-	]);
+	component.update((width) => {
+		const expanded = Boolean(options.expanded && state.expandedText);
+		const lines = [toolHeadline(false, Boolean(state.error), state.headline)];
+		if (expanded) {
+			lines.push(...expandedRows(state.expandedText!, width, theme));
+		} else if (state.branch) {
+			lines.push(`${TOOL_BRANCH}${theme.fg(state.error ? "error" : "dim", state.branch)}`);
+		}
+		if (!expanded && hasHiddenExpandedText(state, width)) {
+			lines.push(`${TOOL_INDENT}${theme.fg("dim", `↳ ${expandHint}`)}`);
+		}
+		return lines;
+	});
 	return component;
 }
 
@@ -461,7 +488,9 @@ function inactiveResult() {
 	});
 }
 
-export default function contextManagement(pi: ExtensionAPI) {
+export default function contextManagement(pi: ExtensionAPI, dependencies: ContextManagementDependencies = {}) {
+	const formatKeyHint = dependencies.keyHint ?? keyHint;
+
 	pi.registerEntryRenderer<RolloverEntryData>(ROLLOVER_ENTRY, (entry, _options, theme) => {
 		const data = entry.data ?? {};
 		const dim = (text: string) => theme.fg("dim", text);
@@ -562,7 +591,7 @@ export default function contextManagement(pi: ExtensionAPI) {
 		}),
 		renderShell: "self",
 		renderCall: (args, theme, context) => renderContextToolCall("notes", args, theme, context),
-		renderResult: (result, options, theme, context) => renderContextToolResult("notes", result, options, theme, context),
+		renderResult: (result, options, theme, context) => renderContextToolResult("notes", result, options, theme, context, formatKeyHint("app.tools.expand", "to expand")),
 		async execute(_toolCallId, params) {
 			if (!enabled) return inactiveResult();
 			if (params.action === "list") return textResult(noteKeyList(notes), { keys: [...notes.keys()].sort() });
@@ -598,7 +627,7 @@ export default function contextManagement(pi: ExtensionAPI) {
 		}),
 		renderShell: "self",
 		renderCall: (args, theme, context) => renderContextToolCall("history", args, theme, context),
-		renderResult: (result, options, theme, context) => renderContextToolResult("history", result, options, theme, context),
+		renderResult: (result, options, theme, context) => renderContextToolResult("history", result, options, theme, context, formatKeyHint("app.tools.expand", "to expand")),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			if (!enabled) return inactiveResult();
 			const rows = historyRows(ctx.sessionManager.getBranch(), params.query ?? "", params.limit ?? 8);
@@ -615,7 +644,7 @@ export default function contextManagement(pi: ExtensionAPI) {
 		parameters: Type.Object({}),
 		renderShell: "self",
 		renderCall: (args, theme, context) => renderContextToolCall("remaining", args, theme, context),
-		renderResult: (result, options, theme, context) => renderContextToolResult("remaining", result, options, theme, context),
+		renderResult: (result, options, theme, context) => renderContextToolResult("remaining", result, options, theme, context, formatKeyHint("app.tools.expand", "to expand")),
 		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
 			if (!enabled) return inactiveResult();
 			const usage = ctx.getContextUsage();
@@ -646,7 +675,7 @@ export default function contextManagement(pi: ExtensionAPI) {
 		executionMode: "sequential",
 		renderShell: "self",
 		renderCall: (args, theme, context) => renderContextToolCall("rollover", args, theme, context),
-		renderResult: (result, options, theme, context) => renderContextToolResult("rollover", result, options, theme, context),
+		renderResult: (result, options, theme, context) => renderContextToolResult("rollover", result, options, theme, context, formatKeyHint("app.tools.expand", "to expand")),
 		async execute() {
 			if (!enabled) return inactiveResult();
 			if (!rolloverPending) startRollover("tool");

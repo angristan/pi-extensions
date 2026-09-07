@@ -56,7 +56,9 @@ function makeHarness(initialEntries: any[] = []) {
 			messages.push({ role: "custom", timestamp: nextId, ...message });
 		},
 	};
-	contextManagement(pi as any);
+	contextManagement(pi as any, {
+		keyHint: (_binding, description) => `Ctrl+O ${description}`,
+	});
 
 	return {
 		activeTools,
@@ -254,13 +256,19 @@ test("renders every context tool as compact native-style blocks", async () => {
 	expect(rendered(styledNote)).toEqual([
 		"• Saved context note task",
 		"  └ Inspect warehouse seven Then verify output",
+		"    ↳ Ctrl+O to expand",
 	]);
 	const styledNoteText = styledNote.render(120).join("\n");
 	expect(styledNoteText).toContain(`${CYAN}task${RESET}`);
 	expect(styledNoteText).not.toContain(BOLD);
-	const expandedNote = notes.renderResult(noteResult, { isPartial: false, expanded: true }, renderTheme, { args: noteArgs, isError: false }).render(36);
+	const expandedNote = rendered(notes.renderResult(noteResult, { isPartial: false, expanded: true }, renderTheme, { args: noteArgs, isError: false }), 36);
 	expect(expandedNote.every((line: string) => visibleWidth(line) <= 36)).toBe(true);
-	expect(expandedNote.join("\n")).toContain("Then verify output");
+	expect(expandedNote).toEqual([
+		"• Saved context note task",
+		"  └ Inspect warehouse seven",
+		"    Then verify output",
+	]);
+	expect(expandedNote.join("\n")).not.toContain("Ctrl+O");
 
 	const longNoteArgs = {
 		action: "write",
@@ -277,6 +285,7 @@ test("renders every context tool as compact native-style blocks", async () => {
 	expect(narrowNote[0]).toContain("Saved context note");
 	expect(narrowNote[1]?.trimStart()).toStartWith("└ Context management");
 	expect(narrowNote[1]?.trimStart()).not.toStartWith("·");
+	expect(narrowNote.at(-1)).toContain("Ctrl+O to expand");
 
 	const historyArgs = { query: "warehouse", limit: 5 };
 	expect(rendered(history.renderCall(historyArgs, renderTheme, { isPartial: true }))).toEqual([
@@ -293,6 +302,27 @@ test("renders every context tool as compact native-style blocks", async () => {
 	const expandedHistory = history.renderResult(historyResult, { isPartial: false, expanded: true }, renderTheme, { args: historyArgs, isError: false }).render(32);
 	expect(expandedHistory.every((line: string) => visibleWidth(line) <= 32)).toBe(true);
 	expect(stripAnsi(expandedHistory.join(" ")).replace(/\s+/g, " ")).toContain("inspect warehouse seven");
+
+	const multiHistory = {
+		content: [{ type: "text", text: "[u1 user] first match\n\n[a2 assistant] second match" }],
+		details: { matches: 2 },
+	};
+	const collapsedMultiHistory = rendered(history.renderResult(
+		multiHistory,
+		{ isPartial: false, expanded: false },
+		renderTheme,
+		{ args: historyArgs, isError: false },
+	));
+	expect(collapsedMultiHistory.at(-1)).toContain("Ctrl+O to expand");
+	const expandedMultiHistory = rendered(history.renderResult(
+		multiHistory,
+		{ isPartial: false, expanded: true },
+		renderTheme,
+		{ args: historyArgs, isError: false },
+	));
+	expect(expandedMultiHistory.join("\n")).toContain("second match");
+	expect(expandedMultiHistory.join("\n")).not.toContain("Ctrl+O");
+
 	const emptyHistory = await history.execute("empty", { query: "missing", limit: 5 }, undefined, undefined, harness.ctx);
 	expect(rendered(history.renderResult(emptyHistory, { isPartial: false, expanded: false }, renderTheme, { args: { query: "missing", limit: 5 }, isError: false }))).toEqual([
 		"• No matching context history",
