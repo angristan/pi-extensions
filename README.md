@@ -1,7 +1,7 @@
 # pi-extensions
 
 A collection of [pi](https://github.com/earendil-works/pi-coding-agent) TUI
-extensions: nicer tool-block rendering, context telemetry, plan tracking,
+extensions: nicer tool-block rendering, context telemetry, goal/plan tracking,
 background jobs, image sidecars, working timers, and quality-of-life features for
 the terminal UI.
 
@@ -62,7 +62,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 |---|---|
 | [`context-inspector`](extensions/context-inspector/) | Inspect where your context window is being spent |
 | [`edit-summary`](extensions/edit-summary/) | Show a passive overlay with net file changes for the current or last agent turn |
-| [`goal`](extensions/goal/) | Disabled by default; source retained for investigation |
+| [`goal`](extensions/goal/) | Track an explicit objective for the session |
 | [`plan-progress`](extensions/plan-progress/) | Track flat or nested plans with derived group progress in a collapsible overlay |
 | [`questions`](extensions/questions/) | Ask structured questions, preserve answers, and report pending input as blocked to Herdr |
 | [`side-chat`](extensions/side-chat/) | An ephemeral, read-only side question about the current conversation, without changing the main transcript |
