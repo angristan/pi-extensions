@@ -245,17 +245,33 @@ test("renders every context tool as compact native-style blocks", async () => {
 
 	const noteArgs = { action: "write", key: "task", content: "Inspect warehouse seven\nThen verify output" };
 	expect(rendered(notes.renderCall(noteArgs, renderTheme, { isPartial: true }))).toEqual([
-		"• Saving context note",
-		"  task · Inspect warehouse seven Then verify output",
+		"• Saving context note task",
+		"  Inspect warehouse seven Then verify output",
 	]);
 	const noteResult = await notes.execute("note", noteArgs);
 	expect(rendered(notes.renderResult(noteResult, { isPartial: false, expanded: false }, renderTheme, { args: noteArgs, isError: false }))).toEqual([
-		"• Saved context note",
-		"  task · Inspect warehouse seven Then verify output",
+		"• Saved context note task",
+		"  Inspect warehouse seven Then verify output",
 	]);
 	const expandedNote = notes.renderResult(noteResult, { isPartial: false, expanded: true }, renderTheme, { args: noteArgs, isError: false }).render(36);
 	expect(expandedNote.every((line: string) => visibleWidth(line) <= 36)).toBe(true);
 	expect(expandedNote.join("\n")).toContain("Then verify output");
+
+	const longNoteArgs = {
+		action: "write",
+		key: "session-context-management",
+		content: "Context management is enabled for this Pi session and remains active after reload.",
+	};
+	const longNoteResult = await notes.execute("long-note", longNoteArgs);
+	const narrowNote = rendered(notes.renderResult(
+		longNoteResult,
+		{ isPartial: false, expanded: false },
+		renderTheme,
+		{ args: longNoteArgs, isError: false },
+	), 48);
+	expect(narrowNote[0]).toContain("Saved context note");
+	expect(narrowNote[1]?.trimStart()).toStartWith("Context management");
+	expect(narrowNote[1]?.trimStart()).not.toStartWith("·");
 
 	const historyArgs = { query: "warehouse", limit: 5 };
 	expect(rendered(history.renderCall(historyArgs, renderTheme, { isPartial: true }))).toEqual([

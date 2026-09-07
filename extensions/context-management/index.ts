@@ -330,7 +330,10 @@ function callState(kind: ContextToolKind, args: Record<string, unknown>): Render
 				: action === "delete"
 					? "Deleting context note"
 					: "Listing context notes";
-		return { headline, branch: [key, preview].filter(Boolean).join(" · ") || undefined };
+		return {
+			headline: [headline, key].filter(Boolean).join(" "),
+			branch: action === "write" ? preview || undefined : undefined,
+		};
 	}
 	if (kind === "history") {
 		const query = oneLine(args.query);
@@ -375,14 +378,20 @@ function resultState(
 			};
 		}
 		if (action === "read" && details.found === false) {
-			return { headline: "Context note not found", branch: key || oneLine(text), error: true };
+			return { headline: ["Context note not found", key].filter(Boolean).join(" "), branch: oneLine(text) || undefined, error: true };
 		}
 		if (action === "read") {
-			return { headline: "Read context note", branch: [key, oneLine(text)].filter(Boolean).join(" · "), expandedText: text };
+			return { headline: ["Read context note", key].filter(Boolean).join(" "), branch: oneLine(text) || undefined, expandedText: text };
 		}
-		if (action === "delete") return { headline: "Deleted context note", branch: key || undefined };
+		if (action === "delete") {
+			return { headline: ["Deleted context note", key].filter(Boolean).join(" ") };
+		}
 		const content = typeof context.args?.content === "string" ? context.args.content : "";
-		return { headline: "Saved context note", branch: [key, oneLine(content)].filter(Boolean).join(" · "), expandedText: content };
+		return {
+			headline: ["Saved context note", key].filter(Boolean).join(" "),
+			branch: oneLine(content) || undefined,
+			expandedText: content,
+		};
 	}
 
 	if (kind === "history") {
