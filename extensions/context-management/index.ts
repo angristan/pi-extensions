@@ -1,7 +1,10 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Container, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { randomUUID } from "node:crypto";
+import { fitToolLine } from "../better-native-pi/core.js";
+import { BOLD, GREEN, MAGENTA, RED, RESET } from "../better-native-pi/render.js";
 
 const STATE_ENTRY = "context-management-state";
 const NOTE_ENTRY = "context-management-note";
@@ -171,6 +174,232 @@ export function restoreContextManagementState(entries: readonly any[]): Restored
 	return { enabled, notes, rolloverId, reminded };
 }
 
+// ============================================================================
+// Tool rendering
+// ============================================================================
+
+const TOOL_BRANCH = "  └ ";
+const TOOL_INDENT = "    ";
+
+type ContextToolKind = "notes" | "history" | "remaining" | "rollover";
+
+interface ContextToolRenderContext {
+	lastComponent?: unknown;
+	isPartial?: boolean;
+	isError?: boolean;
+	args?: Record<string, unknown>;
+}
+
+interface ContextToolRenderOptions {
+	isPartial?: boolean;
+	expanded?: boolean;
+}
+
+interface RenderedToolState {
+	headline: string;
+	branch?: string;
+	expandedText?: string;
+	error?: boolean;
+}
+
+class ContextToolLines implements Component {
+	private cachedWidth?: number;
+	private cachedLines?: string[];
+
+	constructor(private source: (width: number) => string[] = () => []) {}
+
+	update(source: (width: number) => string[]): void {
+		this.source = source;
+		this.invalidate();
+	}
+
+	invalidate(): void {
+		this.cachedWidth = undefined;
+		this.cachedLines = undefined;
+	}
+
+	render(width: number): string[] {
+		const max = Math.max(1, width);
+		if (this.cachedLines && this.cachedWidth === max) return this.cachedLines;
+		this.cachedLines = this.source(max).flatMap((line) =>
+			visibleWidth(line) <= max ? [line] : [fitToolLine(line, max)]);
+		this.cachedWidth = max;
+		return this.cachedLines;
+	}
+}
+
+function contextToolLines(context: ContextToolRenderContext): ContextToolLines {
+	return context.lastComponent instanceof ContextToolLines ? context.lastComponent : new ContextToolLines();
+}
+
+function sanitizeRenderedText(text: string): string {
+	return text
+		.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+		.replace(/\x1b[P^_X][\s\S]*?(?:\x1b\\|\x07)/g, "")
+		.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+		.replace(/\x1b[@-_]/g, "")
+		.replace(/\r\n?/g, "\n")
+		.replace(/\t/g, "    ")
+		.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+}
+
+function oneLine(value: unknown): string {
+	return sanitizeRenderedText(typeof value === "string" ? value : "").replace(/\s+/g, " ").trim();
+}
+
+function toolResultText(result: any): string {
+	const content = result?.content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.filter((item: any) => item?.type === "text" && typeof item.text === "string")
+		.map((item: any) => item.text)
+		.join("\n")
+		.trim();
+}
+
+function toolHeadline(partial: boolean, error: boolean, text: string): string {
+	const mark = partial ? `${MAGENTA}•${RESET}` : error ? `${RED}•${RESET}` : `${GREEN}•${RESET}`;
+	return `${mark} ${BOLD}${text}${RESET}`;
+}
+
+function expandedRows(text: string, width: number, theme: any): string[] {
+	const cleaned = sanitizeRenderedText(text).replace(/\s+$/g, "");
+	if (!cleaned) return [];
+	const available = Math.max(1, width - visibleWidth(TOOL_INDENT));
+	return cleaned.split("\n").flatMap((line) =>
+		wrapTextWithAnsi(theme.fg("dim", line || " "), available).map((row) => `${TOOL_INDENT}${row}`));
+}
+
+function formatCount(value: unknown): string {
+	const count = typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
+	if (count < 1_000) return String(count);
+	if (count < 1_000_000) return `${(count / 1_000).toFixed(count < 10_000 ? 1 : 0)}K`;
+	return `${(count / 1_000_000).toFixed(count < 10_000_000 ? 1 : 0)}M`;
+}
+
+function callState(kind: ContextToolKind, args: Record<string, unknown>): RenderedToolState {
+	if (kind === "notes") {
+		const action = typeof args.action === "string" ? args.action : "list";
+		const key = oneLine(args.key);
+		const preview = oneLine(args.content);
+		const headline = action === "read"
+			? "Reading context note"
+			: action === "write"
+				? "Saving context note"
+				: action === "delete"
+					? "Deleting context note"
+					: "Listing context notes";
+		return { headline, branch: [key, preview].filter(Boolean).join(" · ") || undefined };
+	}
+	if (kind === "history") {
+		const query = oneLine(args.query);
+		const limit = typeof args.limit === "number" ? `last ${args.limit}` : "";
+		return {
+			headline: query ? "Searching context history" : "Reading recent context history",
+			branch: [query, limit].filter(Boolean).join(" · ") || undefined,
+		};
+	}
+	if (kind === "remaining") return { headline: "Checking context remaining" };
+	return { headline: "Starting new context", branch: oneLine(args.reason) || undefined };
+}
+
+function failureState(kind: ContextToolKind, text: string): RenderedToolState {
+	const label = kind === "notes"
+		? "Context note failed"
+		: kind === "history"
+			? "Context history failed"
+			: kind === "remaining"
+				? "Context check failed"
+				: "Context rollover failed";
+	return { headline: label, branch: oneLine(text) || "Unknown error", expandedText: text, error: true };
+}
+
+function resultState(
+	kind: ContextToolKind,
+	result: any,
+	context: ContextToolRenderContext,
+): RenderedToolState {
+	const details = result?.details ?? {};
+	const text = toolResultText(result);
+	if (context.isError || details.enabled === false || details.ok === false) return failureState(kind, text);
+
+	if (kind === "notes") {
+		const action = typeof context.args?.action === "string" ? context.args.action : "list";
+		const key = oneLine(details.key ?? context.args?.key);
+		if (action === "list") {
+			const keys = Array.isArray(details.keys) ? details.keys.map(oneLine).filter(Boolean) : [];
+			return {
+				headline: keys.length ? `Listed ${keys.length} context note${keys.length === 1 ? "" : "s"}` : "No context notes saved",
+				branch: keys.join(", ") || undefined,
+			};
+		}
+		if (action === "read" && details.found === false) {
+			return { headline: "Context note not found", branch: key || oneLine(text), error: true };
+		}
+		if (action === "read") {
+			return { headline: "Read context note", branch: [key, oneLine(text)].filter(Boolean).join(" · "), expandedText: text };
+		}
+		if (action === "delete") return { headline: "Deleted context note", branch: key || undefined };
+		const content = typeof context.args?.content === "string" ? context.args.content : "";
+		return { headline: "Saved context note", branch: [key, oneLine(content)].filter(Boolean).join(" · "), expandedText: content };
+	}
+
+	if (kind === "history") {
+		const matches = typeof details.matches === "number" ? Math.max(0, details.matches) : 0;
+		return {
+			headline: matches ? `Found ${matches} history match${matches === 1 ? "" : "es"}` : "No matching context history",
+			branch: matches ? oneLine(text.split("\n")[0]) : undefined,
+			expandedText: matches ? text : undefined,
+		};
+	}
+
+	if (kind === "remaining") {
+		if (details.known === false) return { headline: "Context usage unavailable", branch: oneLine(text) || undefined };
+		const percent = typeof details.percent === "number" ? `${details.percent.toFixed(1)}% used` : undefined;
+		const remaining = typeof details.remaining === "number" ? `${formatCount(details.remaining)} tokens remain` : undefined;
+		return { headline: "Checked context remaining", branch: [percent, remaining].filter(Boolean).join(" · ") || oneLine(text) };
+	}
+
+	return {
+		headline: "Started new context",
+		branch: [oneLine(context.args?.reason), "without conversation summary"].filter(Boolean).join(" · "),
+	};
+}
+
+function renderContextToolCall(
+	kind: ContextToolKind,
+	args: Record<string, unknown>,
+	theme: any,
+	context: ContextToolRenderContext,
+): Component {
+	if (!context.isPartial) return new Container();
+	const component = contextToolLines(context);
+	const state = callState(kind, args ?? {});
+	component.update(() => [
+		toolHeadline(true, false, state.headline),
+		...(state.branch ? [`${TOOL_BRANCH}${theme.fg("dim", state.branch)}`] : []),
+	]);
+	return component;
+}
+
+function renderContextToolResult(
+	kind: ContextToolKind,
+	result: any,
+	options: ContextToolRenderOptions,
+	theme: any,
+	context: ContextToolRenderContext,
+): Component {
+	if (options.isPartial) return new Container();
+	const component = contextToolLines(context);
+	const state = resultState(kind, result, context);
+	component.update((width) => [
+		toolHeadline(false, Boolean(state.error), state.headline),
+		...(state.branch ? [`${TOOL_BRANCH}${theme.fg(state.error ? "error" : "dim", state.branch)}`] : []),
+		...(options.expanded && state.expandedText ? expandedRows(state.expandedText, width, theme) : []),
+	]);
+	return component;
+}
+
 function inactiveResult() {
 	return textResult("Context management is disabled for this session. Enable it with /context-management on.", {
 		enabled: false,
@@ -270,6 +499,9 @@ export default function contextManagement(pi: ExtensionAPI) {
 			key: Type.Optional(Type.String({ description: "Stable note key", maxLength: 80 })),
 			content: Type.Optional(Type.String({ description: "Complete replacement content for a written note", maxLength: 20_000 })),
 		}),
+		renderShell: "self",
+		renderCall: (args, theme, context) => renderContextToolCall("notes", args, theme, context),
+		renderResult: (result, options, theme, context) => renderContextToolResult("notes", result, options, theme, context),
 		async execute(_toolCallId, params) {
 			if (!enabled) return inactiveResult();
 			if (params.action === "list") return textResult(noteKeyList(notes), { keys: [...notes.keys()].sort() });
@@ -303,6 +535,9 @@ export default function contextManagement(pi: ExtensionAPI) {
 			query: Type.Optional(Type.String({ description: "Case-insensitive text query; omit for recent messages", maxLength: 500 })),
 			limit: Type.Optional(Type.Integer({ description: "Maximum matches", minimum: 1, maximum: 20 })),
 		}),
+		renderShell: "self",
+		renderCall: (args, theme, context) => renderContextToolCall("history", args, theme, context),
+		renderResult: (result, options, theme, context) => renderContextToolResult("history", result, options, theme, context),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			if (!enabled) return inactiveResult();
 			const rows = historyRows(ctx.sessionManager.getBranch(), params.query ?? "", params.limit ?? 8);
@@ -317,6 +552,9 @@ export default function contextManagement(pi: ExtensionAPI) {
 		label: "Context remaining",
 		description: "Report the current model context usage and remaining token estimate.",
 		parameters: Type.Object({}),
+		renderShell: "self",
+		renderCall: (args, theme, context) => renderContextToolCall("remaining", args, theme, context),
+		renderResult: (result, options, theme, context) => renderContextToolResult("remaining", result, options, theme, context),
 		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
 			if (!enabled) return inactiveResult();
 			const usage = ctx.getContextUsage();
@@ -345,6 +583,9 @@ export default function contextManagement(pi: ExtensionAPI) {
 			reason: Type.Optional(Type.String({ description: "Short reason for the rollover", maxLength: 200 })),
 		}),
 		executionMode: "sequential",
+		renderShell: "self",
+		renderCall: (args, theme, context) => renderContextToolCall("rollover", args, theme, context),
+		renderResult: (result, options, theme, context) => renderContextToolResult("rollover", result, options, theme, context),
 		async execute() {
 			if (!enabled) return inactiveResult();
 			if (!rolloverPending) startRollover("tool");

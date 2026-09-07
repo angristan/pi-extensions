@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import contextManagement, {
 	filterContextAfterRollover,
 	REMINDER_PERCENT,
@@ -74,6 +75,18 @@ function makeHarness(initialEntries: any[] = []) {
 }
 
 const toolNames = ["context_notes", "context_history", "get_context_remaining", "new_context"];
+const renderTheme = {
+	fg: (_token: string, text: string) => text,
+	bold: (text: string) => text,
+};
+
+function stripAnsi(text: string): string {
+	return text.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
+}
+
+function rendered(component: any, width = 120): string[] {
+	return component.render(width).map(stripAnsi);
+}
 
 async function enable(harness: ReturnType<typeof makeHarness>) {
 	await harness.emit("session_start", { reason: "startup" });
@@ -201,4 +214,90 @@ test("manual and overflow compaction keep Pi's native behavior", async () => {
 	const event = { branchEntries: [], preparation: { firstKeptEntryId: "x", tokensBefore: 10 } };
 	expect(await harness.emit("session_before_compact", { ...event, reason: "manual" })).toBeUndefined();
 	expect(await harness.emit("session_before_compact", { ...event, reason: "overflow" })).toBeUndefined();
+});
+
+test("renders every context tool as compact native-style blocks", async () => {
+	const harness = makeHarness([
+		{ id: "u1", type: "message", message: { role: "user", content: "inspect warehouse seven" } },
+	]);
+	await enable(harness);
+	const notes = harness.tools.get("context_notes");
+	const history = harness.tools.get("context_history");
+	const remaining = harness.tools.get("get_context_remaining");
+	const rollover = harness.tools.get("new_context");
+	for (const tool of [notes, history, remaining, rollover]) expect(tool.renderShell).toBe("self");
+
+	const noteArgs = { action: "write", key: "task", content: "Inspect warehouse seven\nThen verify output" };
+	expect(rendered(notes.renderCall(noteArgs, renderTheme, { isPartial: true }))).toEqual([
+		"• Saving context note",
+		"  └ task · Inspect warehouse seven Then verify output",
+	]);
+	const noteResult = await notes.execute("note", noteArgs);
+	expect(rendered(notes.renderResult(noteResult, { isPartial: false, expanded: false }, renderTheme, { args: noteArgs, isError: false }))).toEqual([
+		"• Saved context note",
+		"  └ task · Inspect warehouse seven Then verify output",
+	]);
+	const expandedNote = notes.renderResult(noteResult, { isPartial: false, expanded: true }, renderTheme, { args: noteArgs, isError: false }).render(36);
+	expect(expandedNote.every((line: string) => visibleWidth(line) <= 36)).toBe(true);
+	expect(expandedNote.join("\n")).toContain("Then verify output");
+
+	const historyArgs = { query: "warehouse", limit: 5 };
+	expect(rendered(history.renderCall(historyArgs, renderTheme, { isPartial: true }))).toEqual([
+		"• Searching context history",
+		"  └ warehouse · last 5",
+	]);
+	const historyResult = await history.execute("history", historyArgs, undefined, undefined, harness.ctx);
+	expect(rendered(history.renderResult(historyResult, { isPartial: false, expanded: false }, renderTheme, { args: historyArgs, isError: false }))).toEqual([
+		"• Found 1 history match",
+		"  └ [u1 user] inspect warehouse seven",
+	]);
+	const expandedHistory = history.renderResult(historyResult, { isPartial: false, expanded: true }, renderTheme, { args: historyArgs, isError: false }).render(32);
+	expect(expandedHistory.every((line: string) => visibleWidth(line) <= 32)).toBe(true);
+	expect(stripAnsi(expandedHistory.join(" ")).replace(/\s+/g, " ")).toContain("inspect warehouse seven");
+	const emptyHistory = await history.execute("empty", { query: "missing", limit: 5 }, undefined, undefined, harness.ctx);
+	expect(rendered(history.renderResult(emptyHistory, { isPartial: false, expanded: false }, renderTheme, { args: { query: "missing", limit: 5 }, isError: false }))).toEqual([
+		"• No matching context history",
+	]);
+
+	expect(rendered(remaining.renderCall({}, renderTheme, { isPartial: true }))).toEqual([
+		"• Checking context remaining",
+	]);
+	const remainingResult = await remaining.execute("remaining", {}, undefined, undefined, harness.ctx);
+	expect(rendered(remaining.renderResult(remainingResult, { isPartial: false, expanded: false }, renderTheme, { args: {}, isError: false }))).toEqual([
+		"• Checked context remaining",
+		"  └ 10.0% used · 90 tokens remain",
+	]);
+
+	const rolloverArgs = { reason: "refresh model context" };
+	expect(rendered(rollover.renderCall(rolloverArgs, renderTheme, { isPartial: true }))).toEqual([
+		"• Starting new context",
+		"  └ refresh model context",
+	]);
+	const rolloverResult = await rollover.execute("rollover", rolloverArgs);
+	expect(rendered(rollover.renderResult(rolloverResult, { isPartial: false, expanded: false }, renderTheme, { args: rolloverArgs, isError: false }))).toEqual([
+		"• Started new context",
+		"  └ refresh model context · without conversation summary",
+	]);
+});
+
+test("renders disabled and failed context operations distinctly", async () => {
+	const harness = makeHarness();
+	await harness.emit("session_start", { reason: "startup" });
+	const notes = harness.tools.get("context_notes");
+	const disabled = await notes.execute("disabled", { action: "list" });
+	expect(rendered(notes.renderResult(disabled, { isPartial: false, expanded: false }, renderTheme, { args: { action: "list" }, isError: false }))).toEqual([
+		"• Context note failed",
+		"  └ Context management is disabled for this session. Enable it with /context-management on.",
+	]);
+
+	const history = harness.tools.get("context_history");
+	expect(rendered(history.renderResult(
+		{ content: [{ type: "text", text: "Provider failed\u001b[31m badly\u001b[0m" }] },
+		{ isPartial: false, expanded: false },
+		renderTheme,
+		{ args: { query: "failure" }, isError: true },
+	))).toEqual([
+		"• Context history failed",
+		"  └ Provider failed badly",
+	]);
 });

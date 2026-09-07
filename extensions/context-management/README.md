@@ -61,4 +61,5 @@ continuation still depends on it writing useful notes before rollover.
 ## Dependencies
 
 - **Runtime:** Pi extension APIs only.
+- **Depends on extensions:** `better-native-pi` for shared compact tool rendering.
 - **External services:** None.
