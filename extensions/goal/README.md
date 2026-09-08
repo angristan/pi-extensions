@@ -82,9 +82,9 @@ resuming the older objective.
 - **Interruption → pause** — if you abort a turn (Esc), the goal auto-pauses
   so it doesn't immediately resume on the next boundary.
 - **User request → reconciliation** — user-originated input marks reconciliation as
-  pending. `goal_complete` and `goal_block` reject terminal transitions until the
-  agent calls `goal_reconcile`. An unresolved or invalid reconciliation pauses
-  the loop at the next safe boundary.
+  pending. `goal_complete`, `goal_block`, `goal_resume`, and replacement through
+  `goal_set` reject the transition until the agent calls `goal_reconcile`. An
+  unresolved or invalid reconciliation pauses the loop at the next safe boundary.
 - **Provider error → pause** — if a turn ends with a terminal provider error, the
   goal is paused at the next safe idle boundary instead of retry-looping.
   Usage/rate/quota errors get a specific resume hint. Reopening the session offers
@@ -138,10 +138,12 @@ All sections except `# Goal` are optional.
   completed goal can be overwritten freely. The tool refuses to silently
   overwrite an active/paused/blocked goal and asks the caller to re-call with
   `replace: true`, so an in-progress goal cannot be silently redefined around
-  an easier task.
+  an easier task. It also refuses replacement while user-request reconciliation
+  is pending.
 - **`goal_resume`** — always available; reactivates the existing paused or
   blocked goal and restarts auto-continuation without replacing its objective,
-  validation criteria, identity, timing, or continuation history. This is the
+  validation criteria, identity, timing, or continuation history. It rejects an
+  already-active goal, including one awaiting reconciliation. This is the
   agent-callable equivalent of `/goal resume`. Reopening a session with a paused
   or blocked goal also offers this action in the UI.
 - **`goal_clear`** — always available; retires an obsolete, superseded, cancelled,

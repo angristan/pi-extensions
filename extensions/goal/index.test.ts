@@ -523,6 +523,15 @@ test("unreconciled user input pauses before another continuation", async () => {
 
 	const prematureCompletion = await h.tools.goal_complete.execute("complete", {}, undefined, undefined, h.ctx);
 	expect(prematureCompletion.details).toMatchObject({ ok: false, reason: "reconciliation-required" });
+	const resumeBypass = await h.tools.goal_resume.execute("resume", {}, undefined, undefined, h.ctx);
+	expect(resumeBypass.details).toMatchObject({ ok: false, reason: "reconciliation-required" });
+	const replacementBypass = await h.tools.goal_set.execute("replace", {
+		objective: "replacement goal",
+		validation: [],
+		replace: true,
+	}, undefined, undefined, h.ctx);
+	expect(replacementBypass.details).toMatchObject({ ok: false, reason: "reconciliation-required" });
+	expect(latestGoalState(h).objective).toBe("validate 256 hosts");
 
 	await emit(h, "agent_settled");
 	const state = latestGoalState(h);

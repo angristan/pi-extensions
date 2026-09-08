@@ -1712,14 +1712,32 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 		renderCall: renderGoalResumeCall,
 		renderResult: renderGoalResumeResult,
 		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-			const objective = state?.objective;
-			const previousStatus = await resumeGoal(ctx);
-			if (previousStatus === undefined || !objective) {
+			if (!state) {
 				return {
 					content: [{ type: "text", text: "No session goal to resume." }],
 					details: { ok: false, reason: "no-goal" },
 				};
 			}
+			if (state.status === "active") {
+				const reconciliationRequired = state.reconciliationPending === true;
+				return {
+					content: [{
+						type: "text",
+						text: reconciliationRequired
+							? "The goal is active and the latest user request still requires goal_reconcile. goal_resume cannot clear that requirement."
+							: "The session goal is already active.",
+					}],
+					details: { ok: false, reason: reconciliationRequired ? "reconciliation-required" : "goal-active" },
+				};
+			}
+			if (state.status === "complete") {
+				return {
+					content: [{ type: "text", text: "A completed goal cannot be resumed. Set or edit a goal instead." }],
+					details: { ok: false, reason: "goal-complete" },
+				};
+			}
+			const objective = state.objective;
+			const previousStatus = await resumeGoal(ctx);
 			return {
 				content: [{ type: "text", text: `Goal resumed.\nObjective: ${objective}` }],
 				details: { ok: true, resumed: true, previousStatus },
@@ -1777,6 +1795,12 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 		renderCall: renderGoalSetCall,
 		renderResult: renderGoalSetResult,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			if (state?.status === "active" && state.reconciliationPending) {
+				return {
+					content: [{ type: "text", text: "The latest user request must be reconciled with goal_reconcile before setting or replacing a goal." }],
+					details: { ok: false, reason: "reconciliation-required" },
+				};
+			}
 			const objective = (typeof params.objective === "string" ? params.objective : "").trim();
 			if (!objective) {
 				return {
