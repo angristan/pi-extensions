@@ -397,7 +397,7 @@ test("replacing an unfinished goal requires confirmation", async () => {
 	expect(latestGoalState(h).objective).toBe("replacement goal");
 });
 
-test("goal tools stay active after their first session activation", async () => {
+test("goal_reconcile is active only while reconciliation is pending", async () => {
 	const h = makeHarness();
 	await emit(h, "session_start");
 	for (const name of ["goal_complete", "goal_block", "goal_reconcile"]) {
@@ -409,20 +409,31 @@ test("goal tools stay active after their first session activation", async () => 
 	expect(stale.details).toMatchObject({ ok: false, ignored: true, reason: "no-goal" });
 
 	await h.commands.goal.handler("active goal", h.ctx);
-	for (const name of ["goal_complete", "goal_block", "goal_reconcile"]) {
-		expect(h.activeTools.has(name)).toBe(true);
-	}
+	expect(h.activeTools.has("goal_complete")).toBe(true);
+	expect(h.activeTools.has("goal_block")).toBe(true);
+	expect(h.activeTools.has("goal_reconcile")).toBe(false);
+
+	const staleReconciliation = await h.tools.goal_reconcile.execute("stale", { action: "keep" }, undefined, undefined, h.ctx);
+	expect(staleReconciliation.content[0].text).toBe("");
+	expect(staleReconciliation.details).toMatchObject({ ok: false, ignored: true, reason: "no-pending-reconciliation" });
+	const hiddenStaleBlock = h.tools.goal_reconcile.renderResult(staleReconciliation, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
+	expect(renderBlock(hiddenStaleBlock)).toEqual([]);
+
+	await emit(h, "input", { source: "interactive", text: "continue the same goal" });
+	expect(h.activeTools.has("goal_reconcile")).toBe(true);
+	await h.tools.goal_reconcile.execute("reconcile", { action: "keep" }, undefined, undefined, h.ctx);
+	expect(h.activeTools.has("goal_reconcile")).toBe(false);
 
 	await h.tools.goal_complete.execute("complete", {}, undefined, undefined, h.ctx);
-	for (const name of ["goal_complete", "goal_block", "goal_reconcile"]) {
-		expect(h.activeTools.has(name)).toBe(true);
-	}
+	expect(h.activeTools.has("goal_complete")).toBe(true);
+	expect(h.activeTools.has("goal_block")).toBe(true);
+	expect(h.activeTools.has("goal_reconcile")).toBe(false);
 
 	const contextsBeforeClear = sentMessages(h, "goal-context").length;
 	await h.commands.goal.handler("clear", h.ctx);
-	for (const name of ["goal_complete", "goal_block", "goal_reconcile"]) {
-		expect(h.activeTools.has(name)).toBe(true);
-	}
+	expect(h.activeTools.has("goal_complete")).toBe(true);
+	expect(h.activeTools.has("goal_block")).toBe(true);
+	expect(h.activeTools.has("goal_reconcile")).toBe(false);
 	expect(sentMessages(h, "goal-context")).toHaveLength(contextsBeforeClear + 1);
 	expect(sentMessages(h, "goal-context").at(-1)!.message).toMatchObject({ details: { status: "cleared" } });
 });

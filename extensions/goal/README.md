@@ -149,10 +149,10 @@ All sections except `# Goal` are optional.
 - **`goal_clear`** — always available; retires an obsolete, superseded, cancelled,
   or unrelated goal without deleting its append-only history. It is not a
   substitute for `goal_complete` when the objective was achieved.
-- **`goal_reconcile`** — introduced when a `/goal` first becomes active; resolves
-  the latest user request with `keep`, `revise`, or `pause`. Revision
-  replaces the effective objective and validation criteria while preserving goal
-  identity, timing, continuation history, and prior persisted revisions.
+- **`goal_reconcile`** — available only while a user request is awaiting
+  reconciliation; resolves it with `keep`, `revise`, or `pause`. Revision replaces
+  the effective objective and validation criteria while preserving goal identity,
+  timing, continuation history, and prior persisted revisions.
 - **`goal_complete`** — introduced when a `/goal` first becomes active; marks the
   goal complete directly and accepts an optional `summary`. It remains
   non-terminating so Pi performs the follow-up model turn that delivers the final
@@ -167,12 +167,11 @@ All sections except `# Goal` are optional.
   settled agent runs. Multiple reports in one run count once.
 
 `goal_set`, `goal_resume`, and `goal_clear` are always registered.
-`goal_reconcile`, `goal_complete`, and `goal_block` start inactive, are added when
-the first goal becomes active, and remain in the active loadout for the rest of
-that session. This monotonic activation preserves deferred-tool and prompt-cache
-reuse across pause, block, completion, and clear transitions. Stale calls made
-while no goal is active are ignored silently so they do not add noisy output to
-the transcript; the rendered block is hidden too.
+`goal_complete` and `goal_block` start inactive, are added when the first goal
+becomes active, and remain in the active loadout for the rest of that session.
+`goal_reconcile` is added only while reconciliation is pending and removed as soon
+as it resolves or the goal pauses. Stale queued calls are ignored silently so they
+do not add noisy output to the transcript; the rendered block is hidden too.
 
 All six tools render as the same compact 2-line transcript blocks as the native
 and web tools (`renderShell: "self"`): a `• verb` headline whose bullet color

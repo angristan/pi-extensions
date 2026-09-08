@@ -18,7 +18,9 @@ const GOAL_CONTEXT_CUSTOM_TYPE = "goal-context";
 const CONTINUATION_CUSTOM_TYPE = "goal-continuation";
 const CONTINUATION_TRIGGER_CONTENT = "Goal continuation requested.";
 const BLOCKED_AUDIT_THRESHOLD = 3;
-const GOAL_TOOL_NAMES = ["goal_complete", "goal_block", "goal_reconcile"] as const;
+const GOAL_RECONCILE_TOOL_NAME = "goal_reconcile";
+const GOAL_TERMINAL_TOOL_NAMES = ["goal_complete", "goal_block"] as const;
+const GOAL_TOOL_NAMES = [...GOAL_TERMINAL_TOOL_NAMES, GOAL_RECONCILE_TOOL_NAME] as const;
 const GOAL_TOOL_NAME_SET = new Set<string>(GOAL_TOOL_NAMES);
 
 /**
@@ -944,18 +946,23 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 		const active = getActiveTools.call(pi);
 		if (!Array.isArray(active)) return;
 
+		const reconciliationPending = state?.status === "active" && state.reconciliationPending === true;
+		let next = active.filter((name: string) => name !== GOAL_RECONCILE_TOOL_NAME || reconciliationPending);
+
 		if (state?.status === "active") {
 			goalToolsIntroduced = true;
-			const added = GOAL_TOOL_NAMES.filter((name) => !active.includes(name));
-			if (added.length > 0) setActiveTools.call(pi, [...active, ...added]);
-			return;
+			for (const name of GOAL_TERMINAL_TOOL_NAMES) {
+				if (!next.includes(name)) next.push(name);
+			}
+			if (reconciliationPending && !next.includes(GOAL_RECONCILE_TOOL_NAME)) next.push(GOAL_RECONCILE_TOOL_NAME);
+		} else if (!goalToolsIntroduced) {
+			// Registration activates tools by default. Remove all gated tools before
+			// the first goal; terminal tools become monotonic after first activation.
+			next = next.filter((name: string) => !GOAL_TOOL_NAME_SET.has(name));
 		}
-		// Registration activates tools by default. Remove the gated tools only
-		// during initial session setup; after their first activation, keep the
-		// loadout monotonic so later state changes preserve the cached prefix.
-		if (goalToolsIntroduced) return;
-		const initial = active.filter((name: string) => !GOAL_TOOL_NAME_SET.has(name));
-		if (initial.length !== active.length) setActiveTools.call(pi, initial);
+
+		const changed = next.length !== active.length || next.some((name: string, index: number) => name !== active[index]);
+		if (changed) setActiveTools.call(pi, next);
 	};
 
 	const inactiveGoalToolResult = (reason: string) => ({
@@ -1533,12 +1540,7 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			if (!state) return inactiveGoalToolResult("no-goal");
 			if (state.status !== "active") return inactiveGoalToolResult(`goal-${state.status}`);
-			if (!state.reconciliationPending) {
-				return {
-					content: [{ type: "text", text: "No user request is awaiting goal reconciliation." }],
-					details: { ok: false, reason: "no-pending-reconciliation" },
-				};
-			}
+			if (!state.reconciliationPending) return inactiveGoalToolResult("no-pending-reconciliation");
 
 			const action = params.action as GoalReconciliationAction;
 			if (action === "pause") {
