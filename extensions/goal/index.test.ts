@@ -1,23 +1,9 @@
-import { expect, mock, test } from "bun:test";
+import { expect, test } from "bun:test";
 
 const registeredOverlayCards: any[] = [];
-const judgeResponses: any[] = [];
-const judgeCalls: any[] = [];
-const mockedComplete = mock(async (...args: any[]) => {
-	judgeCalls.push(args);
-	const next = judgeResponses.length ? judgeResponses.shift() : undefined;
-	if (next instanceof Error) throw next;
-	return next ?? {
-		stopReason: "stop",
-		content: [{ type: "text", text: '{"verdict":"allow","reason":"evidence is sufficient","missing_evidence":[],"next_action":""}' }],
-		usage: { input: 5, output: 7 },
-	};
-});
 const { buildGoalContext, renderGoalOverlayBody, default: goalExtension } = await import("./index");
 
-function makeHarness(options: { judgeRetryPolicy?: { enabled: boolean; maxRetries: number; baseDelayMs: number } } = {}) {
-	judgeResponses.length = 0;
-	judgeCalls.length = 0;
+function makeHarness() {
 	const handlers: Record<string, Array<(event: any, ctx: any) => any>> = {};
 	const commands: Record<string, any> = {};
 	const tools: Record<string, any> = {};
@@ -37,11 +23,7 @@ function makeHarness(options: { judgeRetryPolicy?: { enabled: boolean; maxRetrie
 		hasUI: true,
 		isIdle: () => true,
 		hasPendingMessages: () => false,
-		model: { provider: "test", id: "judge-model", name: "Judge model", contextWindow: 128_000 },
-		modelRegistry: {
-			complete: mockedComplete,
-		},
-		getSystemPrompt: () => "System prompt for tests.",
+		model: { provider: "test", id: "test-model", name: "Test model", contextWindow: 128_000 },
 		sessionManager: {
 			getBranch: () => { branchReadCount += 1; return entries; },
 			getEntries: () => entries,
@@ -81,7 +63,6 @@ function makeHarness(options: { judgeRetryPolicy?: { enabled: boolean; maxRetrie
 			registeredOverlayCards.push(definition);
 			return { invalidate() {}, unregister() {} };
 		},
-		judgeRetryPolicy: options.judgeRetryPolicy,
 	});
 
 	return {
@@ -125,14 +106,6 @@ function isContinuation(message: any) {
 
 function sentMessages(harness: ReturnType<typeof makeHarness>, customType: string) {
 	return harness.sent.filter(({ message }) => message?.customType === customType);
-}
-
-function queueJudge(verdict: "allow" | "deny", fields: Record<string, unknown> = {}) {
-	judgeResponses.push({
-		stopReason: "stop",
-		content: [{ type: "text", text: JSON.stringify({ verdict, reason: verdict === "allow" ? "ok" : "not proven", missing_evidence: [], next_action: "", ...fields }) }],
-		usage: { input: 11, output: 13 },
-	});
 }
 
 test("reserves goal_set for long-running autonomous work", () => {
@@ -284,11 +257,12 @@ test("wraps goal data as escaped untrusted context", () => {
 	expect(text).not.toContain("<do>&override</do>");
 });
 
-test("appends active goal context without rebuilding the system prompt", async () => {
+test("appends active goal context without rewriting ordinary system prompts", async () => {
 	const h = makeHarness();
 	await h.commands.goal.handler("ship <unsafe>&", h.ctx);
 
-	expect(h.handlers.before_agent_start).toBeUndefined();
+	const [beforeStart] = await emit(h, "before_agent_start", { systemPrompt: "base" });
+	expect(beforeStart).toBeUndefined();
 	const contexts = sentMessages(h, "goal-context");
 	expect(contexts).toHaveLength(1);
 	expect(contexts[0]!.options).toEqual({ deliverAs: "steer" });
@@ -426,7 +400,7 @@ test("replacing an unfinished goal requires confirmation", async () => {
 test("goal tools stay active after their first session activation", async () => {
 	const h = makeHarness();
 	await emit(h, "session_start");
-	for (const name of ["goal_complete", "goal_block"]) {
+	for (const name of ["goal_complete", "goal_block", "goal_reconcile"]) {
 		expect(h.activeTools.has(name)).toBe(false);
 	}
 
@@ -435,18 +409,18 @@ test("goal tools stay active after their first session activation", async () => 
 	expect(stale.details).toMatchObject({ ok: false, ignored: true, reason: "no-goal" });
 
 	await h.commands.goal.handler("active goal", h.ctx);
-	for (const name of ["goal_complete", "goal_block"]) {
+	for (const name of ["goal_complete", "goal_block", "goal_reconcile"]) {
 		expect(h.activeTools.has(name)).toBe(true);
 	}
 
 	await h.tools.goal_complete.execute("complete", {}, undefined, undefined, h.ctx);
-	for (const name of ["goal_complete", "goal_block"]) {
+	for (const name of ["goal_complete", "goal_block", "goal_reconcile"]) {
 		expect(h.activeTools.has(name)).toBe(true);
 	}
 
 	const contextsBeforeClear = sentMessages(h, "goal-context").length;
 	await h.commands.goal.handler("clear", h.ctx);
-	for (const name of ["goal_complete", "goal_block"]) {
+	for (const name of ["goal_complete", "goal_block", "goal_reconcile"]) {
 		expect(h.activeTools.has(name)).toBe(true);
 	}
 	expect(sentMessages(h, "goal-context")).toHaveLength(contextsBeforeClear + 1);
@@ -474,7 +448,7 @@ test("editing a completed goal reactivates it and starts the loop", async () => 
 	expect(sentMessages(h, "goal-continuation").at(-1)!.message.content).toBe("Goal continuation requested.");
 });
 
-test("terminal provider errors block the active goal instead of continuing", async () => {
+test("terminal provider errors pause the active goal instead of continuing", async () => {
 	const h = makeHarness();
 	await h.commands.goal.handler("initial goal", h.ctx);
 	const contextsBeforeError = sentMessages(h, "goal-context").length;
@@ -486,14 +460,15 @@ test("terminal provider errors block the active goal instead of continuing", asy
 	await emit(h, "agent_settled", {});
 
 	const state = latestGoalState(h);
-	expect(state.status).toBe("blocked");
+	expect(state.status).toBe("paused");
 	expect(state.blockedAudit.fingerprint).toBe("provider-usage-limit");
 	expect(state.blockedAudit.evidence).toBe("429 too many requests");
 	expect(sentMessages(h, "goal-context")).toHaveLength(contextsBeforeError + 1);
-	const blockedContext = sentMessages(h, "goal-context").at(-1)!.message;
-	expect(blockedContext.details.status).toBe("blocked");
-	expect(blockedContext.content).toContain("goal_resume");
-	expect(blockedContext.content).toContain("goal_clear");
+	const pausedContext = sentMessages(h, "goal-context").at(-1)!.message;
+	expect(pausedContext.details.status).toBe("paused");
+	expect(pausedContext.content).toContain("goal_resume");
+	expect(pausedContext.content).toContain("goal_clear");
+	expect(pausedContext.content).toContain("Provider usage limit stopped the goal");
 	expect(sentMessages(h, "goal-continuation")).toHaveLength(continuationsBeforeError);
 });
 
@@ -525,151 +500,144 @@ test("offers resume, keep, or clear when reopening an inactive goal", async () =
 	expect(latestGoalState(reloaded).status).toBe("blocked");
 });
 
-test("goal_complete silently retries a transient judge failure", async () => {
-	const h = makeHarness({ judgeRetryPolicy: { enabled: true, maxRetries: 1, baseDelayMs: 0 } });
+test("goal_complete transitions directly without a nested model call", async () => {
+	const h = makeHarness();
 	await h.commands.goal.handler("ship the feature", h.ctx);
-	judgeResponses.push({
-		stopReason: "error",
-		errorMessage: "Your requests have exceeded rate limit.",
-		content: [],
-	});
-	queueJudge("allow");
 
 	const result = await h.tools.goal_complete.execute("call", { summary: "done" }, undefined, undefined, h.ctx);
 
 	expect(result.details).toMatchObject({ ok: true });
 	expect(latestGoalState(h).status).toBe("complete");
-	expect(judgeCalls).toHaveLength(2);
-	expect(result.content[0].text).not.toContain("could not be audited");
 });
 
-test("goal_complete surfaces one failure after transient judge retries are exhausted", async () => {
-	const h = makeHarness({ judgeRetryPolicy: { enabled: true, maxRetries: 2, baseDelayMs: 0 } });
-	await h.commands.goal.handler("ship the feature", h.ctx);
-	for (let attempt = 0; attempt < 3; attempt++) {
-		judgeResponses.push({
-			stopReason: "error",
-			errorMessage: "HTTP 429 too many requests",
-			content: [],
-		});
-	}
+test("unreconciled user input pauses before another continuation", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("validate 256 hosts", h.ctx);
+	const continuationCount = sentMessages(h, "goal-continuation").length;
 
-	const result = await h.tools.goal_complete.execute("call", { summary: "done" }, undefined, undefined, h.ctx);
+	await emit(h, "input", { source: "interactive", text: "validate 100k hosts and sharding" });
+	expect(latestGoalState(h).reconciliationPending).toBe(true);
+	const [promptUpdate] = await emit(h, "before_agent_start", { systemPrompt: "base prompt" });
+	expect(promptUpdate.systemPrompt).toContain("Goal reconciliation required");
+	expect(promptUpdate.systemPrompt).toContain("latest user request has priority");
 
-	expect(judgeCalls).toHaveLength(3);
-	expect(result.details).toMatchObject({ ok: false, judgeError: true });
-	expect(result.content[0].text).toContain("HTTP 429 too many requests");
+	const prematureCompletion = await h.tools.goal_complete.execute("complete", {}, undefined, undefined, h.ctx);
+	expect(prematureCompletion.details).toMatchObject({ ok: false, reason: "reconciliation-required" });
+
+	await emit(h, "agent_settled");
+	const state = latestGoalState(h);
+	expect(state.status).toBe("paused");
+	expect(state.reconciliationPending).toBeUndefined();
+	expect(sentMessages(h, "goal-continuation")).toHaveLength(continuationCount);
+	expect(h.notifications.at(-1)!.message).toContain("not reconciled");
+});
+
+test("pending reconciliation survives reload without resuming stale work", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("validate 256 hosts", h.ctx);
+	await emit(h, "input", { source: "interactive", text: "validate 100k hosts instead" });
+	const continuationCount = sentMessages(h, "goal-continuation").length;
+
+	await emit(h, "session_start", { reason: "reload" });
+	expect(latestGoalState(h).reconciliationPending).toBe(true);
+	const [promptUpdate] = await emit(h, "before_agent_start", { systemPrompt: "base prompt" });
+	expect(promptUpdate.systemPrompt).toContain("latest user request has priority");
+
+	await emit(h, "agent_settled");
+	expect(latestGoalState(h).status).toBe("paused");
+	expect(sentMessages(h, "goal-continuation")).toHaveLength(continuationCount);
+});
+
+test("goal_reconcile revises scope while preserving goal identity and history", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("validate 256 hosts", h.ctx);
+	const before = { ...latestGoalState(h) };
+
+	await emit(h, "input", { source: "interactive", text: "validate 100k hosts and sharding" });
+	const result = await h.tools.goal_reconcile.execute("reconcile", {
+		action: "revise",
+		objective: "Validate 100k hosts and sharding",
+		validation: ["100k-host run passes", "shard distribution is verified"],
+	}, undefined, undefined, h.ctx);
+
+	const revised = latestGoalState(h);
+	expect(result.details).toMatchObject({ ok: true, reconciled: true, action: "revise" });
+	expect(revised.objective).toBe("Validate 100k hosts and sharding");
+	expect(revised.validation).toEqual(["100k-host run passes", "shard distribution is verified"]);
+	expect(revised.createdAt).toBe(before.createdAt);
+	expect(revised.accumulatedActiveMs).toBe(before.accumulatedActiveMs);
+	expect(revised.continuations).toBe(before.continuations);
+	expect(before.revision).toBe(0);
+	expect(revised.revision).toBe(1);
+	expect(h.entries.some((entry) => entry.data?.state?.objective === "validate 256 hosts")).toBe(true);
+	expect(revised.reconciliationPending).toBeUndefined();
+	expect(sentMessages(h, "goal-context").at(-1)!.message.content).toContain("Validate 100k hosts and sharding");
+
+	await emit(h, "agent_settled");
 	expect(latestGoalState(h).status).toBe("active");
+	expect(latestGoalState(h).continuations).toBe(before.continuations + 1);
 });
 
-test("goal_complete does not retry non-transient judge failures", async () => {
-	const h = makeHarness({ judgeRetryPolicy: { enabled: true, maxRetries: 2, baseDelayMs: 0 } });
-	await h.commands.goal.handler("ship the feature", h.ctx);
-	judgeResponses.push({
-		stopReason: "error",
-		errorMessage: "insufficient_quota: billing quota exceeded",
-		content: [],
-	});
-
-	const result = await h.tools.goal_complete.execute("call", { summary: "done" }, undefined, undefined, h.ctx);
-
-	expect(judgeCalls).toHaveLength(1);
-	expect(result.details).toMatchObject({ ok: false, judgeError: true });
-	expect(result.content[0].text).toContain("insufficient_quota");
-});
-
-test("goal_complete is vetoed when the judge says evidence is missing", async () => {
+test("goal_reconcile keeps a compatible goal and permits direct completion", async () => {
 	const h = makeHarness();
 	await h.commands.goal.handler("ship the feature", h.ctx);
-	queueJudge("deny", {
-		reason: "Tests were not run.",
-		missing_evidence: ["test output"],
-		next_action: "Run the relevant test suite.",
-	});
+	const createdAt = latestGoalState(h).createdAt;
 
-	const result = await h.tools.goal_complete.execute("call", { summary: "done" }, undefined, undefined, h.ctx);
+	await emit(h, "input", { source: "interactive", text: "please continue" });
+	const reconciled = await h.tools.goal_reconcile.execute("reconcile", { action: "keep" }, undefined, undefined, h.ctx);
+	expect(reconciled.details).toMatchObject({ ok: true, reconciled: true, action: "keep" });
+	expect(latestGoalState(h).createdAt).toBe(createdAt);
+	expect(latestGoalState(h).objective).toBe("ship the feature");
 
-	expect(result.details).toMatchObject({ ok: false, judgeDenied: true });
-	expect(result.content[0].text).toContain("Tests were not run");
-	expect(result.content[0].text).toContain("Run the relevant test suite");
-	expect(latestGoalState(h).status).toBe("active");
-	expect(judgeCalls).toHaveLength(1);
-	const block = h.tools.goal_complete.renderResult(result, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
-	expect(renderBlock(block)[0]).toContain("Completion denied by judge");
+	const block = h.tools.goal_reconcile.renderResult(reconciled, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
+	expect(renderBlock(block)[0]).toContain("Kept goal");
+	const completed = await h.tools.goal_complete.execute("complete", { summary: "done" }, undefined, undefined, h.ctx);
+	expect(completed.details.ok).toBe(true);
+	expect(latestGoalState(h).status).toBe("complete");
 });
 
-test("goal_block is vetoed at the threshold when the judge finds an action", async () => {
-	const h = makeHarness();
-	await h.commands.goal.handler("reduce p95 latency below 120ms", h.ctx);
-
-	for (let run = 1; run <= 2; run++) {
-		await emit(h, "turn_start", { turnIndex: 0, timestamp: 0 });
-		await h.tools.goal_block.execute(`call-${run}`, { blocker: "needs logs" }, undefined, undefined, h.ctx);
-		await emit(h, "turn_end", { turnIndex: 0, toolResults: [{ toolName: "goal_block" }] });
-		await emit(h, "agent_settled");
-	}
-	queueJudge("deny", { reason: "Logs can still be inspected.", next_action: "Read the local log file." });
-	await emit(h, "turn_start", { turnIndex: 0, timestamp: 0 });
-	const result = await h.tools.goal_block.execute("call-3", { blocker: "needs logs" }, undefined, undefined, h.ctx);
-
-	expect(result.terminate).toBeUndefined();
-	expect(result.details).toMatchObject({ ok: false, blocked: false, judgeDenied: true });
-	expect(latestGoalState(h).status).toBe("active");
-	expect(latestGoalState(h).blockedAudit).toBeUndefined();
-	const block = h.tools.goal_block.renderResult(result, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
-	expect(renderBlock(block)[0]).toContain("Blocker rejected by judge");
-	expect(renderBlock(block)[1]).toContain("Read the local log file");
-});
-
-test("goal_block judge receives authoritative in-flight threshold evidence", async () => {
-	const h = makeHarness();
-	await h.commands.goal.handler("reduce p95 latency below 120ms", h.ctx);
-
-	for (let run = 1; run <= 2; run++) {
-		await emit(h, "turn_start", { turnIndex: 0, timestamp: 0 });
-		await h.tools.goal_block.execute(`call-${run}`, { blocker: "needs logs" }, undefined, undefined, h.ctx);
-		await emit(h, "turn_end", { turnIndex: 0, toolResults: [{ toolName: "goal_block" }] });
-		await emit(h, "agent_settled");
-	}
-
-	await emit(h, "turn_start", { turnIndex: 0, timestamp: 0 });
-	await h.tools.goal_block.execute("call-3", { blocker: "needs logs" }, undefined, undefined, h.ctx);
-
-	const prompt = judgeCalls[0]![1].messages[0].content[0].text;
-	expect(prompt).toContain("<extension_audit_state>");
-	expect(prompt).toContain("3/3 consecutive settled goal runs");
-	expect(prompt).toContain("current goal_block call is still in flight");
-	expect(prompt).toContain("Do not require its tool result in the transcript");
-});
-
-test("judge veto rendering keeps useful text and expands full details", async () => {
+test("goal_reconcile can pause an unrelated request", async () => {
 	const h = makeHarness();
 	await h.commands.goal.handler("ship the feature", h.ctx);
-	const longReason = "The relevant validation output is missing even though the summary claimed success; inspect the exact command output before completing the goal.";
-	queueJudge("deny", {
-		reason: longReason,
-		missing_evidence: ["the exact validation command output", "the persisted artifact checksum"],
-		next_action: "Run the validation command and include its output.",
-	});
+	await emit(h, "input", { source: "interactive", text: "explain a different repository" });
 
-	const result = await h.tools.goal_complete.execute("call", { summary: "done" }, undefined, undefined, h.ctx);
-	const collapsed = h.tools.goal_complete.renderResult(result, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
-	const collapsedLines = renderBlock(collapsed, 180);
-	expect(collapsedLines[0]).toContain("Completion denied by judge");
-	// No old 120-column hard cap: a wide viewport keeps the useful tail visible.
-	expect(collapsedLines[1]).toContain("before completing the goal");
+	const result = await h.tools.goal_reconcile.execute("reconcile", { action: "pause" }, undefined, undefined, h.ctx);
 
-	const expanded = h.tools.goal_complete.renderResult(result, { isPartial: false, expanded: true }, h.ctx.ui.theme, { lastComponent: undefined });
-	const expandedText = renderBlock(expanded, 80).join("\n");
-	expect(expandedText).toContain("Missing evidence:");
-	expect(expandedText).toContain("the exact validation command output");
-	expect(expandedText).toContain("Next action: Run the validation command");
+	expect(result.details).toMatchObject({ ok: true, reconciled: true, action: "pause" });
+	expect(latestGoalState(h).status).toBe("paused");
 });
 
-test("anti-spin uses judge guidance before blocking", async () => {
+test("invalid reconciliation remains pending without mutating the goal", async () => {
 	const h = makeHarness();
 	await h.commands.goal.handler("ship the feature", h.ctx);
-	queueJudge("deny", { reason: "A file inspection is still available.", next_action: "Read package.json." });
+	await emit(h, "input", { source: "interactive", text: "expand the release scope" });
+
+	const result = await h.tools.goal_reconcile.execute("reconcile", {
+		action: "revise",
+		objective: "ship the expanded feature",
+	}, undefined, undefined, h.ctx);
+	expect(result.details).toMatchObject({ ok: false, reason: "missing-validation" });
+	expect(latestGoalState(h).objective).toBe("ship the feature");
+	expect(latestGoalState(h).reconciliationPending).toBe(true);
+
+	await emit(h, "agent_settled");
+	expect(latestGoalState(h).status).toBe("paused");
+});
+
+test("user-originated input preempts goals while extension input does not", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("ship the feature", h.ctx);
+
+	await emit(h, "input", { source: "extension", text: "internal message" });
+	expect(latestGoalState(h).reconciliationPending).toBeUndefined();
+
+	await emit(h, "input", { source: "rpc", text: "expand the release scope" });
+	expect(latestGoalState(h).reconciliationPending).toBe(true);
+});
+
+test("anti-spin blocks deterministically after repeated no-tool continuations", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("ship the feature", h.ctx);
 
 	for (let run = 0; run < 3; run++) {
 		await emit(h, "turn_start", { turnIndex: run, timestamp: 0 });
@@ -678,15 +646,19 @@ test("anti-spin uses judge guidance before blocking", async () => {
 	}
 
 	const state = latestGoalState(h);
-	expect(state.status).toBe("active");
-	expect(state.blockedAudit).toBeUndefined();
-	expect(h.notifications.at(-1)!.message).toContain("actionable next step");
-	const continuation = sentMessages(h, "goal-continuation").at(-1)!;
-	expect(continuation.message.content).toBe("Goal continuation requested.");
-	await emit(h, "turn_start", { turnIndex: 99, timestamp: 0 });
-	const result = await context(h, [continuation.message]);
-	expect(result.messages[0].content).toContain("Goal judge guidance after a no-tool loop");
-	expect(result.messages[0].content).toContain("Read package.json");
+	expect(state.status).toBe("blocked");
+	expect(state.blockedAudit).toMatchObject({ fingerprint: "no-tool-continuation", count: 3 });
+	expect(h.notifications.at(-1)!.message).toContain("no tool calls");
+});
+
+test("context keeps only the latest persisted goal instruction", async () => {
+	const h = makeHarness();
+	const oldContext = { customType: "goal-context", content: "old goal" };
+	const currentContext = { customType: "goal-context", content: "current goal" };
+
+	const result = await context(h, [oldContext, { role: "assistant", content: [] }, currentContext]);
+
+	expect(result.messages).toEqual([{ role: "assistant", content: [] }, currentContext]);
 });
 
 // Render the lines a tool block component produces.
