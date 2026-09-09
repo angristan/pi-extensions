@@ -164,6 +164,22 @@ test("writes notes and searches transcript hidden before a rollover", async () =
 	expect(result.content[0].text).toContain("Located it in warehouse seven.");
 });
 
+test("searches complete history and returns an excerpt around late matches", async () => {
+	const content = `Earlier unrelated text. ${"x".repeat(5_000)} Late searchable decision. ${"z".repeat(5_000)}`;
+	const harness = makeHarness([
+		{ id: "long", type: "message", message: { role: "user", content } },
+	]);
+	await enable(harness);
+	const result = await harness.tools.get("context_history").execute("history", {
+		query: "SEARCHABLE DECISION", limit: 5,
+	}, undefined, undefined, harness.ctx);
+	expect(result.details.matches).toBe(1);
+	expect(result.content[0].text).toContain("Late searchable decision.");
+	expect(result.content[0].text).not.toContain("Earlier unrelated text.");
+	expect(result.content[0].text.length).toBeLessThan(2_100);
+	expect(harness.entries[0].message.content).toBe(content);
+});
+
 test("new_context drops the tool call and result while retaining the durable handoff", async () => {
 	const harness = makeHarness();
 	await enable(harness);
