@@ -27,8 +27,10 @@ still receives the original image.
 - Supported terminals are the same as pi's built-in image component: Kitty,
   iTerm2, Ghostty, WezTerm, and Warp.
 
-Both pasted images and image blocks returned by tools are externalized. The
-store is content-addressed, so identical images share one blob across sessions.
+Both pasted images and image blocks returned by tools are externalized. A pasted
+image that was stored successfully is removed from the original input attachments,
+so the model receives it once through the sidecar reference, not twice. The store
+is content-addressed, so identical images share one blob across sessions.
 If persistence fails, the original embedded image is kept rather than lost.
 
 ## Commands

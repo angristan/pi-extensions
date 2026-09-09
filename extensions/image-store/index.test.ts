@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { getCapabilities, setCapabilities } from "@earendil-works/pi-tui";
+import { createExtensionRuntime, ExtensionRunner, SessionManager } from "@earendil-works/pi-coding-agent";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -198,21 +199,25 @@ describe("extension hooks", () => {
 		};
 		imageStoreExtension(pi as any);
 		const data = Buffer.from("pasted image").toString("base64");
-		const result = await handlers.get("input")?.({
-			text: "inspect this",
-			images: [{ type: "image", data, mimeType: "image/jpeg" }],
-		}, { ui: { notify() {} } });
+		const runner = new ExtensionRunner(
+			[{ path: "image-store", handlers: new Map([...handlers].map(([name, handler]) => [name, [handler]])) }] as any,
+			createExtensionRuntime(), process.cwd(), SessionManager.inMemory(process.cwd()), {} as any,
+		);
+		const result = await runner.emitInput("inspect this", [{ type: "image", data, mimeType: "image/jpeg" }], "interactive");
 
 		expect(result.action).toBe("transform");
+		if (result.action !== "transform") throw new Error("The original image was not removed from Pi input");
 		expect(result.text).toBe("inspect this");
-		expect(result.images).toBeUndefined();
+		expect(result.images).toEqual([]);
 		expect(sent).toHaveLength(1);
 		expect(JSON.stringify(sent)).not.toContain(data);
-		const context = await handlers.get("context")?.({
-			messages: [{ role: "custom", content: sent[0].content, details: sent[0].details }],
-		});
-		expect(context.messages[0].content).toEqual([
-			{ type: "text", text: "Attached image sidecar." },
+		const persisted = [
+			{ role: "custom", content: sent[0].content, details: sent[0].details },
+			{ role: "user", content: [{ type: "text", text: result.text }, ...(result.images ?? [])] },
+		];
+		expect(JSON.stringify(persisted)).not.toContain(data);
+		const context = await handlers.get("context")?.({ messages: persisted });
+		expect(context.messages.flatMap((message: any) => message.content).filter((block: any) => block.type === "image")).toEqual([
 			{ type: "image", data, mimeType: "image/jpeg" },
 		]);
 	});
