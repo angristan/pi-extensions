@@ -43,13 +43,10 @@ function formatBytes(bytes: number): string {
 }
 
 function costText(cost: number): string {
-	if (!Number.isFinite(cost) || cost <= 0) return "$0.0000";
-	// Add precision only when the usual four decimals would hide a real charge.
-	for (let decimals = 4; decimals <= 8; decimals += 1) {
-		const amount = cost.toFixed(decimals);
-		if (Number(amount) > 0) return `$${amount}`;
-	}
-	return "<$0.00000001";
+	if (!Number.isFinite(cost) || cost <= 0) return "$0.00";
+	if (cost < 0.01) return "<$0.01";
+	const cents = Math.round((cost + Number.EPSILON) * 100) / 100;
+	return `$${cents.toFixed(2)}`;
 }
 
 function usageText(agent: AgentSnapshot): string {

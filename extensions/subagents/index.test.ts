@@ -243,7 +243,7 @@ function rendered(component: any, width = 100): string[] {
 }
 
 describe("subagents", () => {
-	test("shows tiny non-zero costs without rounding them to zero", () => {
+	test("formats costs with cents precision", () => {
 		const agent = {
 			id: "cheap-reviewer",
 			name: "cheap reviewer",
@@ -257,11 +257,8 @@ describe("subagents", () => {
 			usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0.00004, turns: 1 },
 		} satisfies AgentSnapshot;
 
-		const output = formatAgent(agent, false);
-		const microscopicOutput = formatAgent({ ...agent, usage: { ...agent.usage, cost: 0.000000001 } }, false);
-		expect(output).toContain("$0.00004");
-		expect(output).not.toContain("$0.0000 ·");
-		expect(microscopicOutput).toContain("<$0.00000001");
+		expect(formatAgent(agent, false)).toContain("<$0.01");
+		expect(formatAgent({ ...agent, usage: { ...agent.usage, cost: 1.234 } }, false)).toContain("$1.23");
 	});
 
 	test("uses process RPC and the master name for child sessions", () => {
@@ -645,7 +642,7 @@ describe("subagents", () => {
 		expect(collapsed[1]).toContain(first.details.agents[0].name);
 		expect(collapsed[2]).toBe("    Task    Inspect API");
 		expect(collapsed[3]).toBe("    Result  API review complete.");
-		expect(collapsed[4]).toContain("    1 turn · ↑10 · ↓5 · R2 · W3 · $0.0100 · test-provider/test-model");
+		expect(collapsed[4]).toContain("    1 turn · ↑10 · ↓5 · R2 · W3 · $0.01 · test-provider/test-model");
 		expect(harness.sentMessages).toHaveLength(0);
 		const expanded = rendered(harness.tool.renderResult(waited, { isPartial: false, expanded: true }, renderTheme, { args: waitArgs }), 60);
 		expect(expanded.join("\n")).toContain("API review complete.");
@@ -722,7 +719,7 @@ describe("subagents", () => {
 		expect(compactLines[1]).not.toContain("context");
 		expect(compactLines[2]).toBe("    Task    Review renderer");
 		expect(compactLines[3]).toBe("    Result  Renderer matches the shared design.");
-		expect(compactLines[4]).toContain("    1 turn · ↑10 · ↓5 · R2 · W3 · $0.0100 · test-provider/test-model");
+		expect(compactLines[4]).toContain("    1 turn · ↑10 · ↓5 · R2 · W3 · $0.01 · test-provider/test-model");
 		const styledLines = renderer(message, { expanded: false }, semanticTheme).render(100);
 		expect(styledLines[1]).toContain(`\x1b[39m${message.details.name}\x1b[0m`);
 		expect(styledLines[2]).toContain("\x1b[36mTask  \x1b[0m  \x1b[37mReview renderer\x1b[0m");
