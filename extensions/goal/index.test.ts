@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 
 const registeredOverlayCards: any[] = [];
 const { buildGoalContext, renderGoalOverlayBody, default: goalExtension } = await import("./index");
@@ -155,6 +155,37 @@ test("keeps cycle and criteria counters visible at zero", () => {
 
 	expect(lines.join("\n")).toContain("1s active · 0 cycles · 0 criteria");
 });
+
+for (const cleanShutdown of [true, false]) {
+	test(`restores an active goal clock after ${cleanShutdown ? "clean" : "unclean"} shutdown without counting offline time`, async () => {
+		let now = 10_000;
+		const clock = spyOn(Date, "now").mockImplementation(() => now);
+		try {
+			const original = makeHarness();
+			await original.commands.goal.handler("ship the feature", original.ctx);
+			now = 12_000;
+			if (cleanShutdown) await emit(original, "session_shutdown", { reason: "reload" });
+			else {
+				// Last persisted state before a process disappeared without shutdown.
+				original.entries.push({ type: "custom", customType: "goal-state", data: {
+					state: { ...latestGoalState(original), updatedAt: now },
+				} });
+			}
+			now = 20_000;
+			const restored = makeHarness();
+			restored.entries.push(...structuredClone(original.entries));
+			await emit(restored, "session_start", { reason: "resume" });
+			now = 21_000;
+			await emit(restored, "session_tree");
+			now = 23_000;
+			await restored.commands["goal-status"].handler("", restored.ctx);
+			expect(restored.notifications.at(-1)?.message).toContain("Active time  5s");
+			expect(latestGoalState(restored)).toMatchObject({ objective: "ship the feature", createdAt: 10_000, status: "active" });
+		} finally {
+			clock.mockRestore();
+		}
+	});
+}
 
 test("renders a semantic goal status indicator", async () => {
 	const h = makeHarness();
