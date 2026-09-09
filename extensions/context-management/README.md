@@ -31,6 +31,11 @@ available:
 | `get_context_remaining` | Report Pi's current context usage estimate |
 | `new_context` | Start a fresh model context without summarizing the earlier transcript |
 
+`context_history` matches against the full text of each message, then returns an
+excerpt of up to 2,000 characters around the match. It returns at most 20 matching
+messages, with a combined output limit of 16,000 characters. Omitting the query
+returns the beginnings of recent messages.
+
 The normal working budget is 90% of the model context window. The extension sends
 one hidden reminder when 6,144 tokens remain in that budget. If an active tool
 chain exhausts the budget, it reserves up to 16,384 additional tokens only for a

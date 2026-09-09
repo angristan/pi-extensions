@@ -105,22 +105,25 @@ function messageText(message: any): string {
 	}).filter(Boolean).join("\n");
 }
 
-function compactLine(text: string, maxChars = 2_000): string {
-	const normalized = text.replace(/\s+/g, " ").trim();
-	return normalized.length > maxChars ? `${normalized.slice(0, maxChars - 1)}…` : normalized;
+function historyExcerpt(text: string, matchIndex: number, maxChars = 2_000): string {
+	if (text.length <= maxChars) return text;
+	const start = Math.max(0, matchIndex - 200);
+	const end = Math.min(text.length, start + maxChars - 2);
+	return `${start > 0 ? "…" : ""}${text.slice(start, end)}${end < text.length ? "…" : ""}`;
 }
 
 function historyRows(entries: readonly any[], query: string, limit: number): Array<{ id: string; role: string; text: string }> {
-	const needle = query.trim().toLowerCase();
+	const needle = query.replace(/\s+/g, " ").trim().toLowerCase();
 	const matches: Array<{ id: string; role: string; text: string }> = [];
 	for (const entry of entries) {
 		if (entry?.type !== "message" || !entry.message) continue;
-		const text = compactLine(messageText(entry.message));
-		if (!text || (needle && !text.toLowerCase().includes(needle))) continue;
+		const text = messageText(entry.message).replace(/\s+/g, " ").trim();
+		const matchIndex = text.toLowerCase().indexOf(needle);
+		if (!text || matchIndex < 0) continue;
 		const role = entry.message.role === "toolResult"
 			? `tool:${entry.message.toolName ?? "unknown"}`
 			: String(entry.message.role ?? "message");
-		matches.push({ id: String(entry.id ?? "unknown"), role, text });
+		matches.push({ id: String(entry.id ?? "unknown"), role, text: historyExcerpt(text, matchIndex) });
 	}
 	return matches.slice(-limit);
 }
