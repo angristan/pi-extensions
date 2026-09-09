@@ -4,10 +4,11 @@ Track an explicit objective for the session as a **persistent, self-driving
 loop**: the objective stays in view, and after each turn
 the agent keeps working toward it until it's done or blocked.
 
-Blocked status uses settled-run auditing: the same blocker must repeat across at
-least three consecutive settled goal runs before the goal is marked blocked. A
-run can contain a `goal_block` tool turn and a final tool-less follow-up turn;
-only one matching report counts for that whole run.
+Blocked status uses settled-run auditing: three consecutive settled goal runs
+that report a blocker mark the goal blocked, even when their descriptions differ.
+A run can contain a `goal_block` tool turn and a final tool-less follow-up turn;
+only one report counts for that whole run. A settled run without a report resets
+the count.
 
 A goal is a control mode, not the default planning primitive. Ordinary coding or
 research tasks—including multi-step work—should use `update_plan` instead.
@@ -92,11 +93,12 @@ resuming the older objective.
 - **Deterministic completion** — `goal_complete` marks the goal complete directly
   when the agent reports that current evidence satisfies every requirement. No
   nested model call can veto or reinterpret that transition.
-- **Blocked audit** — `goal_block` records blockers while leaving the goal active
-  until the same blocker has recurred across three settled agent runs. At most
-  one report counts per run, including runs with a final tool-less turn. The
-  third matching report marks the goal blocked directly. Resuming starts a fresh
-  audit.
+- **Blocked audit** — `goal_block` records blocked runs while leaving the goal
+  active until three consecutive settled agent runs report a blocker. At most
+  one report counts per run, including runs with a final tool-less turn. Report
+  wording does not affect the count, while a run without a report resets it. The
+  third consecutive report marks the goal blocked directly. Resuming starts a
+  fresh audit.
 
 ## Commands
 
@@ -161,10 +163,10 @@ All sections except `# Goal` are optional.
   is complete. Manual `/goal complete` surfaces the same stats once via a
   notification.
 - **`goal_block`** — introduced when a `/goal` first becomes active; records a
-  blocker and terminates the current agent run so the next report belongs to a
-  fresh settled run. Optional fields can describe the blocker, attempted work,
-  supporting detail, and next input; the same blocker must repeat across three
-  settled agent runs. Multiple reports in one run count once.
+  blocked run and terminates the current agent run so the next report belongs to
+  a fresh settled run. Optional fields can describe the blocker, attempted work,
+  supporting detail, and next input. Three consecutive blocked runs stop the
+  goal regardless of wording. Multiple reports in one run count once.
 
 `goal_set`, `goal_resume`, and `goal_clear` are always registered.
 `goal_complete` and `goal_block` start inactive, are added when the first goal

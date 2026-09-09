@@ -136,14 +136,6 @@ function normalizeStatus(status: unknown): GoalStatus {
 	return "paused";
 }
 
-function normalizeBlockerText(value: string): string {
-	return value.trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-function blockerFingerprint(blocker: string, nextInput?: string): string {
-	return `${normalizeBlockerText(blocker)}\n${normalizeBlockerText(nextInput ?? "")}`;
-}
-
 function escapeXmlText(input: string): string {
 	return input
 		.replace(/&/g, "&amp;")
@@ -206,7 +198,7 @@ export function buildInactiveGoalContext(
  * Re-orients the agent around the objective and asks for a completion audit.
  */
 function continuationPrompt(state: GoalState): string {
-	return `[Goal continuation — turn ${state.continuations + 1}]\n${untrustedGoalBlock(state)}\n\nContinuation behavior:\n- Keep the full objective intact; do not redefine success around a smaller or easier task.\n- Use the current worktree and external state as authoritative; inspect current state before relying on memory.\n- If update_plan is available and the next work is meaningfully multi-step, keep the plan tied to the real objective.\n\nCompletion audit:\nBefore declaring the goal complete, treat completion as unproven and verify it against current authoritative evidence.\n- Derive concrete requirements from the objective, validation criteria, referenced files, plans, issues, user instructions, and relevant project state.\n- For every explicit requirement, named artifact, command, test, gate, invariant, and deliverable, identify the evidence that would prove it.\n- Inspect the current evidence directly: files, command output, test results, rendered artifacts, runtime behavior, PR/check state, or other authoritative sources.\n- Decide for each requirement whether the evidence proves completion, contradicts it, shows incomplete work, is too weak or indirect, or is missing.\n- Match verification scope to requirement scope; do not use a narrow check to prove a broad claim.\n- Treat uncertain, stale, or indirect evidence as not complete; gather stronger evidence or keep working.\nOnly call \`goal_complete\` when current evidence proves every requirement is satisfied and no required work remains.\n\nBlocked audit:\n- Do not call \`goal_block\` the first time a blocker appears.\n- Call \`goal_block\` only when the same blocking condition has repeated for at least ${BLOCKED_AUDIT_THRESHOLD} consecutive settled goal runs and no meaningful progress is possible without user input or an external-state change.\n- Never use blocked merely because the work is hard, slow, uncertain, incomplete, or would benefit from clarification.\n- Do call \`goal_block\` once all codeable work is genuinely done and the remaining work requires a human decision, design discussion, trace collection, or out-of-session action — that is the correct terminal state, not a lazy block. Report the same blocker once in each subsequent goal run until the threshold trips, then stop; do not re-audit the same conclusion run after run.\n\nDo not just summarize — either make progress, complete the goal, or report a repeated blocker.`;
+	return `[Goal continuation — turn ${state.continuations + 1}]\n${untrustedGoalBlock(state)}\n\nContinuation behavior:\n- Keep the full objective intact; do not redefine success around a smaller or easier task.\n- Use the current worktree and external state as authoritative; inspect current state before relying on memory.\n- If update_plan is available and the next work is meaningfully multi-step, keep the plan tied to the real objective.\n\nCompletion audit:\nBefore declaring the goal complete, treat completion as unproven and verify it against current authoritative evidence.\n- Derive concrete requirements from the objective, validation criteria, referenced files, plans, issues, user instructions, and relevant project state.\n- For every explicit requirement, named artifact, command, test, gate, invariant, and deliverable, identify the evidence that would prove it.\n- Inspect the current evidence directly: files, command output, test results, rendered artifacts, runtime behavior, PR/check state, or other authoritative sources.\n- Decide for each requirement whether the evidence proves completion, contradicts it, shows incomplete work, is too weak or indirect, or is missing.\n- Match verification scope to requirement scope; do not use a narrow check to prove a broad claim.\n- Treat uncertain, stale, or indirect evidence as not complete; gather stronger evidence or keep working.\nOnly call \`goal_complete\` when current evidence proves every requirement is satisfied and no required work remains.\n\nBlocked audit:\n- Call \`goal_block\` when the current settled run cannot make meaningful progress without user input or an external-state change.\n- The extension stops after ${BLOCKED_AUDIT_THRESHOLD} consecutive blocked runs; report the current blocker in each run even when its description changes. A run that makes progress resets the audit.\n- Never use blocked merely because the work is hard, slow, uncertain, incomplete, or would benefit from clarification.\n- Do call \`goal_block\` once all codeable work is genuinely done and the remaining work requires a human decision, design discussion, trace collection, or out-of-session action — that is the correct terminal state, not a lazy block.\n\nDo not just summarize — either make progress, complete the goal, or report a repeated blocker.`;
 }
 
 // ============================================================================
@@ -852,7 +844,7 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 	let nextTurnIsContinuation = false;
 	let currentTurnIsContinuation = false;
 	let currentTurnHadToolCall = false;
-	let currentRunBlockerFingerprint: string | undefined;
+	let currentRunReportedBlocker = false;
 	let lastTurnWasContinuation = false;
 	let lastTurnHadToolCall = false;
 	let noToolContinuationStreak = 0;
@@ -999,7 +991,7 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 			state.activeSince = now;
 			state.blockedAt = undefined;
 			state.blockedAudit = undefined;
-			currentRunBlockerFingerprint = undefined;
+			currentRunReportedBlocker = false;
 			noToolContinuationStreak = 0;
 		}
 		if (next === "blocked" && !state.blockedAudit) {
@@ -1112,7 +1104,7 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 	 *  - anti-spin: repeated no-tool continuations mark the goal blocked
 	 *  - the previous turn must not have been aborted (interruption → pause)
 	 */
-	const maybeContinue = async (ctx: any, settledRunBlockerFingerprint?: string): Promise<boolean> => {
+	const maybeContinue = async (ctx: any, settledRunReportedBlocker = false): Promise<boolean> => {
 		if (!state || state.status !== "active") return false;
 		if (typeof ctx.isIdle === "function" && !ctx.isIdle()) return false;
 		if (typeof ctx.hasPendingMessages === "function" && ctx.hasPendingMessages()) return false;
@@ -1120,7 +1112,7 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 		// Interruption → pause is detected in message_end below. A blocker report
 		// belongs to the whole low-level run: goal_block can cause a final tool-less
 		// follow-up turn before agent_settled, and that turn must not erase it.
-		if (!settledRunBlockerFingerprint && state.blockedAudit) state.blockedAudit = undefined;
+		if (!settledRunReportedBlocker && state.blockedAudit) state.blockedAudit = undefined;
 
 		if (state.reconciliationPending) {
 			state.reconciliationPending = undefined;
@@ -1192,7 +1184,7 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 		// durable objective, validation, timing, and continuation history.
 		lastTurnWasContinuation = false;
 		lastTurnHadToolCall = false;
-		currentRunBlockerFingerprint = undefined;
+		currentRunReportedBlocker = false;
 		noToolContinuationStreak = 0;
 		await maybeContinue(ctx);
 		return previousStatus;
@@ -1379,10 +1371,10 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 	// The safe-boundary continuation point: agent fully settled, no retry,
 	// no compaction, no queued work will run.
 	pi.on("agent_settled", async (_event, ctx) => {
-		const settledRunBlockerFingerprint = currentRunBlockerFingerprint;
-		currentRunBlockerFingerprint = undefined;
+		const settledRunReportedBlocker = currentRunReportedBlocker;
+		currentRunReportedBlocker = false;
 		if (pauseAfterTerminalError(ctx)) return;
-		await maybeContinue(ctx, settledRunBlockerFingerprint);
+		await maybeContinue(ctx, settledRunReportedBlocker);
 	});
 
 	// Re-anchor active goal instructions after compaction without changing the
@@ -1410,7 +1402,7 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 		nextTurnIsContinuation = false;
 		currentTurnIsContinuation = false;
 		currentTurnHadToolCall = false;
-		currentRunBlockerFingerprint = undefined;
+		currentRunReportedBlocker = false;
 		lastTurnHadToolCall = false;
 		lastTurnWasContinuation = false;
 		noToolContinuationStreak = 0;
@@ -1574,7 +1566,7 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 				state.revision = (state.revision ?? 0) + 1;
 				state.blockedAt = undefined;
 				state.blockedAudit = undefined;
-				currentRunBlockerFingerprint = undefined;
+				currentRunReportedBlocker = false;
 				noToolContinuationStreak = 0;
 			}
 
@@ -1628,7 +1620,7 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 		name: "goal_block",
 		label: "Report Goal Blocker",
 		description:
-			`Mark the active goal blocked. Only available while a /goal is active. Use after the same blocking condition has recurred for at least ${BLOCKED_AUDIT_THRESHOLD} consecutive settled goal runs and no meaningful progress is possible without user input or an external-state change. At most one blocker report counts per settled run. Do not call merely because work is hard, slow, uncertain, incomplete, or would benefit from clarification. Do call it once all codeable work is genuinely done and the remaining work requires a human decision, design discussion, trace collection, or out-of-session action — that is the correct terminal state, not a lazy block.`,
+			`Report that the active goal cannot make meaningful progress without user input or an external-state change. Only available while a /goal is active. At most one blocker report counts per settled run. ${BLOCKED_AUDIT_THRESHOLD} consecutive blocked runs mark the goal blocked, even when their descriptions differ; a settled run without a blocker report resets the count. Do not call merely because work is hard, slow, uncertain, incomplete, or would benefit from clarification. Do call it once all codeable work is genuinely done and the remaining work requires a human decision, design discussion, trace collection, or out-of-session action — that is the correct terminal state, not a lazy block.`,
 		parameters: Type.Object({
 			blocker: Type.Optional(Type.String({ description: "Optional short description of the blocking condition." })),
 			attempted: Type.Optional(Type.String({ description: "Optional note about what was attempted." })),
@@ -1651,19 +1643,17 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 			const attempted = params.attempted?.trim() || undefined;
 			const evidence = params.evidence?.trim() || undefined;
 			const nextInput = params.next_input?.trim() || undefined;
-			const fingerprint = blockerFingerprint(blocker, nextInput);
-			if (currentRunBlockerFingerprint !== undefined) {
+			if (currentRunReportedBlocker) {
 				return {
 					content: [{ type: "text", text: "A blocker has already been recorded for this settled agent run. Wait for the next goal continuation before reporting it again." }],
 					details: { ok: true, blocked: false, duplicateRun: true },
 					terminate: true,
 				};
 			}
-			currentRunBlockerFingerprint = fingerprint;
-			const previous = state.blockedAudit;
-			const count = previous?.fingerprint === fingerprint ? previous.count + 1 : 1;
+			currentRunReportedBlocker = true;
+			const count = (state.blockedAudit?.count ?? 0) + 1;
 			state.blockedAudit = {
-				fingerprint,
+				fingerprint: "reported-blocker",
 				count,
 				blocker,
 				attempted,
@@ -1681,16 +1671,16 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 			if (count < BLOCKED_AUDIT_THRESHOLD) {
 				saveAndEmit(ctx);
 				return {
-					content: [{ type: "text", text: `Blocker recorded (${count}/${BLOCKED_AUDIT_THRESHOLD}); goal remains active. Continue if any meaningful progress is possible. If the same blocker recurs in a later goal run, call goal_block again.\n\n${details}` }],
+					content: [{ type: "text", text: `Blocked run recorded (${count}/${BLOCKED_AUDIT_THRESHOLD}); goal remains active. Continue if meaningful progress is possible. If the next settled run is also blocked, call goal_block again; the wording does not need to match.\n\n${details}` }],
 					details: { ok: true, blocked: false, count, threshold: BLOCKED_AUDIT_THRESHOLD },
 					terminate: true,
 				};
 			}
 
-			ctx.ui.notify("Goal blocked: blocker repeated across settled goal runs.", "warning");
+			ctx.ui.notify("Goal blocked after repeated blocked runs.", "warning");
 			setStatus("blocked", ctx);
 			return {
-				content: [{ type: "text", text: `Goal marked blocked after ${count} consecutive reports of the same blocker.\n\n${details}\n\nResume with /goal resume once unblocked.` }],
+				content: [{ type: "text", text: `Goal marked blocked after ${count} consecutive blocked runs.\n\n${details}\n\nResume with /goal resume once unblocked.` }],
 				details: { ok: true, blocked: true, count, threshold: BLOCKED_AUDIT_THRESHOLD },
 				terminate: true,
 			};

@@ -733,15 +733,20 @@ test("/goal complete surfaces lifetime stats in the notification", async () => {
 	expect(note.message).toMatch(/active.*cycle/i);
 });
 
-test("goal_block terminates and counts once per settled run", async () => {
+test("goal_block counts consecutive blocked runs despite changing report text", async () => {
 	const h = makeHarness();
 	await h.commands.goal.handler("reduce p95 latency below 120ms", h.ctx);
+	const reports = [
+		{ blocker: "CI is flaky on macOS", next_input: "Wait for a stable runner." },
+		{ blocker: "The macOS CI runner remains flaky", next_input: "Retry after the runner recovers." },
+		{ blocker: "macOS checks cannot complete reliably", next_input: "Resume when CI is stable." },
+	];
 
 	let result: any;
 	for (let run = 1; run <= 3; run++) {
 		await emit(h, "agent_start");
 		await emit(h, "turn_start", { turnIndex: 0, timestamp: 0 });
-		result = await h.tools.goal_block.execute(`call-${run}`, { blocker: "flaky CI on macOS" }, undefined, undefined, h.ctx);
+		result = await h.tools.goal_block.execute(`call-${run}`, reports[run - 1]!, undefined, undefined, h.ctx);
 		expect(result.terminate).toBe(true);
 		await emit(h, "turn_end", { turnIndex: 0, toolResults: [{ toolName: "goal_block" }] });
 		// A single goal_block skips the follow-up model turn. Keep the audit robust
@@ -759,7 +764,7 @@ test("goal_block terminates and counts once per settled run", async () => {
 	let block = h.tools.goal_block.renderResult(result, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined });
 	let lines = renderBlock(block);
 	expect(lines[0]).toContain("Goal blocked");
-	expect(lines[1]).toContain("flaky CI on macOS");
+	expect(lines[1]).toContain("macOS checks cannot complete reliably");
 
 	// Even if another turn follows the first tool call, the same low-level run
 	// cannot count a second blocker report.
