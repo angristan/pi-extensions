@@ -22,7 +22,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 
 ### Requirements
 
-- [pi](https://github.com/earendil-works/pi-coding-agent) installed
+- [Pi](https://github.com/earendil-works/pi-coding-agent) 0.85.1 or newer; Pi resumes active tool loops after automatic compaction without an extension
 - Pi-provided packages resolve against Pi's bundled modules; `marked` is installed
   with this package
 
@@ -47,9 +47,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 
 | Extension | What it does |
 |---|---|
-| [`auto-compact-continue`](extensions/auto-compact-continue/) | Automatically continues the agent after pi triggers threshold-based context compaction |
 | [`auto-session-title`](extensions/auto-session-title/) | Generates and maintains short, descriptive titles for your pi sessions |
-| [`history-search`](extensions/history-search/) | Incremental search across your previous user prompts, inline in the editor |
 | [`reload-all`](extensions/reload-all/) | Safely broadcast `/reload` to every top-level Pi TUI for the current user on one machine |
 | [`rename`](extensions/rename/) | Add `/rename` as an alias for the built-in `/name` session command |
 | [`rewind`](extensions/rewind/) | Fork from an earlier user prompt and restore it to the editor (`/undo` is an alias) |
@@ -98,12 +96,8 @@ Each extension directory has its own `README.md` describing its behavior or, for
 
 | Key | Extension | Action |
 |---|---|---|
-| `Ctrl+R` | [`history-search`](extensions/history-search/) | Start reverse search across previous prompts; press again or use `↑` to cycle backward |
 | `Ctrl+Shift+O` | [`overlay-stack`](extensions/overlay-stack/) | Hide or show the top-right overlay stack |
 | `Ctrl+Shift+T` | [`transcript`](extensions/transcript/) | Open the full scrollable session transcript |
-
-While history search is active, use `Ctrl+S` / `↓` to cycle forward, `Enter` to
-accept, `Esc` / `Ctrl+C` to cancel, and `Ctrl+U` to clear the query.
 
 ## Configuration
 
