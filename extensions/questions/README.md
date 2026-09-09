@@ -28,8 +28,15 @@ generic and never contains question text.
 Secret responses use a masked TUI field. The model and transcript receive only
 an opaque reference such as `{{questionnaire-secret:…}}`. The model can copy
 that reference unchanged into a later tool argument. Immediately before the
-tool runs, Pi replaces the reference with the secret value. The value stays in
-extension memory and is never sent to the model or persisted in the transcript.
+tool runs, Pi replaces the reference with the secret value. Known literal secret
+values are replaced with `[redacted]` in final tool text and metadata.
+Managed Bash also redacts command metadata and stdout/stderr before streaming,
+truncating, displaying, or saving them, including secrets split across output
+chunks. Commands still receive the original value.
+
+This is not a sandbox: a command can write secrets to its own files, service
+logs, or network requests. Encoded or otherwise transformed values are not
+covered by literal redaction. Existing transcripts are not rewritten.
 References expire when the session changes, Pi reloads, or Pi shuts down. An
 expired reference blocks the tool call and asks the model to request the secret
 again.

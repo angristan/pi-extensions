@@ -125,6 +125,7 @@ entry.
 ## Output and lifecycle guarantees
 
 - Polls return cursor-based deltas rather than repeating old output.
+- Known questionnaire secrets are replaced with `[redacted]` in command metadata and stdout/stderr before output enters the transcript, live viewer, or cursor buffers. Split output chunks are joined before matching; a possible secret prefix waits for more output or process exit. Interactive input can add redaction rules after a command starts. This covers literal values, not encoded output or files/logs written by the command.
 - Foreground command updates are coalesced after 250ms of quiet, with a 500ms maximum wait during continuous output.
 - Foreground managed cards share one elapsed-time ticker. Yielded transcript cards do not tick; completion settles each card once with its final duration.
 - Settled transcript cards are immutable and never poll or invalidate the transcript again.

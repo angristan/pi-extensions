@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Input, Text, wrapTextWithAnsi, type Component, type Focusable, type TUI } from "@earendil-works/pi-tui";
 import { randomUUID } from "node:crypto";
+import { registerSecretSource, SecretRedactor } from "../../shared/secret-redaction.js";
 
 interface Question { id: string; question: string; options?: string[]; allow_other?: boolean; secret?: boolean }
 interface Answer { id: string; question: string; answer?: string; reference?: string; provided?: boolean; cancelled?: boolean; secret?: boolean }
@@ -246,6 +247,7 @@ function recap(details: Details, theme: any): string[] {
 
 export default function (pi: ExtensionAPI) {
 	const secrets = new Map<string, string>();
+	const unregisterSecrets = registerSecretSource(() => secrets.values());
 
 	pi.on("tool_call", (event) => {
 		const references = findSecretReferences(event.input);
@@ -256,7 +258,14 @@ export default function (pi: ExtensionAPI) {
 		}
 		substituteSecretReferences(event.input, secrets);
 	});
-	pi.on("session_shutdown", () => secrets.clear());
+	pi.on("tool_result", (event) => {
+		const redactor = new SecretRedactor();
+		return { content: redactor.value(event.content), details: redactor.value(event.details) };
+	});
+	pi.on("session_shutdown", () => {
+		unregisterSecrets();
+		secrets.clear();
+	});
 
 	pi.registerTool({
 		name: "questionnaire",
