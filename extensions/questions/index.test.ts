@@ -1,7 +1,11 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import questions from "./index";
 
 type BusHandler = (event: unknown) => unknown | Promise<unknown>;
+const shutdowns: Array<() => Promise<void>> = [];
+afterEach(async () => {
+	for (const shutdown of shutdowns.splice(0)) await shutdown();
+});
 
 function registeredTool(
 	events: Array<{ name: string; payload: any }> = [],
@@ -26,6 +30,9 @@ function registeredTool(
 			},
 		},
 	} as any);
+	shutdowns.push(async () => {
+		for (const handler of lifecycleHandlers.session_shutdown ?? []) await handler({});
+	});
 	return tool;
 }
 
@@ -208,6 +215,10 @@ test("substitutes secret references only for tool execution", async () => {
 
 	expect(input.command).toBe("curl -H 'X-API-Key: actual-secret' https://example.test");
 	expect(JSON.stringify(result)).not.toContain("actual-secret");
+
+	let output = { content: [{ type: "text", text: "Rejected actual-secret" }], details: { request: { token: "actual-secret" } } };
+	for (const handler of lifecycleHandlers.tool_result ?? []) output = await handler(output) as typeof output;
+	expect(output).toEqual({ content: [{ type: "text", text: "Rejected [redacted]" }], details: { request: { token: "[redacted]" } } });
 
 	for (const handler of lifecycleHandlers.session_shutdown ?? []) await handler({});
 	const staleInput = { command: `echo ${reference}` };

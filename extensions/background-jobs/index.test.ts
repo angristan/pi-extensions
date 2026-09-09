@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createBashToolDefinition } from "@earendil-works/pi-coding-agent";
 import registerBetterNativeBash from "../better-native-pi/bash";
+import registerQuestions from "../questions/index";
+import { getBackgroundTerminalService } from "./service";
 import { shortPath } from "../better-native-pi/render";
 import registerBackgroundJobs, { BoundedOutput, CursorOutput, JobOutputViewer } from "./index";
 import { sanitizeTerminalOutput } from "./output";
@@ -43,7 +45,7 @@ afterEach(async () => {
 
 interface HarnessOptions {
 	killGraceMs?: number;
-	extensions?: Array<"background-jobs" | "better-native-pi">;
+	extensions?: Array<"background-jobs" | "better-native-pi" | "questions">;
 }
 
 function createHarness(options: HarnessOptions = {}): Harness {
@@ -92,9 +94,16 @@ function createHarness(options: HarnessOptions = {}): Harness {
 			handlers.set(name, registered);
 		},
 		appendEntry(type: string, data: any) { appendedEntries.push({ type, data }); },
-		events: { emit(name: string, payload: any) { events.push({ name, payload }); } },
+		events: {
+			emit(name: string, payload: any) { events.push({ name, payload }); },
+			on() { return () => {}; },
+		},
 	};
 	for (const extension of options.extensions ?? ["background-jobs", "better-native-pi"]) {
+		if (extension === "questions") {
+			registerQuestions({ ...pi, getSessionName: () => "Test session" } as any);
+			continue;
+		}
 		if (extension === "better-native-pi") {
 			registerBetterNativeBash(pi as any);
 			continue;
@@ -312,6 +321,42 @@ describe("live output refresh", () => {
 });
 
 describe("terminal tools", () => {
+	test("keeps questionnaire secrets out of terminal output and saved state", async () => {
+		const harness = createHarness({ extensions: ["background-jobs", "better-native-pi", "questions"] });
+		const secret = "synthetic-private-token-12345";
+		Object.assign(harness.ctx.ui, {
+			theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text },
+			setTitle() {},
+			custom: async () => secret,
+		});
+		await startHarness(harness);
+		const answer = await harness.tools.get("questionnaire").execute("question", {
+			questions: [{ id: "token", question: "Test token", secret: true }],
+		}, undefined, undefined, harness.ctx);
+		const reference = answer.details.answers[0].reference;
+		const input = {
+			reasoning: "verify secret execution",
+			command: `TOKEN='${reference}'; printf 'length=%s\\n' "\${#TOKEN}"; printf '%s' "\${TOKEN:0:10}"; sleep 0.1; printf '%s\\n' "\${TOKEN:10}"; sleep 0.4; printf '%s\\n' "$TOKEN" >&2`,
+			"yield-time_ms": 250,
+		};
+		for (const handler of harness.handlers.get("tool_call") ?? []) {
+			await handler({ toolName: "bash", input }, harness.ctx);
+		}
+		const partials: any[] = [];
+		const started = await harness.tools.get("bash").execute("exec", input, undefined,
+			(update: any) => partials.push(structuredClone(update)), harness.ctx);
+		const finished = await harness.tools.get("job_output").execute("read", {
+			job_id: started.details.id, wait: true, waitMs: 2_000, cursor: 0,
+		});
+		const view = getBackgroundTerminalService()!.getView(started.details.id, started.details, 4_096);
+		expect(finished.details.status).toBe("completed");
+		expect(finished.content[0].text).toContain(`length=${secret.length}`);
+		expect(finished.content[0].text).toContain("[redacted]");
+		const recorded = JSON.stringify({ answer, partials, started, finished, view, entries: harness.appendedEntries });
+		expect(recorded).not.toContain(secret);
+		expect(recorded).not.toContain(secret.slice(0, 10));
+	});
+
 	test("keeps better-native-pi functional without background-jobs", async () => {
 		const harness = createHarness({ extensions: ["better-native-pi"] });
 		await startHarness(harness);

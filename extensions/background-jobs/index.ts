@@ -35,6 +35,7 @@ import {
 } from "./service.js";
 import { isPtySupported, spawnTerminal } from "./terminal-process.js";
 import { registerProcessExitReaper } from "../../shared/process-exit-reaper.js";
+import { SecretOutputFilter, SecretRedactor } from "../../shared/secret-redaction.js";
 
 export { BoundedOutput, CursorOutput } from "./output.js";
 
@@ -193,6 +194,8 @@ interface ManagedJob {
 	stdout: BoundedOutput;
 	stderr: BoundedOutput;
 	output: CursorOutput;
+	redactor: SecretRedactor;
+	outputFilters: Record<"stdout" | "stderr", SecretOutputFilter>;
 	agentCursor: number;
 	process?: ChildProcess;
 	ptyPid?: number;
@@ -412,12 +415,15 @@ function restoredJob(data: JobSnapshot, generation: number): ManagedJob {
 	stderr.append(data.stderr ?? "");
 	output.append(data.stdout ?? "");
 	output.append(data.stderr ?? "");
+	const redactor = new SecretRedactor();
 	const job: ManagedJob = {
 		...data,
 		tty: Boolean(data.tty),
 		stdout,
 		stderr,
 		output,
+		redactor,
+		outputFilters: { stdout: new SecretOutputFilter(redactor), stderr: new SecretOutputFilter(redactor) },
 		agentCursor: output.cursor,
 		completion,
 		resolveCompletion,
@@ -699,10 +705,14 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	const emitActivity = (job: ManagedJob) => {
 		for (const listener of [...job.activityListeners]) listener();
 	};
-	const appendOutput = (job: ManagedJob, stream: "stdout" | "stderr", chunk: Buffer) => {
-		job[stream].append(chunk);
-		job.output.append(chunk);
+	const appendVisibleOutput = (job: ManagedJob, stream: "stdout" | "stderr", text: string) => {
+		if (!text) return;
+		job[stream].append(text);
+		job.output.append(text);
 		emitActivity(job);
+	};
+	const appendOutput = (job: ManagedJob, stream: "stdout" | "stderr", chunk: Buffer) => {
+		appendVisibleOutput(job, stream, job.outputFilters[stream].push(chunk));
 	};
 	const trimRetained = () => {
 		const completed = [...jobs.values()]
@@ -779,6 +789,9 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		} else if (job.killReason === "timeout") job.status = "timed_out";
 		else if (job.killReason) job.status = "killed";
 		else job.status = code === 0 ? "completed" : "failed";
+		for (const stream of ["stdout", "stderr"] as const) {
+			appendVisibleOutput(job, stream, job.outputFilters[stream].flush());
+		}
 		emitActivity(job);
 		job.resolveCompletion();
 		trimRetained();
@@ -803,20 +816,24 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		} catch {
 			throw new Error(`Working directory does not exist or is not a directory: ${cwd}`);
 		}
-		const description = compactCommand(params.description?.trim() || command, 80);
+		const redactor = new SecretRedactor();
+		const description = compactCommand(redactor.text(params.description?.trim() || command), 80);
 		let resolveCompletion!: () => void;
 		const completion = new Promise<void>((resolvePromise) => { resolveCompletion = resolvePromise; });
 		const job: ManagedJob = {
-			id: jobId(description, command, jobs),
+			id: jobId(description, redactor.text(command), jobs),
 			description,
-			command,
-			cwd,
+			// The process receives the original command below; all job metadata is display-only.
+			command: redactor.text(command),
+			cwd: redactor.text(cwd),
 			status: "running",
 			tty: Boolean(params.tty),
 			startedAt: Date.now(),
 			stdout: new BoundedOutput(),
 			stderr: new BoundedOutput(),
 			output: new CursorOutput(),
+			redactor,
+			outputFilters: { stdout: new SecretOutputFilter(redactor), stderr: new SecretOutputFilter(redactor) },
 			agentCursor: 0,
 			completion,
 			resolveCompletion,
@@ -980,6 +997,8 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		if (!job.tty) throw new Error(`Terminal ${job.id} does not accept input: started without tty=true`);
 		const stdin = job.process?.stdin;
 		if (!stdin || stdin.destroyed) throw new Error(`Terminal ${job.id} does not accept input`);
+		// Interactive input can introduce a secret after this command was started.
+		job.redactor.capture();
 		if (chars) {
 			await new Promise<void>((resolvePromise, reject) => {
 				stdin.write(chars, (error) => error ? reject(error) : resolvePromise());
