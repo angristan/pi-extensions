@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
+import { accessSync, constants, existsSync, statSync } from "node:fs";
+import { delimiter, resolve } from "node:path";
 import { getShellConfig } from "@earendil-works/pi-coding-agent";
 
 const PTY_PID_MARKER = "__PI_BACKGROUND_PTY_PID__";
@@ -57,8 +58,16 @@ function shellQuote(value: string): string {
 }
 
 function linuxScriptPath(): string | undefined {
-	if (existsSync("/usr/bin/script")) return "/usr/bin/script";
-	if (existsSync("/bin/script")) return "/bin/script";
+	for (const directory of (process.env.PATH ?? "/usr/bin:/bin").split(delimiter)) {
+		const path = resolve(directory || ".", "script");
+		try {
+			if (!statSync(path).isFile()) continue;
+			accessSync(path, constants.X_OK);
+			return path;
+		} catch {
+			// Continue past missing or non-executable PATH entries.
+		}
+	}
 	return undefined;
 }
 
