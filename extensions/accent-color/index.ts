@@ -115,7 +115,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_shutdown", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
-		// Compose cleanly with history-search and any future editor extension.
+		// Preserve wrappers installed by other editor extensions.
 		// Only restore our predecessor when this wrapper still owns the editor.
 		if (ctx.ui.getEditorComponent() === installedFactory) {
 			ctx.ui.setEditorComponent(previousFactory);
