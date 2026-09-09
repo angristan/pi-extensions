@@ -556,6 +556,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		}
 	};
 	const startAgent = async (task: string, ctx: any, contextMode: ContextMode = "fresh", name?: string, signal?: AbortSignal): Promise<ManagedAgent> => {
+		signal?.throwIfAborted();
 		const normalizedTask = boundedInput(task, "spawn task", MAX_TASK_CHARS);
 		const normalizedName = normalizeAgentName(name, MAX_AGENT_NAME_CHARS);
 		const reservation = reserveSpawn(normalizedName);
@@ -566,11 +567,13 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 		let agent: ManagedAgent | undefined;
 		try {
 			const compactedSummary = contextMode === "compacted" ? await compactedContextFor(ctx, signal) : undefined;
+			signal?.throwIfAborted();
 			fork = await forkContext(ctx, contextMode, compactedSummary, {
 				agentId: id,
 				root: options.storageRoot,
 			});
 			assertCurrentSession(reservation.generation);
+			signal?.throwIfAborted();
 			const clientOptions = clientOptionsFor(ctx, fork, id, normalizedName, ctx.cwd);
 			const client = createClient(clientOptions);
 			let resolveCompletion!: () => void;
@@ -613,16 +616,18 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 				if (agent.resumePromise === startup) agent.resumePromise = undefined;
 			}
 			assertCurrentSession(reservation.generation);
-			if (agent.status === "closed") throw new Error("Subagent closed during startup");
+			signal?.throwIfAborted();
+			if (!isActive(agent)) throw new Error("Subagent stopped during startup");
 			agent.status = "running";
 			await client.prompt(childTask(normalizedName, normalizedTask, contextMode));
 			assertCurrentSession(reservation.generation);
+			signal?.throwIfAborted();
 			persistAgentCheckpoint(agent);
 			updateOverlay();
 			return agent;
 		} catch (error) {
 			if (agent) {
-				if (isActive(agent)) finishRun(agent, "failed", error instanceof Error ? error.message : String(error));
+				if (!signal?.aborted && isActive(agent)) finishRun(agent, "failed", error instanceof Error ? error.message : String(error));
 				try {
 					await closeAgent(agent, true);
 				} catch (cleanupError) {

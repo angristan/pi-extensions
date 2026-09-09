@@ -1858,6 +1858,42 @@ setInterval(() => {}, 1000);
 		expect(restored.clients[0].options.args[restored.clients[0].options.args.indexOf("--session") + 1]).toBe(sessionFile);
 	});
 
+	for (const phase of ["context", "startup"] as const) {
+		test(`cancels a spawn during ${phase} without dispatching its task`, async () => {
+			let release!: () => void;
+			let entered!: () => void;
+			const gate = new Promise<void>((resolve) => { release = resolve; });
+			const ready = new Promise<void>((resolve) => { entered = resolve; });
+			const clients: FakeClient[] = [];
+			const harness = createHarness({
+				maxAgents: 1,
+				forkContext: async (...args) => {
+					if (phase === "context") { entered(); await gate; }
+					return createContextFork(...args);
+				},
+				clientFactory: (options) => {
+					const client = new FakeClient(options);
+					clients.push(client);
+					if (phase === "startup") client.start = async () => { entered(); await gate; client.started = true; };
+					return client;
+				},
+			});
+			const controller = new AbortController();
+			const spawning = harness.tool.execute("cancelled-spawn", {
+				action: "spawn", name: `cancelled-${phase}`, task: "Must not execute",
+			}, controller.signal, undefined, harness.ctx);
+			await ready;
+			controller.abort(new Error("Cancelled startup"));
+			release();
+			await expect(spawning).rejects.toThrow("Cancelled startup");
+			expect(clients.flatMap((client) => client.prompts)).toEqual([]);
+			expect(clients.every((client) => client.stopped)).toBe(true);
+			expect(harness.sentMessages).toEqual([]);
+			const listed = await harness.tool.execute("list", { action: "list" }, undefined, undefined, harness.ctx);
+			expect(listed.details.agents.every((agent: any) => agent.status === "closed")).toBe(true);
+		});
+	}
+
 	test("cancels a spawn that outlives parent session shutdown", async () => {
 		let releaseContext!: () => void;
 		const contextGate = new Promise<void>((resolve) => { releaseContext = resolve; });
