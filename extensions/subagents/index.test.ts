@@ -7,7 +7,8 @@ import { initTheme, SessionManager } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { compactContext, createContextFork, forkableMessages, type CompactContext, type ContextMode } from "./context";
 import registerSubagents, { boundedText, buildChildArgs } from "./index";
-import { isProviderLimitError } from "./lifecycle";
+import { isProviderLimitError, type AgentSnapshot } from "./lifecycle";
+import { formatAgent } from "./rendering";
 import { RpcProcessClient, type AgentClient, type AgentClientFactory, type AgentClientOptions, type RpcAgentEvent } from "./rpc";
 
 initTheme("dark", false);
@@ -242,6 +243,27 @@ function rendered(component: any, width = 100): string[] {
 }
 
 describe("subagents", () => {
+	test("shows tiny non-zero costs without rounding them to zero", () => {
+		const agent = {
+			id: "cheap-reviewer",
+			name: "cheap reviewer",
+			status: "completed",
+			contextMode: "fresh",
+			cwd: "/workspace",
+			task: "Review one line",
+			startedAt: 1,
+			output: "Done",
+			activity: [],
+			usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0.00004, turns: 1 },
+		} satisfies AgentSnapshot;
+
+		const output = formatAgent(agent, false);
+		const microscopicOutput = formatAgent({ ...agent, usage: { ...agent.usage, cost: 0.000000001 } }, false);
+		expect(output).toContain("$0.00004");
+		expect(output).not.toContain("$0.0000 ·");
+		expect(microscopicOutput).toContain("<$0.00000001");
+	});
+
 	test("uses process RPC and the master name for child sessions", () => {
 		const pi = { getThinkingLevel: () => "medium", getActiveTools: () => ["read", "agents"] };
 		const ctx = { model: { provider: "test-provider", id: "test-model" } };
