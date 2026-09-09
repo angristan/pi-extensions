@@ -42,6 +42,16 @@ function formatBytes(bytes: number): string {
 	return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
+function costText(cost: number): string {
+	if (!Number.isFinite(cost) || cost <= 0) return "$0.0000";
+	// Add precision only when the usual four decimals would hide a real charge.
+	for (let decimals = 4; decimals <= 8; decimals += 1) {
+		const amount = cost.toFixed(decimals);
+		if (Number(amount) > 0) return `$${amount}`;
+	}
+	return "<$0.00000001";
+}
+
 function usageText(agent: AgentSnapshot): string {
 	const parts: string[] = [];
 	if (agent.usage.turns) parts.push(`${agent.usage.turns} turn${agent.usage.turns === 1 ? "" : "s"}`);
@@ -49,7 +59,7 @@ function usageText(agent: AgentSnapshot): string {
 	if (agent.usage.output) parts.push(`↓${tokenText(agent.usage.output)}`);
 	if (agent.usage.cacheRead) parts.push(`R${tokenText(agent.usage.cacheRead)}`);
 	if (agent.usage.cacheWrite) parts.push(`W${tokenText(agent.usage.cacheWrite)}`);
-	if (agent.usage.cost) parts.push(`$${agent.usage.cost.toFixed(4)}`);
+	if (agent.usage.cost) parts.push(costText(agent.usage.cost));
 	if (agent.model) parts.push(agent.model);
 	return parts.join(" · ");
 }
