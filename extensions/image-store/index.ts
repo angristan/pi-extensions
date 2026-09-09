@@ -530,7 +530,8 @@ export default function imageStoreExtension(pi: ExtensionAPI) {
 		return {
 			action: "transform" as const,
 			text: event.text,
-			images: remainingImages.length > 0 ? remainingImages : undefined,
+			// An empty list clears attachments; undefined preserves Pi's original images.
+			images: remainingImages,
 		};
 	});
 
