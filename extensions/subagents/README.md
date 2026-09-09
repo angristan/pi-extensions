@@ -104,6 +104,7 @@ processes receive their parent session ID so compatible telemetry collectors can
 classify and link delegated sessions without reading content.
 
 - Running children hibernate after completion, interruption, or provider limits.
+- Interrupting a child clears pending RPC steering and follow-up messages before aborting. Shutdown uses the same cancellation path. The saved conversation remains available; discarded RPC input is not executed or replayed on resume. Late start events cannot restore a stopped child's running status.
 - Completed conversations can receive a later follow-up.
 - Provider quota and rate-limit failures become `paused` and can be resumed.
 - Other terminal errors become `failed`.

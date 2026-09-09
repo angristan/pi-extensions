@@ -1666,6 +1666,13 @@ setInterval(() => {}, 1000);
 		const started = await spawnAgent(harness, "Long-running investigation");
 		const name = started.details.agents[0].name;
 		const originalSession = harness.clients[0].options.args[harness.clients[0].options.args.indexOf("--session") + 1];
+		const client = harness.clients[0];
+		client.abort = async () => {
+			client.abortCalls += 1;
+			// Events already in flight must not revive an interrupted child.
+			client.emit({ type: "agent_start" });
+			client.complete("Partial answer retained", "aborted");
+		};
 		const args = { reasoning: "Stop broad investigation", action: "interrupt", agent_name: name };
 		const interrupted = await harness.tool.execute("interrupt", args, undefined, undefined, harness.ctx);
 		expect(interrupted.details.agents[0].status).toBe("interrupted");
@@ -1756,6 +1763,11 @@ setInterval(() => {}, 1000);
 		const name = started.details.agents[0].name;
 		const sessionFile = first.clients[0].options.args[first.clients[0].options.args.indexOf("--session") + 1];
 		expect(sessionFile.startsWith(first.storageRoot)).toBe(true);
+		first.clients[0].abort = async () => {
+			first.clients[0].abortCalls += 1;
+			first.clients[0].emit({ type: "agent_start" });
+			first.clients[0].complete("Partial answer retained", "aborted");
+		};
 
 		await first.handlers.get("session_shutdown")?.({ reason: "reload" }, first.ctx);
 		expect(first.clients[0].abortCalls).toBe(1);

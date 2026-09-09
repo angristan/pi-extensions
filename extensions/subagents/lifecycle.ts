@@ -217,6 +217,8 @@ export function createAgentLifecycle(options: AgentLifecycleOptions) {
 	const handleEvent = (agent: ManagedAgent, event: RpcAgentEvent): void => {
 		if (agent.status === "closed") return;
 		if (event.type === "agent_start") {
+			// An event already in flight must not undo interruption or suspension.
+			if (agent.runSettled) return;
 			agent.status = "running";
 			options.updateOverlay();
 			return;

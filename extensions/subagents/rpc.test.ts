@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RpcProcessClient } from "./rpc";
+import { RpcProcessClient, type RpcAgentEvent } from "./rpc";
 
 const directories: string[] = [];
 const cleanupPids = new Set<number>();
@@ -63,6 +63,49 @@ process.stdin.on("data", (chunk) => {
 	expect(events.some((event) => event.type === "agent_settled")).toBe(true);
 	expect(events.find((event) => event.type === "message_end")?.message.content[0].text).toBe("left right");
 	await client.stop();
+});
+
+test("aborts without executing queued steering work", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "pi-subagent-rpc-queue-"));
+	directories.push(directory);
+	const script = join(directory, "queued-rpc.mjs");
+	// Model Pi's RPC contract: abort drains pending messages unless clear_queue
+	// removed them first. Observe executed work rather than a command trace.
+	await writeFile(script, `
+let buffer = "";
+let queued = [];
+const emit = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  for (;;) {
+    const newline = buffer.indexOf("\\n");
+    if (newline < 0) break;
+    const message = JSON.parse(buffer.slice(0, newline));
+    buffer = buffer.slice(newline + 1);
+    if (message.type === "steer") queued.push(message.message);
+    if (message.type === "clear_queue") queued = [];
+    if (message.type === "abort") {
+      for (const text of queued) emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text }] } });
+      queued = [];
+      emit({ type: "agent_settled" });
+    }
+    emit({ type: "response", id: message.id, command: message.type, success: true, data: {} });
+  }
+});
+`, "utf8");
+	const client = new RpcProcessClient({ command: process.execPath, args: [script], cwd: directory });
+	const events: RpcAgentEvent[] = [];
+	client.onEvent((event) => events.push(event));
+	try {
+		await client.start();
+		await client.steer("Work that must not run after interruption");
+		await client.abort();
+		expect(events.some((event) => event.type === "agent_settled")).toBe(true);
+		expect(events.filter((event) => event.type === "message_end")).toEqual([]);
+	} finally {
+		await client.stop();
+	}
 });
 
 test("does not retain a process exit listener after a child stops", async () => {

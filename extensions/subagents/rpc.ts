@@ -233,7 +233,11 @@ export class RpcProcessClient implements AgentClient {
 
 	async prompt(message: string): Promise<void> { await this.send({ type: "prompt", message }); }
 	async steer(message: string): Promise<void> { await this.send({ type: "steer", message }); }
-	async abort(): Promise<void> { await this.send({ type: "abort" }); }
+	async abort(): Promise<void> {
+		// Pi's abort waits for idle and otherwise continues queued messages first.
+		await this.send({ type: "clear_queue" });
+		await this.send({ type: "abort" });
+	}
 
 	async stop(): Promise<void> {
 		const child = this.process;
