@@ -55,7 +55,6 @@ const parameters = {
 
 const VALID_STATUSES: readonly Status[] = ["pending", "in_progress", "completed"];
 const VALID_STATUS_SET = new Set<string>(VALID_STATUSES);
-const PLAN_GUARD_MARKER = "TODO guard:";
 
 const PROMPT_GUIDELINES = [
 	"Use update_plan for meaningful multi-step work. Pass the complete current plan on every update; do not send partial patches.",
@@ -228,17 +227,6 @@ function itemPath(items: PlanItem[], index: number): string {
 	return path.join(" › ");
 }
 
-function planGuardText(plan: PlanState): string {
-	const stats = planStats(plan.items);
-	const examples = plan.items
-		.map((item, index) => ({ item, index }))
-		.filter(({ item, index }) => !hasChildren(plan.items, index) && item.status !== "completed")
-		.slice(0, 3)
-		.map(({ item, index }) => `${item.status}: ${itemPath(plan.items, index)}`);
-	const suffix = examples.length ? ` Open: ${examples.join("; ")}${stats.incomplete > examples.length ? "; …" : ""}` : "";
-	return `${PLAN_GUARD_MARKER} update_plan still has ${stats.incomplete}/${stats.total} unfinished item(s) (${stats.completed}/${stats.total} completed).${suffix} Update the plan before finalizing, or explicitly say why the remaining work is blocked, canceled, or deferred.`;
-}
-
 function modelPlanLines(plan: PlanState): string[] {
 	const stats = planStats(plan.items);
 	const lines = [`Plan updated: ${stats.completed}/${stats.total} tasks completed.`];
@@ -275,25 +263,6 @@ function modelPlanText(plan: PlanState): string {
 function planIsCompleted(plan: PlanState): boolean {
 	const stats = planStats(plan.items);
 	return stats.total > 0 && stats.incomplete === 0;
-}
-
-function planIsFinalizable(plan: PlanState): boolean {
-	const stats = planStats(plan.items);
-	return stats.incomplete === 0 || explainsInactiveWork(plan.explanation);
-}
-
-function assistantText(message: any): string {
-	const content = message?.content;
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	return content
-		.filter((block: any) => block?.type === "text" && typeof block.text === "string")
-		.map((block: any) => block.text)
-		.join("\n");
-}
-
-function assistantHasToolCall(message: any): boolean {
-	return Array.isArray(message?.content) && message.content.some((block: any) => block?.type === "toolCall");
 }
 
 function hasLaterSibling(items: PlanItem[], index: number): boolean {
@@ -564,17 +533,6 @@ export default function (pi: ExtensionAPI, dependencies: PlanProgressDependencie
 		// injected input must not consume that one-turn acknowledgement window.
 		if (event.source !== "extension" && planIsCompleted(state)) clearPlan(ctx);
 		return { action: "continue" };
-	});
-
-	pi.on("message_end", (event: any, _ctx: any) => {
-		// The plan overlay + /plan-status already surface unfinished work; a loud
-		// warning notification here was noisy, so the guard is silent now.
-		if (event.message?.role !== "assistant") return;
-		if (event.message.stopReason === "toolUse" || assistantHasToolCall(event.message)) return;
-		if (planIsFinalizable(state)) return;
-		if (assistantText(event.message).includes(PLAN_GUARD_MARKER)) return;
-
-		// No visible notification — plan state is shown via the overlay.
 	});
 
 	pi.on("agent_settled", (_event: any, ctx: any) => {
