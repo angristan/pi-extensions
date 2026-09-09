@@ -38,7 +38,8 @@ For an interactive prompt, call `bash` with `tty: true`; if it yields, send the
 answer with `terminal_write`. `terminal_write` also accepts literal control
 characters, including `\u0003` for Ctrl+C. PTY mode uses the system `expect`
 utility on macOS and `script` from util-linux on Linux, avoiding a native Node
-dependency.
+dependency. Linux resolves an executable `script` through `PATH`, including NixOS
+system-profile paths.
 
 ## User experience
 
