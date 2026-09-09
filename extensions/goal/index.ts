@@ -121,7 +121,7 @@ export function parseGoalDocument(document: string): ParsedGoalDocument {
 }
 
 function elapsedMs(state: GoalState, now = Date.now()): number {
-	return state.accumulatedActiveMs + (state.status === "active" && state.activeSince ? Math.max(0, now - state.activeSince) : 0);
+	return state.accumulatedActiveMs + (state.status === "active" && state.activeSince !== undefined ? Math.max(0, now - state.activeSince) : 0);
 }
 
 function displayState(state: GoalState, now = Date.now()): GoalDisplayState {
@@ -1390,7 +1390,7 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 	// State persistence / restore
 	// ------------------------------------------------------------------------
 
-	const restoreState = (ctx: any) => {
+	const restoreState = (ctx: any, restartClock = false) => {
 		activeCtx = ctx;
 		state = undefined;
 		let lastKnownGoal: GoalState | undefined;
@@ -1456,6 +1456,13 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 			};
 			lastKnownGoal = state;
 		}
+		if (state?.status === "active" && (restartClock || state.activeSince === undefined)) {
+			// After an unclean exit, only count through the last persisted observation.
+			state.accumulatedActiveMs = elapsedMs(state, state.updatedAt);
+			state.activeSince = Date.now();
+			state.updatedAt = state.activeSince;
+			persist();
+		}
 		refreshOverlayStats(ctx, true);
 		emit(ctx);
 		if (state?.status === "active") {
@@ -1474,7 +1481,7 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 	};
 
 	pi.on("session_start", async (event, ctx) => {
-		restoreState(ctx);
+		restoreState(ctx, true);
 		if (!ctx.hasUI || (event.reason !== "startup" && event.reason !== "resume")) return;
 		if (!state || (state.status !== "paused" && state.status !== "blocked")) return;
 

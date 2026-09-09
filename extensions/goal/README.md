@@ -232,6 +232,11 @@ shown as `cached` and `written` when present. Usage totals are refreshed on
 message, compaction, restore, and branch lifecycle events, then reused across
 repaints so rendering does not rescan the transcript.
 
+Active time pauses during shutdown and resumes when an active goal is restored.
+Time while Pi is closed is excluded. After an unclean exit, time is counted only
+through the last persisted observation before starting a new clock. Paused and
+blocked goals remain paused until explicitly resumed.
+
 Status colors: `● active` (green), `● paused` (yellow), `● blocked` (red), and
 `● complete` (dim).
 
