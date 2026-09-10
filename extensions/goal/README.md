@@ -83,9 +83,10 @@ resuming the older objective.
 - **Interruption → pause** — if you abort a turn (Esc), the goal auto-pauses
   so it doesn't immediately resume on the next boundary.
 - **User request → reconciliation** — user-originated input marks reconciliation as
-  pending. `goal_complete`, `goal_block`, `goal_resume`, and replacement through
-  `goal_set` reject the transition until the agent calls `goal_reconcile`. An
-  unresolved or invalid reconciliation pauses the loop at the next safe boundary.
+  pending. `goal_complete` and `goal_block` reject the transition until the agent
+  calls `goal_reconcile`; `goal_resume` and `goal_set` are not exposed while the
+  goal is active. An unresolved or invalid reconciliation pauses the loop at the
+  next safe boundary.
 - **Provider error → pause** — if a turn ends with a terminal provider error, the
   goal is paused at the next safe idle boundary instead of retry-looping.
   Usage/rate/quota errors get a specific resume hint. Reopening the session offers
@@ -131,23 +132,20 @@ All sections except `# Goal` are optional.
 
 ## Tools exposed to the agent
 
-- **`goal_set`** — always available; lets the agent set (or replace) the
-  durable session goal itself and start the auto-continuation loop, without a
-  user running `/goal`. It is reserved for explicit user requests or
-  long-running work that needs automatic continuation; ordinary multi-step work
-  should use `update_plan`. Accepts an `objective`, optional `validation`
-  criteria, and `replace: true` to overwrite an existing in-progress goal. A
-  completed goal can be overwritten freely. The tool refuses to silently
-  overwrite an active/paused/blocked goal and asks the caller to re-call with
-  `replace: true`, so an in-progress goal cannot be silently redefined around
-  an easier task. It also refuses replacement while user-request reconciliation
-  is pending.
-- **`goal_resume`** — always available; reactivates the existing paused or
-  blocked goal and restarts auto-continuation without replacing its objective,
-  validation criteria, identity, timing, or continuation history. It rejects an
-  already-active goal, including one awaiting reconciliation. This is the
+- **`goal_set`** — available when no goal is active; lets the agent set the
+  durable session goal and start the auto-continuation loop without a user
+  running `/goal`. It is reserved for explicit user requests or long-running
+  work that needs automatic continuation; ordinary multi-step work should use
+  `update_plan`. A paused or blocked goal requires `replace: true` before a
+  different objective can replace it, while a completed goal can be overwritten
+  freely. Active-goal scope changes use `goal_reconcile` instead. Stale active
+  calls, including identical replacements, are state-preserving silent no-ops.
+- **`goal_resume`** — available only for paused or blocked goals; reactivates the
+  existing goal and restarts auto-continuation without replacing its objective,
+  validation criteria, identity, timing, or continuation history. This is the
   agent-callable equivalent of `/goal resume`. Reopening a session with a paused
-  or blocked goal also offers this action in the UI.
+  or blocked goal also offers this action in the UI. Stale calls after activation
+  are silent and do not change state.
 - **`goal_clear`** — always available; retires an obsolete, superseded, cancelled,
   or unrelated goal without deleting its append-only history. It is not a
   substitute for `goal_complete` when the objective was achieved.
@@ -168,12 +166,13 @@ All sections except `# Goal` are optional.
   supporting detail, and next input. Three consecutive blocked runs stop the
   goal regardless of wording. Multiple reports in one run count once.
 
-`goal_set`, `goal_resume`, and `goal_clear` are always registered.
+All lifecycle tools remain registered, but the active loadout follows goal state.
+`goal_set` is hidden while a goal is active, `goal_resume` appears only while a
+paused or blocked goal exists, and `goal_clear` remains available.
 `goal_complete` and `goal_block` start inactive, are added when the first goal
 becomes active, and remain in the active loadout for the rest of that session.
-`goal_reconcile` is added only while reconciliation is pending and removed as soon
-as it resolves or the goal pauses. Stale queued calls are ignored silently so they
-do not add noisy output to the transcript; the rendered block is hidden too.
+`goal_reconcile` appears only while reconciliation is pending. Stale queued calls
+are ignored silently and render no transcript block.
 
 All six tools render as the same compact 2-line transcript blocks as the native
 and web tools (`renderShell: "self"`): a `• verb` headline whose bullet color
