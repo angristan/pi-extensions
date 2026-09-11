@@ -526,7 +526,7 @@ describe("auto-session-title model requests", () => {
 			messages: [{ role: "user", content: [{ type: "text", text: "title context" }] }],
 		});
 		expect(invocation?.[2]).toMatchObject({
-			maxTokens: 384,
+			maxTokens: 1_024,
 			reasoning: "xhigh",
 			sessionId: "session-1:title",
 		});
