@@ -1,4 +1,6 @@
 const REQUEST_TIMEOUT_MS = 20_000;
+// Reasoning models may consume several hundred tokens before emitting the JSON.
+const MAX_TITLE_COMPLETION_TOKENS = 1_024;
 
 export type CompleteRequest = (
 	model: any,
@@ -37,7 +39,7 @@ export async function requestTitleCompletion(
 			}],
 		},
 		{
-			maxTokens: 384,
+			maxTokens: MAX_TITLE_COMPLETION_TOKENS,
 			reasoning,
 			sessionId: `${sessionId}:title`,
 			signal: requestSignal,
