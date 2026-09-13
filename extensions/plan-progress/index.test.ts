@@ -18,10 +18,12 @@ function createHarness(branch: any[] = []) {
 	const handlers: Record<string, any[]> = {};
 	const commands: Record<string, any> = {};
 	const appended: Array<{ customType: string; data: any }> = [];
+	const sentMessages: Array<{ message: any; options: any }> = [];
 	const notifications: Array<{ message: string; level: string }> = [];
 	let overlayCardDefinition: any;
 	planProgress({
 		appendEntry(customType: string, data: any) { appended.push({ customType, data }); },
+		sendMessage(message: any, options: any) { sentMessages.push({ message, options }); },
 		events: { emit() {}, on() {} },
 		on(event: string, handler: any) { (handlers[event] ??= []).push(handler); },
 		registerCommand(name: string, command: any) { commands[name] = command; },
@@ -51,6 +53,7 @@ function createHarness(branch: any[] = []) {
 		handlers,
 		notifications,
 		overlayCardDefinition,
+		sentMessages,
 		updatePlan: tools.find((tool) => tool.name === "update_plan"),
 	};
 }
@@ -292,6 +295,32 @@ test("rejects plans with more than one in-progress step without persisting", asy
 	expect(harness.appended).toEqual([]);
 });
 
+test("preserves completed milestones unless an objective reset is explicit", async () => {
+	const harness = createHarness();
+	await executePlan(harness, {
+		plan: [
+			{ step: "Map existing behavior", status: "completed" },
+			{ step: "Implement the fix", status: "in_progress" },
+		],
+	});
+
+	await expect(executePlan(harness, {
+		plan: [{ step: "Debug the immediate failure", status: "in_progress" }],
+	})).rejects.toThrow("cannot remove completed step(s): Map existing behavior");
+	await expect(executePlan(harness, {
+		reset: true,
+		plan: [{ step: "Handle the new objective", status: "in_progress" }],
+	})).rejects.toThrow("reset requires an explanation");
+
+	const result = await executePlan(harness, {
+		reset: true,
+		explanation: "The latest user request replaced the objective.",
+		plan: [{ step: "Handle the new objective", status: "in_progress" }],
+	});
+	expect(result.details.items).toEqual([{ step: "Handle the new objective", status: "in_progress" }]);
+	expect(harness.appended).toHaveLength(2);
+});
+
 test("rejects unfinished plans without an active step or inactive-work explanation", async () => {
 	const harness = createHarness();
 
@@ -345,6 +374,15 @@ test("keeps an unfinished plan visible across prompts until cleared", async () =
 
 	await harness.commands["plan-clear"].handler("", harness.ctx);
 	expect(harness.overlayCardDefinition.visible()).toBe(false);
+	expect(harness.sentMessages.at(-1)).toEqual({
+		message: {
+			customType: "plan-progress-context",
+			content: "## Execution plan cleared\nThere is no active execution plan. Do not restore an older plan from conversation history or a compaction summary.",
+			display: false,
+			details: { active: false },
+		},
+		options: { deliverAs: "steer" },
+	});
 });
 
 test("clears a completed plan on the next user prompt", async () => {
@@ -363,6 +401,39 @@ test("clears a completed plan on the next user prompt", async () => {
 	await harness.handlers.input[0]({ source: "interactive" }, harness.ctx);
 	expect(harness.overlayCardDefinition.visible()).toBe(false);
 	expect(harness.appended.at(-1)).toEqual({ customType: "plan-progress", data: { items: [] } });
+});
+
+test("re-anchors the exact plan after compaction and filters stale checkpoints", async () => {
+	const harness = createHarness();
+	await executePlan(harness, {
+		explanation: "Keep the full scope",
+		plan: [
+			{ step: "Map <existing> & behavior", status: "completed" },
+			{ step: "Implement the fix", status: "in_progress" },
+		],
+	});
+
+	await harness.handlers.session_compact[0]({}, harness.ctx);
+	const checkpoint = harness.sentMessages.at(-1)!;
+	expect(checkpoint.options).toEqual({ deliverAs: "steer" });
+	expect(checkpoint.message).toMatchObject({ customType: "plan-progress-context", display: false, details: { active: true } });
+	expect(checkpoint.message.content).toContain("Map &lt;existing&gt; &amp; behavior");
+	expect(checkpoint.message.content).toContain("Preserve completed steps and broad remaining outcomes");
+
+	const latest = { customType: "plan-progress-context", content: "latest" };
+	const contextResult = harness.handlers.context[0]({
+		messages: [
+			{ role: "user", content: "work" },
+			{ customType: "plan-progress-context", content: "stale" },
+			{ role: "assistant", content: [] },
+			latest,
+		],
+	});
+	expect(contextResult.messages).toEqual([
+		{ role: "user", content: "work" },
+		{ role: "assistant", content: [] },
+		latest,
+	]);
 });
 
 test("restores the latest plan state from the active session branch", async () => {
@@ -389,4 +460,7 @@ test("restores the latest plan state from the active session branch", async () =
 		level: "info",
 		message: "• Updated Plan\n  Restored state\n  ├─ ✓ Restored done\n  └─ ● Restored active\n       Resume from the saved checkpoint.",
 	}]);
+	expect(harness.sentMessages).toHaveLength(1);
+	expect(harness.sentMessages[0]!.message.content).toContain("Restored done");
+	expect(harness.sentMessages[0]!.message.content).toContain("Restored active");
 });

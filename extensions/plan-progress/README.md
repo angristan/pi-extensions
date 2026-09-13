@@ -6,12 +6,18 @@ editor, and expose a tool the agent can call to maintain it.
 The agent maintains the plan via the `update_plan` tool; this extension owns the
 tool logic, validation, persistence, agent guidance, and plan-section rendering.
 Each update remains in its append-only tool result instead of rebuilding the
-system prompt with mutable plan state, preserving prompt-prefix cache reuse. An
-unfinished plan remains visible across turns. A completed plan remains visible
-through the response that finished it, then clears when the next user prompt
-starts. The package's generic `overlay-stack` only supplies consistent card
-framing and places that section on screen. If the `goal` extension is active,
-its separate card can appear above the plan.
+system prompt with mutable plan state, preserving prompt-prefix cache reuse. The
+extension re-anchors the exact current plan as a hidden append-only context
+message after compaction, session restore, and tree navigation. Only the latest
+checkpoint enters model context.
+
+An unfinished plan remains visible across turns. Completed milestones cannot be
+removed while work remains unless the agent explicitly sets `reset: true` and
+explains how the latest user request changed the objective. A completed plan
+remains visible through the response that finished it, then clears when the next
+user prompt starts. The package's generic `overlay-stack` only supplies
+consistent card framing and places that section on screen. If the `goal`
+extension is active, its separate card can appear above the plan.
 
 `/plan-status` shows the complete hierarchy:
 
@@ -45,15 +51,18 @@ count leaf tasks, not grouping rows.
 
 ## Tool
 
-- `update_plan` — agent-facing; replace the complete plan. Each ordered row has
-  `step`, an optional `description` of up to 500 characters, optional `depth`
-  (0–8), and a leaf `status` of `pending`, `in_progress`, or `completed`.
-  Descriptions hold context or completion criteria that do not fit a concise
-  step title. A row becomes a parent when the next row has a greater depth; its
-  status and progress are derived, so its input status can be omitted. Depth
-  starts at 0 and can increase by at most one row at a time. Flat plans remain
-  compatible. The tool runs sequentially so the agent sees each update before
-  continuing.
+- `update_plan` — agent-facing; submit the complete current plan snapshot. Each
+  ordered row has `step`, an optional `description` of up to 500 characters,
+  optional `depth` (0–8), and a leaf `status` of `pending`, `in_progress`, or
+  `completed`. Descriptions hold context or completion criteria that do not fit
+  a concise step title. A row becomes a parent when the next row has a greater
+  depth; its status and progress are derived, so its input status can be omitted.
+  Depth starts at 0 and can increase by at most one row at a time. Flat plans
+  remain compatible. Keep completed rows while the plan is unfinished and refine
+  future work with nested rows. `reset: true` permits a new plan to remove
+  completed rows only when the latest user request changed the objective; it
+  requires an explanation. The tool runs sequentially so the agent sees each
+  update before continuing.
 
 Box border uses the accent color from `accent-color`.
 
