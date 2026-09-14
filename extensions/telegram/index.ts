@@ -485,14 +485,14 @@ export function createTelegramExtension(dependencies: RuntimeDependencies = {}) 
 			if (topic) return topic;
 			if (topicCreation) return topicCreation;
 			const sessionId = activeSessionId;
-			if (!sessionId || activeCtx !== ctx) return undefined;
+			if (!sessionId || ctx.sessionManager.getSessionId() !== sessionId) return undefined;
 			const configKey = telegramConfigKey(topicConfig);
 			topicCreation = (async () => {
 				try {
 					if (topicSupport === undefined) topicSupport = await supportsTopics(topicConfig, signal);
 					if (!topicSupport) return undefined;
 					const created = await createTopic(topicConfig, topicName(pi, ctx.cwd), signal);
-					if (activeCtx !== ctx || activeSessionId !== sessionId || telegramConfigKey(config ?? topicConfig) !== configKey) {
+					if (activeSessionId !== sessionId || telegramConfigKey(config ?? topicConfig) !== configKey) {
 						return undefined;
 					}
 					const value: PersistedTelegramTopic = {
@@ -740,7 +740,7 @@ export function createTelegramExtension(dependencies: RuntimeDependencies = {}) 
 				: undefined;
 		});
 		pi.on("session_info_changed", async (_event, ctx) => {
-			if (!config?.enabled || activeCtx !== ctx || (!topic && !topicCreation)) return;
+			if (!config?.enabled || ctx.sessionManager.getSessionId() !== activeSessionId || (!topic && !topicCreation)) return;
 			const currentTopic = topic ?? await topicCreation;
 			if (!currentTopic) return;
 			const name = topicName(pi, ctx.cwd);

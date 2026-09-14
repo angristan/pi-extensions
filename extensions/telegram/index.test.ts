@@ -152,6 +152,8 @@ function makeHarness(options: {
 		registerTool(tool: any) { tools.set(tool.name, tool); },
 	} as any);
 
+	const invocationContext = () => ({ ...ctx });
+
 	return {
 		scheduler,
 		sent,
@@ -162,17 +164,17 @@ function makeHarness(options: {
 		resolved,
 		tools,
 		async invokeTool(name: string, params: unknown) {
-			return tools.get(name).execute("tool-call", params, new AbortController().signal, undefined, ctx);
+			return tools.get(name).execute("tool-call", params, new AbortController().signal, undefined, invocationContext());
 		},
 		async invokeCommand(name: string, args: string) {
-			return commands.get(name).handler(args, ctx);
+			return commands.get(name).handler(args, invocationContext());
 		},
 		emitBus(name: string, event: unknown) {
 			for (const handler of busHandlers[name] ?? []) handler(event);
 		},
 		setSessionName(name: string | undefined) { sessionName = name; },
 		async emit(name: string, event: unknown = {}) {
-			for (const handler of lifecycleHandlers[name] ?? []) await handler(event, ctx);
+			for (const handler of lifecycleHandlers[name] ?? []) await handler(event, invocationContext());
 		},
 	};
 }
