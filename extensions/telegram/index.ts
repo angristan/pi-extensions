@@ -25,12 +25,14 @@ const QUESTION_RESOLVED_EVENT = "questions:resolved";
 const DEFAULT_DELAY_MINUTES = 5;
 const MAX_DELAY_MINUTES = 7 * 24 * 60;
 const MAX_TELEGRAM_MESSAGE_CHARACTERS = 4_096;
+const MAX_CONTEXT_LABEL_CHARACTERS = 100;
+const MAX_DIRECT_MESSAGE_CHARACTERS = MAX_TELEGRAM_MESSAGE_CHARACTERS - MAX_CONTEXT_LABEL_CHARACTERS - 2;
 
 const notifyUserParameters = Type.Object({
 	message: Type.String({
 		description: "Message sent to the configured Telegram chat. Common Markdown formatting is supported.",
 		minLength: 1,
-		maxLength: MAX_TELEGRAM_MESSAGE_CHARACTERS,
+		maxLength: MAX_DIRECT_MESSAGE_CHARACTERS,
 	}),
 }, { additionalProperties: false });
 
@@ -162,8 +164,17 @@ function contextLabel(pi: ExtensionAPI, cwd: string): string {
 	return resolvedCwd === resolve(homedir()) ? "pi" : basename(resolvedCwd) || "pi";
 }
 
+function escapeMarkdownInline(value: string): string {
+	return value.replace(/[!-/:-@\[-`{-~]/g, "\\$&");
+}
+
+function formatDirectMessage(project: string, message: string): string {
+	const title = escapeMarkdownInline(preview(project, MAX_CONTEXT_LABEL_CHARACTERS));
+	return `**${title}**\n\n${message}`;
+}
+
 function messageContext(project: string, question: WaitingQuestion): string {
-	return `<b>${escapeTelegramHtml(preview(project, 100))}</b> · Question ${question.index} of ${question.total}`;
+	return `<b>${escapeTelegramHtml(preview(project, MAX_CONTEXT_LABEL_CHARACTERS))}</b> · Question ${question.index} of ${question.total}`;
 }
 
 export function formatWaitingMessage(project: string, question: WaitingQuestion, delayMinutes: number): string {
@@ -512,16 +523,16 @@ export function createTelegramExtension(dependencies: RuntimeDependencies = {}) 
 				renderShell: "self",
 				renderCall: renderTelegramCall,
 				renderResult: renderTelegramResult,
-				async execute(_toolCallId, params, signal) {
+				async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 					if (!config?.enabled) throw new Error("Telegram is not configured or is disabled.");
 					const snapshot = { ...config };
 					const message = params.message;
 					if (!message.trim()) throw new Error("Telegram message cannot be empty.");
-					if ([...message].length > MAX_TELEGRAM_MESSAGE_CHARACTERS) {
-						throw new Error(`Telegram messages are limited to ${MAX_TELEGRAM_MESSAGE_CHARACTERS} characters.`);
+					if ([...message].length > MAX_DIRECT_MESSAGE_CHARACTERS) {
+						throw new Error(`Telegram message bodies are limited to ${MAX_DIRECT_MESSAGE_CHARACTERS} characters because each message includes a session title.`);
 					}
 					try {
-						await sendMarkdownMessage(snapshot, message, signal);
+						await sendMarkdownMessage(snapshot, formatDirectMessage(contextLabel(pi, ctx.cwd), message), signal);
 					} catch (error) {
 						throw new Error(`Telegram message failed: ${safeError(error, snapshot.botToken)}`);
 					}

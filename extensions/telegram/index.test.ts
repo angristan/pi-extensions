@@ -3,6 +3,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { telegramMarkdownToHtml } from "./markdown";
 import {
 	createTelegramExtension,
 	formatResolvedMessage,
@@ -358,14 +359,19 @@ describe("question wait lifecycle", () => {
 });
 
 describe("direct user messages", () => {
-	test("sends Markdown source to the rich-message client", async () => {
-		const harness = makeHarness();
+	test("prefixes Markdown messages with the escaped session title", async () => {
+		const harness = makeHarness({ sessionName: "Release *v2* [plan](https://example.com) <safe>" });
 		await harness.emit("session_start");
 		const message = "**Crawl complete.**\n[Artifacts](https://example.com) are ready for review.";
 
 		const result = await harness.invokeTool("notify_user", { message });
 
-		expect(harness.sent).toEqual([message]);
+		expect(harness.sent).toEqual([
+			"**Release \\*v2\\* \\[plan\\]\\(https\\:\\/\\/example\\.com\\) \\<safe\\>**\n\n" + message,
+		]);
+		expect(telegramMarkdownToHtml(harness.sent[0]!)).toStartWith(
+			"<b>Release *v2* [plan](https://example.com) &lt;safe&gt;</b>\n\n",
+		);
 		expect(result).toMatchObject({
 			content: [{ type: "text", text: "Telegram message sent to the user." }],
 			details: { status: "sent" },
@@ -432,14 +438,14 @@ describe("direct user messages", () => {
 		await harness.invokeCommand("telegram", "on");
 		expect(harness.tools.has("notify_user")).toBe(true);
 		await harness.invokeTool("notify_user", { message: "Work is complete." });
-		expect(harness.sent).toEqual(["Work is complete."]);
+		expect(harness.sent).toEqual(["**example\\-project**\n\nWork is complete."]);
 	});
 
-	test("rejects messages that exceed Telegram's bound", async () => {
+	test("rejects message bodies that leave no room for the title", async () => {
 		const harness = makeHarness();
 		await harness.emit("session_start");
-		await expect(harness.invokeTool("notify_user", { message: "x".repeat(4_097) }))
-			.rejects.toThrow("Telegram messages are limited to 4096 characters.");
+		await expect(harness.invokeTool("notify_user", { message: "x".repeat(3_995) }))
+			.rejects.toThrow("Telegram message bodies are limited to 3994 characters because each message includes a session title.");
 		expect(harness.sent).toEqual([]);
 	});
 

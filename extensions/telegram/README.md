@@ -16,14 +16,17 @@ chat. It is appropriate when:
 - an important or sensitive event deserves out-of-band notice.
 
 The tool is one-way. It must not replace `questionnaire` when the agent needs
-input, confirmation, or approval. Messages may contain up to Telegram's 4,096
-character limit, preserve line breaks, and disable link previews. Common
-Markdown is converted to Telegram formatting: headings, bold, italic,
-strikethrough, inline and fenced code, block quotes, links, lists, task lists,
-and tables. Raw HTML is escaped, and unsafe link schemes remain plain text.
-The agent cannot select another recipient. Calls use the same compact status
-block as the other native-style tools; expand a settled call to see the complete
-Markdown source.
+input, confirmation, or approval. Every message starts with the current Pi
+session title in bold. If the session has no title, the extension uses the
+current directory name (`pi` when running from your home directory). Message
+bodies may contain up to 3,994 characters, which reserves space for the title
+within Telegram's 4,096-character limit. Messages preserve line breaks and
+disable link previews. Common Markdown is converted to Telegram formatting:
+headings, bold, italic, strikethrough, inline and fenced code, block quotes,
+links, lists, task lists, and tables. Raw HTML is escaped, and unsafe link
+schemes remain plain text. The agent cannot select another recipient. Calls use
+the same compact status block as the other native-style tools; expand a settled
+call to see the complete Markdown source.
 
 ```markdown
 ## Crawl complete
