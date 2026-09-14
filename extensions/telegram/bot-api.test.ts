@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
+	createTelegramTopic,
+	renameTelegramTopic,
 	resolveTelegramQuestion,
 	sendTelegramHtmlMessage,
 	sendTelegramMarkdownMessage,
 	sendTelegramQuestion,
+	telegramBotSupportsTopics,
 	waitForTelegramAnswer,
 	type SentTelegramQuestion,
 	type TelegramCredentials,
@@ -26,6 +29,43 @@ function methodFromUrl(url: string | URL | Request): string {
 }
 
 describe("Telegram question messages", () => {
+	test("detects, creates, and renames private-chat topics", async () => {
+		const calls: Array<{ method: string; body: any }> = [];
+		const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
+			const method = methodFromUrl(url);
+			calls.push({ method, body: JSON.parse(String(init?.body)) });
+			if (method === "getMe") return telegramResponse({ has_topics_enabled: true });
+			if (method === "createForumTopic") {
+				return telegramResponse({ message_thread_id: 73, name: "Crawl monitoring", icon_color: 0x6fb9f0 });
+			}
+			return telegramResponse(true);
+		};
+
+		expect(await telegramBotSupportsTopics(credentials, undefined, fetchImpl as typeof fetch)).toBe(true);
+		expect(await createTelegramTopic(credentials, "Crawl monitoring", undefined, fetchImpl as typeof fetch)).toEqual({
+			messageThreadId: 73,
+			name: "Crawl monitoring",
+		});
+		await renameTelegramTopic(credentials, 73, "Crawl complete", undefined, fetchImpl as typeof fetch);
+
+		expect(calls).toEqual([
+			{ method: "getMe", body: {} },
+			{ method: "createForumTopic", body: { chat_id: "987654321", name: "Crawl monitoring" } },
+			{ method: "editForumTopic", body: { chat_id: "987654321", message_thread_id: 73, name: "Crawl complete" } },
+		]);
+	});
+
+	test("routes direct messages to a private-chat topic", async () => {
+		let body: any;
+		await sendTelegramMarkdownMessage({ ...credentials, messageThreadId: 73 }, "**Done**", undefined, async (_url, init) => {
+			body = JSON.parse(String(init?.body));
+			return telegramResponse({ message_id: 41, chat: { id: 987654321 } });
+		});
+
+		expect(body.message_thread_id).toBe(73);
+		expect(body.text).toBe("<b>Done</b>");
+	});
+
 	test("sends direct Markdown messages as Telegram HTML", async () => {
 		let body: any;
 		await sendTelegramMarkdownMessage(credentials, "**Done**: see [report](https://example.com?a=1&b=2)", undefined, async (_url, init) => {

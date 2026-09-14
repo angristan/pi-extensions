@@ -1,19 +1,23 @@
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Container, Input, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type Focusable, type TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { BOLD, GREEN, MAGENTA, RED, RESET } from "../better-native-pi/render.js";
 import {
+	createTelegramTopic,
+	renameTelegramTopic,
 	resolveTelegramQuestion,
 	sendTelegramHtmlMessage,
 	sendTelegramMarkdownMessage,
 	sendTelegramMessage,
 	sendTelegramQuestion,
+	telegramBotSupportsTopics,
 	type SentTelegramQuestion,
+	type TelegramTopic,
 } from "./bot-api";
 import { waitForSharedTelegramAnswer } from "./coordinator";
 
@@ -22,10 +26,12 @@ export { sendTelegramMessage } from "./bot-api";
 const QUESTION_WAITING_EVENT = "questions:waiting";
 const QUESTION_ANSWER_EVENT = "questions:answer";
 const QUESTION_RESOLVED_EVENT = "questions:resolved";
+const TELEGRAM_TOPIC_ENTRY = "telegram-session-topic";
 const DEFAULT_DELAY_MINUTES = 5;
 const MAX_DELAY_MINUTES = 7 * 24 * 60;
 const MAX_TELEGRAM_MESSAGE_CHARACTERS = 4_096;
 const MAX_CONTEXT_LABEL_CHARACTERS = 100;
+const MAX_TOPIC_NAME_CHARACTERS = 128;
 const MAX_DIRECT_MESSAGE_CHARACTERS = MAX_TELEGRAM_MESSAGE_CHARACTERS - MAX_CONTEXT_LABEL_CHARACTERS - 2;
 
 const notifyUserParameters = Type.Object({
@@ -43,6 +49,18 @@ export interface TelegramConfig {
 	enabled: boolean;
 }
 
+interface TelegramDeliveryConfig extends TelegramConfig {
+	messageThreadId?: number;
+}
+
+interface PersistedTelegramTopic {
+	version: 1;
+	sessionId: string;
+	configKey: string;
+	messageThreadId: number;
+	name: string;
+}
+
 export interface WaitingQuestion {
 	requestId: string;
 	questionnaireId: string;
@@ -57,12 +75,15 @@ export interface WaitingQuestion {
 interface RuntimeDependencies {
 	loadConfig?: () => TelegramConfig | undefined;
 	saveConfig?: (config: TelegramConfig) => Promise<void>;
-	sendMessage?: (config: TelegramConfig, text: string, signal?: AbortSignal) => Promise<void>;
-	sendMarkdownMessage?: (config: TelegramConfig, text: string, signal?: AbortSignal) => Promise<void>;
-	sendRenderedMessage?: (config: TelegramConfig, text: string, signal?: AbortSignal) => Promise<SentTelegramQuestion>;
-	sendQuestion?: (config: TelegramConfig, text: string, question: WaitingQuestion, signal?: AbortSignal) => Promise<SentTelegramQuestion>;
-	waitForAnswer?: (config: TelegramConfig, sent: SentTelegramQuestion, question: WaitingQuestion, signal: AbortSignal) => Promise<string>;
-	resolveQuestion?: (config: TelegramConfig, sent: SentTelegramQuestion, text: string) => Promise<void>;
+	supportsTopics?: (config: TelegramConfig, signal?: AbortSignal) => Promise<boolean>;
+	createTopic?: (config: TelegramConfig, name: string, signal?: AbortSignal) => Promise<TelegramTopic>;
+	renameTopic?: (config: TelegramConfig, messageThreadId: number, name: string, signal?: AbortSignal) => Promise<void>;
+	sendMessage?: (config: TelegramDeliveryConfig, text: string, signal?: AbortSignal) => Promise<void>;
+	sendMarkdownMessage?: (config: TelegramDeliveryConfig, text: string, signal?: AbortSignal) => Promise<void>;
+	sendRenderedMessage?: (config: TelegramDeliveryConfig, text: string, signal?: AbortSignal) => Promise<SentTelegramQuestion>;
+	sendQuestion?: (config: TelegramDeliveryConfig, text: string, question: WaitingQuestion, signal?: AbortSignal) => Promise<SentTelegramQuestion>;
+	waitForAnswer?: (config: TelegramDeliveryConfig, sent: SentTelegramQuestion, question: WaitingQuestion, signal: AbortSignal) => Promise<string>;
+	resolveQuestion?: (config: TelegramDeliveryConfig, sent: SentTelegramQuestion, text: string) => Promise<void>;
 	setTimer?: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
 	clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
 }
@@ -162,6 +183,27 @@ function contextLabel(pi: ExtensionAPI, cwd: string): string {
 	if (sessionTitle) return sessionTitle;
 	const resolvedCwd = resolve(cwd);
 	return resolvedCwd === resolve(homedir()) ? "pi" : basename(resolvedCwd) || "pi";
+}
+
+function topicName(pi: ExtensionAPI, cwd: string): string {
+	return preview(contextLabel(pi, cwd), MAX_TOPIC_NAME_CHARACTERS);
+}
+
+function telegramConfigKey(config: TelegramConfig): string {
+	return createHash("sha256").update(`${config.botToken}\0${config.chatId}`).digest("hex").slice(0, 24);
+}
+
+function restoredTopic(entries: any[], sessionId: string, configKey: string): PersistedTelegramTopic | undefined {
+	for (const entry of [...entries].reverse()) {
+		if (entry?.type !== "custom" || entry.customType !== TELEGRAM_TOPIC_ENTRY) continue;
+		const data = entry.data as Partial<PersistedTelegramTopic> | undefined;
+		if (data?.sessionId !== sessionId || data.configKey !== configKey) continue;
+		if (data.version !== 1 || !Number.isInteger(data.messageThreadId) || data.messageThreadId! <= 0 || typeof data.name !== "string") {
+			return undefined;
+		}
+		return data as PersistedTelegramTopic;
+	}
+	return undefined;
 }
 
 function escapeMarkdownInline(value: string): string {
@@ -394,6 +436,9 @@ async function secretInput(label: string, ctx: any): Promise<string | undefined>
 export function createTelegramExtension(dependencies: RuntimeDependencies = {}) {
 	const readConfig = dependencies.loadConfig ?? loadTelegramConfig;
 	const writeConfig = dependencies.saveConfig ?? saveTelegramConfig;
+	const supportsTopics = dependencies.supportsTopics ?? telegramBotSupportsTopics;
+	const createTopic = dependencies.createTopic ?? createTelegramTopic;
+	const renameTopic = dependencies.renameTopic ?? renameTelegramTopic;
 	const sendMessage = dependencies.sendMessage ?? sendTelegramMessage;
 	const sendMarkdownMessage = dependencies.sendMarkdownMessage ?? sendTelegramMarkdownMessage;
 	const sendRenderedMessage = dependencies.sendRenderedMessage ?? sendTelegramHtmlMessage;
@@ -419,8 +464,67 @@ export function createTelegramExtension(dependencies: RuntimeDependencies = {}) 
 
 		let config = readConfig();
 		let activeCtx: any;
+		let activeSessionId: string | undefined;
 		let pending: PendingQuestion | undefined;
 		let activatedQuestionnaireId: string | undefined;
+		let topic: PersistedTelegramTopic | undefined;
+		let topicCreation: Promise<PersistedTelegramTopic | undefined> | undefined;
+		let topicSupport: boolean | undefined;
+		let topicWarningShown = false;
+
+		const persistTopic = (value: PersistedTelegramTopic) => {
+			topic = value;
+			pi.appendEntry(TELEGRAM_TOPIC_ENTRY, value);
+		};
+
+		const ensureTopic = async (
+			topicConfig: TelegramConfig,
+			ctx: any,
+			signal?: AbortSignal,
+		): Promise<PersistedTelegramTopic | undefined> => {
+			if (topic) return topic;
+			if (topicCreation) return topicCreation;
+			const sessionId = activeSessionId;
+			if (!sessionId || activeCtx !== ctx) return undefined;
+			const configKey = telegramConfigKey(topicConfig);
+			topicCreation = (async () => {
+				try {
+					if (topicSupport === undefined) topicSupport = await supportsTopics(topicConfig, signal);
+					if (!topicSupport) return undefined;
+					const created = await createTopic(topicConfig, topicName(pi, ctx.cwd), signal);
+					if (activeCtx !== ctx || activeSessionId !== sessionId || telegramConfigKey(config ?? topicConfig) !== configKey) {
+						return undefined;
+					}
+					const value: PersistedTelegramTopic = {
+						version: 1,
+						sessionId,
+						configKey,
+						messageThreadId: created.messageThreadId,
+						name: created.name,
+					};
+					persistTopic(value);
+					return value;
+				} catch (error) {
+					if (!signal?.aborted && !topicWarningShown) {
+						topicWarningShown = true;
+						ctx.ui.notify(`Telegram topic unavailable; using General: ${safeError(error, topicConfig.botToken)}`, "warning");
+					}
+					return undefined;
+				} finally {
+					topicCreation = undefined;
+				}
+			})();
+			return topicCreation;
+		};
+
+		const deliveryConfig = async (
+			topicConfig: TelegramConfig,
+			ctx: any,
+			signal?: AbortSignal,
+		): Promise<TelegramDeliveryConfig> => {
+			const currentTopic = await ensureTopic(topicConfig, ctx, signal);
+			return currentTopic ? { ...topicConfig, messageThreadId: currentTopic.messageThreadId } : topicConfig;
+		};
 
 		const finalizePending = (question: PendingQuestion) => {
 			if (!question.sent || question.finalized) return;
@@ -462,21 +566,22 @@ export function createTelegramExtension(dependencies: RuntimeDependencies = {}) 
 				current.controller = controller;
 				void (async () => {
 					try {
+						const delivery = await deliveryConfig(snapshot, ctx, controller.signal);
 						const text = formatWaitingMessage(project, question, snapshot.delayMinutes);
 						if (question.secret) {
-							current.sent = await sendRenderedMessage(snapshot, text, controller.signal);
+							current.sent = await sendRenderedMessage(delivery, text, controller.signal);
 							if (pending !== current) finalizePending(current);
 							else activatedQuestionnaireId = question.questionnaireId;
 							return;
 						}
-						const sent = await sendQuestion(snapshot, text, question, controller.signal);
+						const sent = await sendQuestion(delivery, text, question, controller.signal);
 						current.sent = sent;
 						if (pending !== current) {
 							finalizePending(current);
 							return;
 						}
 						activatedQuestionnaireId = question.questionnaireId;
-						const answer = await waitForAnswer(snapshot, sent, question, controller.signal);
+						const answer = await waitForAnswer(delivery, sent, question, controller.signal);
 						if (pending === current) {
 							current.remoteAnswer = answer;
 							pi.events.emit(QUESTION_ANSWER_EVENT, { requestId: question.requestId, answer });
@@ -529,10 +634,14 @@ export function createTelegramExtension(dependencies: RuntimeDependencies = {}) 
 					const message = params.message;
 					if (!message.trim()) throw new Error("Telegram message cannot be empty.");
 					if ([...message].length > MAX_DIRECT_MESSAGE_CHARACTERS) {
-						throw new Error(`Telegram message bodies are limited to ${MAX_DIRECT_MESSAGE_CHARACTERS} characters because each message includes a session title.`);
+						throw new Error(`Telegram message bodies are limited to ${MAX_DIRECT_MESSAGE_CHARACTERS} characters to reserve room for the General fallback title.`);
 					}
 					try {
-						await sendMarkdownMessage(snapshot, formatDirectMessage(contextLabel(pi, ctx.cwd), message), signal);
+						const delivery = await deliveryConfig(snapshot, ctx, signal);
+						const text = delivery.messageThreadId
+							? message
+							: formatDirectMessage(contextLabel(pi, ctx.cwd), message);
+						await sendMarkdownMessage(delivery, text, signal);
 					} catch (error) {
 						throw new Error(`Telegram message failed: ${safeError(error, snapshot.botToken)}`);
 					}
@@ -579,6 +688,9 @@ export function createTelegramExtension(dependencies: RuntimeDependencies = {}) 
 						await sendMessage(candidate, `${project}: Telegram integration configured.`);
 						await writeConfig(candidate);
 						config = candidate;
+						topic = undefined;
+						topicSupport = undefined;
+						topicWarningShown = false;
 						registerNotifyTool();
 						ctx.ui.notify("Telegram integration configured; test message sent.", "info");
 					} catch (error) {
@@ -593,7 +705,8 @@ export function createTelegramExtension(dependencies: RuntimeDependencies = {}) 
 				if (action === "test") {
 					try {
 						const project = contextLabel(pi, ctx.cwd);
-						await sendMessage(config, `${project}: Telegram notification test.`);
+						const delivery = await deliveryConfig(config, ctx);
+						await sendMessage(delivery, delivery.messageThreadId ? "Telegram notification test." : `${project}: Telegram notification test.`);
 						ctx.ui.notify("Telegram test message sent.", "info");
 					} catch (error) {
 						ctx.ui.notify(`Telegram test failed: ${safeError(error, config.botToken)}`, "error");
@@ -618,11 +731,34 @@ export function createTelegramExtension(dependencies: RuntimeDependencies = {}) 
 			config = readConfig();
 			if (config?.enabled) registerNotifyTool();
 			activeCtx = ctx;
+			activeSessionId = ctx.sessionManager.getSessionId();
+			topicCreation = undefined;
+			topicSupport = undefined;
+			topicWarningShown = false;
+			topic = config
+				? restoredTopic(ctx.sessionManager.getBranch(), activeSessionId, telegramConfigKey(config))
+				: undefined;
+		});
+		pi.on("session_info_changed", async (_event, ctx) => {
+			if (!config?.enabled || activeCtx !== ctx || (!topic && !topicCreation)) return;
+			const currentTopic = topic ?? await topicCreation;
+			if (!currentTopic) return;
+			const name = topicName(pi, ctx.cwd);
+			if (name === currentTopic.name) return;
+			try {
+				await renameTopic(config, currentTopic.messageThreadId, name);
+				persistTopic({ ...currentTopic, name });
+			} catch (error) {
+				ctx.ui.notify(`Telegram topic rename failed: ${safeError(error, config.botToken)}`, "warning");
+			}
 		});
 		pi.on("session_shutdown", () => {
 			clearPending();
 			activatedQuestionnaireId = undefined;
 			activeCtx = undefined;
+			activeSessionId = undefined;
+			topic = undefined;
+			topicCreation = undefined;
 			stopWaitingListener();
 			stopResolvedListener();
 		});

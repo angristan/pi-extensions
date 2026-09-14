@@ -16,13 +16,15 @@ chat. It is appropriate when:
 - an important or sensitive event deserves out-of-band notice.
 
 The tool is one-way. It must not replace `questionnaire` when the agent needs
-input, confirmation, or approval. Every message starts with the current Pi
-session title in bold. If the session has no title, the extension uses the
-current directory name (`pi` when running from your home directory). Message
-bodies may contain up to 3,994 characters, which reserves space for the title
-within Telegram's 4,096-character limit. Messages preserve line breaks and
-disable link previews. Common Markdown is converted to Telegram formatting:
-headings, bold, italic, strikethrough, inline and fenced code, block quotes,
+input, confirmation, or approval. With Telegram Threaded Mode enabled, the
+extension sends the body to the current session's topic. In General, each
+message starts with the current Pi session title in bold. If the session has no
+title, the extension uses the current directory name (`pi` when running from
+your home directory). Message bodies may contain up to 3,994 characters, which
+reserves space for the General fallback title within Telegram's 4,096-character
+limit. Messages preserve line breaks and disable link previews. Common Markdown
+is converted to Telegram formatting: headings, bold, italic, strikethrough,
+inline and fenced code, block quotes,
 links, lists, task lists, and tables. Raw HTML is escaped, and unsafe link
 schemes remain plain text. The agent cannot select another recipient. Calls use
 the same compact status block as the other native-style tools; expand a settled
@@ -33,6 +35,20 @@ call to see the complete Markdown source.
 
 **42 files** are ready. Open the [report](https://example.com/report).
 ```
+
+## Session topics
+
+Enable **Threaded Mode** for the bot through `@BotFather` to keep each Pi
+session in a separate Telegram topic. The first outgoing message creates a topic
+named after the session. The extension stores its `message_thread_id` in the Pi
+session, reuses it after resume, and renames the topic when the session title
+changes. Forked and new Pi sessions receive their own topics.
+
+Topic detection and creation are lazy, so startup performs no Telegram request.
+If Threaded Mode is disabled or topic creation fails, the message is sent to
+General with the session-title header instead. The extension uses the existing
+`getUpdates` long poll for replies; enabling topics does not require a webhook or
+a different API mode.
 
 ## Delayed questions
 
@@ -108,6 +124,8 @@ config file.
   another waiting process takes ownership and continues from the saved offset.
 - Coordination is machine-local. Two devices using the same bot token can still
   conflict; use one bot per device or a shared cross-device receiver.
+- Session-topic mappings are bound to the Pi session, bot, and chat. They contain
+  the numeric thread ID and title, but no bot token.
 
 ## Commands
 
@@ -120,7 +138,8 @@ config file.
 
 - **Runtime:** [Pi](https://github.com/earendil-works/pi-coding-agent) extension API and [Marked](https://marked.js.org/) for Markdown parsing.
 - **Service:** [Telegram Bot API](https://core.telegram.org/bots/api), including
-  `sendMessage`, inline keyboards, `ForceReply`, and `getUpdates`.
+  `getMe`, `createForumTopic`, `editForumTopic`, `sendMessage`, inline keyboards,
+  `ForceReply`, and `getUpdates`.
 - **Depends on extensions:** `better-native-pi` for shared compact tool-rendering
   primitives. Optionally `questions`, through its `questions:waiting`,
   `questions:answer`, and `questions:resolved` runtime events. Direct messages

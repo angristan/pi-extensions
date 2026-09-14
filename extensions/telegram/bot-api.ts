@@ -7,6 +7,12 @@ const LONG_POLL_REQUEST_TIMEOUT_MS = 25_000;
 export interface TelegramCredentials {
 	botToken: string;
 	chatId: string;
+	messageThreadId?: number;
+}
+
+export interface TelegramTopic {
+	messageThreadId: number;
+	name: string;
 }
 
 export interface TelegramQuestion {
@@ -21,6 +27,7 @@ export interface SentTelegramQuestion {
 
 export interface TelegramMessage {
 	message_id?: unknown;
+	message_thread_id?: unknown;
 	text?: unknown;
 	chat?: { id?: unknown };
 	reply_to_message?: { message_id?: unknown };
@@ -82,6 +89,52 @@ async function telegramRequest<T>(
 	return payload.result as T;
 }
 
+function threadParameters(credentials: TelegramCredentials): { message_thread_id?: number } {
+	const messageThreadId = credentials.messageThreadId;
+	return typeof messageThreadId === "number" && Number.isInteger(messageThreadId) && messageThreadId > 0
+		? { message_thread_id: messageThreadId }
+		: {};
+}
+
+export async function telegramBotSupportsTopics(
+	credentials: TelegramCredentials,
+	signal?: AbortSignal,
+	fetchImpl: typeof fetch = fetch,
+): Promise<boolean> {
+	const bot = await telegramRequest<{ has_topics_enabled?: unknown }>(credentials, "getMe", {}, signal, fetchImpl);
+	return bot?.has_topics_enabled === true;
+}
+
+export async function createTelegramTopic(
+	credentials: TelegramCredentials,
+	name: string,
+	signal?: AbortSignal,
+	fetchImpl: typeof fetch = fetch,
+): Promise<TelegramTopic> {
+	const topic = await telegramRequest<{ message_thread_id?: unknown; name?: unknown }>(credentials, "createForumTopic", {
+		chat_id: credentials.chatId,
+		name,
+	}, signal, fetchImpl);
+	if (!Number.isInteger(topic?.message_thread_id) || (topic.message_thread_id as number) <= 0 || typeof topic.name !== "string") {
+		throw new Error("Telegram API returned an invalid forum topic.");
+	}
+	return { messageThreadId: topic.message_thread_id as number, name: topic.name };
+}
+
+export async function renameTelegramTopic(
+	credentials: TelegramCredentials,
+	messageThreadId: number,
+	name: string,
+	signal?: AbortSignal,
+	fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+	await telegramRequest(credentials, "editForumTopic", {
+		chat_id: credentials.chatId,
+		message_thread_id: messageThreadId,
+		name,
+	}, signal, fetchImpl);
+}
+
 export async function sendTelegramMessage(
 	credentials: TelegramCredentials,
 	text: string,
@@ -90,6 +143,7 @@ export async function sendTelegramMessage(
 ): Promise<void> {
 	await telegramRequest(credentials, "sendMessage", {
 		chat_id: credentials.chatId,
+		...threadParameters(credentials),
 		text,
 		link_preview_options: { is_disabled: true },
 	}, signal, fetchImpl);
@@ -103,6 +157,7 @@ export async function sendTelegramMarkdownMessage(
 ): Promise<void> {
 	await telegramRequest(credentials, "sendMessage", {
 		chat_id: credentials.chatId,
+		...threadParameters(credentials),
 		text: telegramMarkdownToHtml(text),
 		parse_mode: "HTML",
 		link_preview_options: { is_disabled: true },
@@ -117,6 +172,7 @@ export async function sendTelegramHtmlMessage(
 ): Promise<SentTelegramQuestion> {
 	const result = await telegramRequest<TelegramMessage>(credentials, "sendMessage", {
 		chat_id: credentials.chatId,
+		...threadParameters(credentials),
 		text,
 		parse_mode: "HTML",
 		link_preview_options: { is_disabled: true },
@@ -154,6 +210,7 @@ export async function sendTelegramQuestion(
 		};
 	const result = await telegramRequest<TelegramMessage>(credentials, "sendMessage", {
 		chat_id: credentials.chatId,
+		...threadParameters(credentials),
 		text,
 		parse_mode: "HTML",
 		link_preview_options: { is_disabled: true },

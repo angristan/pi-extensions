@@ -59,9 +59,18 @@ function createScheduler() {
 	};
 }
 
+async function flushAsyncWork(): Promise<void> {
+	await Bun.sleep(0);
+}
+
 function makeHarness(options: {
 	config?: TelegramConfig;
 	sessionName?: string;
+	sessionId?: string;
+	entries?: any[];
+	supportsTopics?: (config: TelegramConfig, signal?: AbortSignal) => Promise<boolean>;
+	createTopic?: (config: TelegramConfig, name: string, signal?: AbortSignal) => Promise<{ messageThreadId: number; name: string }>;
+	renameTopic?: (config: TelegramConfig, messageThreadId: number, name: string, signal?: AbortSignal) => Promise<void>;
 	sendMessage?: (config: TelegramConfig, text: string, signal?: AbortSignal) => Promise<void>;
 	sendMarkdownMessage?: (config: TelegramConfig, text: string, signal?: AbortSignal) => Promise<void>;
 	sendRenderedMessage?: (config: TelegramConfig, text: string, signal?: AbortSignal) => Promise<{ chatId: string; messageId: number }>;
@@ -73,23 +82,47 @@ function makeHarness(options: {
 	const busHandlers: Record<string, Array<(event: any) => void>> = {};
 	const scheduler = createScheduler();
 	const sent: string[] = [];
+	const deliveries: Array<{ kind: string; text: string; messageThreadId?: number }> = [];
 	const notices: string[] = [];
 	const emitted: Array<{ name: string; payload: unknown }> = [];
 	const resolved: string[] = [];
 	const tools = new Map<string, any>();
 	const commands = new Map<string, any>();
+	const entries = options.entries ?? [];
+	let sessionName = options.sessionName;
 	const ctx = {
 		cwd: "/tmp/example-project",
 		mode: "tui",
+		sessionManager: {
+			getSessionId: () => options.sessionId ?? "session-1",
+			getBranch: () => entries,
+		},
 		ui: { notify: (message: string) => notices.push(message) },
 	};
 	const extension = createTelegramExtension({
 		loadConfig: () => options.config ?? config,
 		saveConfig: async () => {},
-		sendMessage: options.sendMessage ?? (async (_config, text) => { sent.push(text); }),
-		sendMarkdownMessage: options.sendMarkdownMessage ?? (async (_config, text) => { sent.push(text); }),
-		sendRenderedMessage: options.sendRenderedMessage ?? (async (_config, text) => { sent.push(text); return { chatId: "987654321", messageId: 42 }; }),
-		sendQuestion: options.sendQuestion ?? (async (_config, text) => { sent.push(text); return { chatId: "987654321", messageId: 42 }; }),
+		supportsTopics: options.supportsTopics ?? (async () => false),
+		createTopic: options.createTopic,
+		renameTopic: options.renameTopic,
+		sendMessage: options.sendMessage ?? (async (delivery, text) => {
+			sent.push(text);
+			deliveries.push({ kind: "plain", text, messageThreadId: (delivery as any).messageThreadId });
+		}),
+		sendMarkdownMessage: options.sendMarkdownMessage ?? (async (delivery, text) => {
+			sent.push(text);
+			deliveries.push({ kind: "markdown", text, messageThreadId: (delivery as any).messageThreadId });
+		}),
+		sendRenderedMessage: options.sendRenderedMessage ?? (async (delivery, text) => {
+			sent.push(text);
+			deliveries.push({ kind: "rendered", text, messageThreadId: (delivery as any).messageThreadId });
+			return { chatId: "987654321", messageId: 42 };
+		}),
+		sendQuestion: options.sendQuestion ?? (async (delivery, text) => {
+			sent.push(text);
+			deliveries.push({ kind: "question", text, messageThreadId: (delivery as any).messageThreadId });
+			return { chatId: "987654321", messageId: 42 };
+		}),
 		waitForAnswer: options.waitForAnswer ?? (async () => new Promise<string>(() => {})),
 		resolveQuestion: options.resolveQuestion ?? (async (_config, _question, text) => { resolved.push(text); }),
 		setTimer: scheduler.setTimer,
@@ -111,7 +144,10 @@ function makeHarness(options: {
 		on(name: string, handler: (event: any, ctx: any) => any) {
 			(lifecycleHandlers[name] ??= []).push(handler);
 		},
-		getSessionName: () => options.sessionName,
+		getSessionName: () => sessionName,
+		appendEntry(customType: string, data: any) {
+			entries.push({ type: "custom", id: `entry-${entries.length + 1}`, customType, data });
+		},
 		registerCommand(name: string, command: any) { commands.set(name, command); },
 		registerTool(tool: any) { tools.set(tool.name, tool); },
 	} as any);
@@ -119,6 +155,8 @@ function makeHarness(options: {
 	return {
 		scheduler,
 		sent,
+		deliveries,
+		entries,
 		notices,
 		emitted,
 		resolved,
@@ -132,6 +170,7 @@ function makeHarness(options: {
 		emitBus(name: string, event: unknown) {
 			for (const handler of busHandlers[name] ?? []) handler(event);
 		},
+		setSessionName(name: string | undefined) { sessionName = name; },
 		async emit(name: string, event: unknown = {}) {
 			for (const handler of lifecycleHandlers[name] ?? []) await handler(event, ctx);
 		},
@@ -162,6 +201,21 @@ function rendered(component: { render(width: number): string[] }, width = 120): 
 }
 
 describe("question wait lifecycle", () => {
+	test("routes delayed questions through the session topic", async () => {
+		const harness = makeHarness({
+			sessionName: "Production rollout",
+			supportsTopics: async () => true,
+			createTopic: async (_config, name) => ({ messageThreadId: 61, name }),
+		});
+		await harness.emit("session_start");
+		harness.emitBus("questions:waiting", waiting("request-topic"));
+		harness.scheduler.fire(1);
+		await flushAsyncWork();
+
+		expect(harness.deliveries[0]).toMatchObject({ kind: "question", messageThreadId: 61 });
+		expect(harness.deliveries[0]?.text).toContain("<b>Production rollout</b> · Question 1 of 1");
+	});
+
 	test("sends once only after the configured deadline", async () => {
 		const harness = makeHarness();
 		await harness.emit("session_start");
@@ -170,6 +224,7 @@ describe("question wait lifecycle", () => {
 		expect(harness.sent).toEqual([]);
 		expect([...harness.scheduler.timers.values()].map((timer) => timer.delayMs)).toEqual([300_000]);
 		harness.scheduler.fire(1);
+		await flushAsyncWork();
 		expect(harness.sent).toHaveLength(1);
 		expect(harness.sent[0]).toContain("❓ <b>Input needed</b>");
 		expect(harness.sent[0]).toContain("<b>example-project</b> · Question 1 of 1");
@@ -181,6 +236,7 @@ describe("question wait lifecycle", () => {
 		await harness.emit("session_start");
 		harness.emitBus("questions:waiting", waiting("request-1"));
 		harness.scheduler.fire(1);
+		await flushAsyncWork();
 
 		expect(harness.sent[0]).toContain("<b>Release &lt;v2&gt;</b> · Question 1 of 1");
 		expect(harness.sent[0]).not.toContain("example-project");
@@ -203,7 +259,7 @@ describe("question wait lifecycle", () => {
 		harness.emitBus("questions:waiting", { ...waiting("batch:0", "First?"), questionnaireId: "batch", index: 1, total: 2 });
 		expect(harness.scheduler.timers.get(1)?.delayMs).toBe(300_000);
 		harness.scheduler.fire(1);
-		await Promise.resolve();
+		await flushAsyncWork();
 
 		harness.emitBus("questions:resolved", {
 			requestId: "batch:0",
@@ -216,6 +272,7 @@ describe("question wait lifecycle", () => {
 		harness.emitBus("questions:waiting", { ...waiting("batch:1", "Second?"), questionnaireId: "batch", index: 2, total: 2 });
 		expect(harness.scheduler.timers.get(2)?.delayMs).toBe(0);
 		harness.scheduler.fire(2);
+		await flushAsyncWork();
 		expect(harness.sent.at(-1)).toContain("Second?");
 
 		harness.emitBus("questions:resolved", {
@@ -239,6 +296,7 @@ describe("question wait lifecycle", () => {
 		expect([...harness.scheduler.timers.keys()]).toEqual([2]);
 		harness.scheduler.fire(1);
 		harness.scheduler.fire(2);
+		await flushAsyncWork();
 		expect(harness.sent).toHaveLength(1);
 		expect(harness.sent[0]).toContain("Second?");
 	});
@@ -248,8 +306,7 @@ describe("question wait lifecycle", () => {
 		await harness.emit("session_start");
 		harness.emitBus("questions:waiting", waiting("request-1"));
 		harness.scheduler.fire(1);
-		await Promise.resolve();
-		await Promise.resolve();
+		await flushAsyncWork();
 
 		expect(harness.emitted).toContainEqual({
 			name: "questions:answer",
@@ -272,7 +329,7 @@ describe("question wait lifecycle", () => {
 		await harness.emit("session_start");
 		harness.emitBus("questions:waiting", waiting("request-1"));
 		harness.scheduler.fire(1);
-		await Promise.resolve();
+		await flushAsyncWork();
 
 		harness.emitBus("questions:resolved", { requestId: "request-1", questionnaireId: "questionnaire", index: 1, total: 1, outcome: "answered", source: "tui" });
 		finishSend({ chatId: "987654321", messageId: 77 });
@@ -294,7 +351,7 @@ describe("question wait lifecycle", () => {
 		await harness.emit("session_start");
 		harness.emitBus("questions:waiting", waiting("request-1"));
 		harness.scheduler.fire(1);
-		await Promise.resolve();
+		await flushAsyncWork();
 		expect(requestSignal?.aborted).toBe(false);
 
 		await harness.emit("session_shutdown");
@@ -314,7 +371,7 @@ describe("question wait lifecycle", () => {
 			secret: true,
 		});
 		harness.scheduler.fire(1);
-		await Promise.resolve();
+		await flushAsyncWork();
 
 		expect(interactiveCalls).toBe(0);
 		expect(harness.sent).toHaveLength(1);
@@ -359,6 +416,103 @@ describe("question wait lifecycle", () => {
 });
 
 describe("direct user messages", () => {
+	test("creates one persistent topic per session and tracks title changes", async () => {
+		const createdNames: string[] = [];
+		const renamed: Array<{ messageThreadId: number; name: string }> = [];
+		const harness = makeHarness({
+			sessionName: "Crawl monitoring",
+			supportsTopics: async () => true,
+			createTopic: async (_config, name) => {
+				createdNames.push(name);
+				return { messageThreadId: 73, name };
+			},
+			renameTopic: async (_config, messageThreadId, name) => { renamed.push({ messageThreadId, name }); },
+		});
+		await harness.emit("session_start");
+
+		await harness.invokeTool("notify_user", { message: "First update." });
+		await harness.invokeTool("notify_user", { message: "Second update." });
+
+		expect(createdNames).toEqual(["Crawl monitoring"]);
+		expect(harness.deliveries).toEqual([
+			{ kind: "markdown", text: "First update.", messageThreadId: 73 },
+			{ kind: "markdown", text: "Second update.", messageThreadId: 73 },
+		]);
+		expect(harness.entries).toHaveLength(1);
+		expect(harness.entries[0]).toMatchObject({
+			type: "custom",
+			customType: "telegram-session-topic",
+			data: { version: 1, sessionId: "session-1", messageThreadId: 73, name: "Crawl monitoring" },
+		});
+
+		harness.setSessionName("Crawl complete");
+		await harness.emit("session_info_changed", { name: "Crawl complete" });
+		expect(renamed).toEqual([{ messageThreadId: 73, name: "Crawl complete" }]);
+		expect(harness.entries.at(-1)?.data.name).toBe("Crawl complete");
+	});
+
+	test("restores a session topic without another Telegram lookup", async () => {
+		const entries: any[] = [];
+		const first = makeHarness({
+			entries,
+			supportsTopics: async () => true,
+			createTopic: async (_config, name) => ({ messageThreadId: 84, name }),
+		});
+		await first.emit("session_start");
+		await first.invokeTool("notify_user", { message: "Initial update." });
+
+		const resumed = makeHarness({
+			entries,
+			supportsTopics: async () => { throw new Error("must not inspect Telegram again"); },
+			createTopic: async () => { throw new Error("must not create another topic"); },
+		});
+		await resumed.emit("session_start");
+		await resumed.invokeTool("notify_user", { message: "Resumed update." });
+
+		expect(resumed.deliveries).toEqual([
+			{ kind: "markdown", text: "Resumed update.", messageThreadId: 84 },
+		]);
+		expect(JSON.stringify(entries)).not.toContain(config.botToken);
+	});
+
+	test("does not reuse an inherited topic in a different session", async () => {
+		const entries: any[] = [];
+		const original = makeHarness({
+			entries,
+			sessionId: "session-original",
+			supportsTopics: async () => true,
+			createTopic: async (_config, name) => ({ messageThreadId: 84, name }),
+		});
+		await original.emit("session_start");
+		await original.invokeTool("notify_user", { message: "Original update." });
+
+		const fork = makeHarness({
+			entries,
+			sessionId: "session-fork",
+			supportsTopics: async () => true,
+			createTopic: async (_config, name) => ({ messageThreadId: 85, name }),
+		});
+		await fork.emit("session_start");
+		await fork.invokeTool("notify_user", { message: "Fork update." });
+
+		expect(fork.deliveries[0]?.messageThreadId).toBe(85);
+	});
+
+	test("falls back to General when topic creation fails", async () => {
+		const harness = makeHarness({
+			sessionName: "Fallback session",
+			supportsTopics: async () => true,
+			createTopic: async () => { throw new Error("topics unavailable"); },
+		});
+		await harness.emit("session_start");
+		await harness.invokeTool("notify_user", { message: "Work is complete." });
+
+		expect(harness.deliveries).toEqual([
+			{ kind: "markdown", text: "**Fallback session**\n\nWork is complete.", messageThreadId: undefined },
+		]);
+		expect(harness.notices).toContain("Telegram topic unavailable; using General: topics unavailable");
+	});
+
 	test("prefixes Markdown messages with the escaped session title", async () => {
 		const harness = makeHarness({ sessionName: "Release *v2* [plan](https://example.com) <safe>" });
 		await harness.emit("session_start");
@@ -445,7 +599,7 @@ describe("direct user messages", () => {
 		const harness = makeHarness();
 		await harness.emit("session_start");
 		await expect(harness.invokeTool("notify_user", { message: "x".repeat(3_995) }))
-			.rejects.toThrow("Telegram message bodies are limited to 3994 characters because each message includes a session title.");
+			.rejects.toThrow("Telegram message bodies are limited to 3994 characters to reserve room for the General fallback title.");
 		expect(harness.sent).toEqual([]);
 	});
 
