@@ -61,8 +61,9 @@ count leaf tasks, not grouping rows.
   remain compatible. Keep completed rows while the plan is unfinished and refine
   future work with nested rows. `reset: true` permits a new plan to remove
   completed rows only when the latest user request changed the objective; it
-  requires an explanation. The tool runs sequentially so the agent sees each
-  update before continuing.
+  requires an internal `reason`. Update reasons validate the transition but are
+  not stored in plan state or rendered as plan content. The tool runs
+  sequentially so the agent sees each update before continuing.
 
 Box border uses the accent color from `accent-color`.
 

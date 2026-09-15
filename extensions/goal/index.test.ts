@@ -431,7 +431,7 @@ test("replacing an unfinished goal requires confirmation", async () => {
 test("goal_reconcile is active only while reconciliation is pending", async () => {
 	const h = makeHarness();
 	await emit(h, "session_start");
-	for (const name of ["goal_complete", "goal_block", "goal_reconcile"]) {
+	for (const name of ["goal_complete", "goal_block", "goal_reconcile", "goal_clear"]) {
 		expect(h.activeTools.has(name)).toBe(false);
 	}
 
@@ -842,10 +842,10 @@ test("a settled run without goal_block breaks the blocker audit", async () => {
 test("lifecycle tools follow the current goal state", async () => {
 	const h = makeHarness();
 	await emit(h, "session_start");
-	// A fresh session can set or clear a goal, but cannot resume one.
+	// A fresh session can set a goal, but has nothing to resume or clear.
 	expect(h.activeTools.has("goal_set")).toBe(true);
 	expect(h.activeTools.has("goal_resume")).toBe(false);
-	expect(h.activeTools.has("goal_clear")).toBe(true);
+	expect(h.activeTools.has("goal_clear")).toBe(false);
 	expect(h.tools.goal_resume.description).toContain("Do not use goal_set with replace: true");
 	expect(h.tools.goal_clear.description).toContain("obsolete, superseded, cancelled, or unrelated");
 	expect(h.activeTools.has("goal_complete")).toBe(false);
@@ -864,6 +864,7 @@ test("lifecycle tools follow the current goal state", async () => {
 	expect(state.validation).toEqual(["bun test is green"]);
 	expect(h.activeTools.has("goal_set")).toBe(false);
 	expect(h.activeTools.has("goal_resume")).toBe(false);
+	expect(h.activeTools.has("goal_clear")).toBe(false);
 	expect(h.activeTools.has("goal_complete")).toBe(true);
 	expect(h.activeTools.has("goal_block")).toBe(true);
 	expect(sentMessages(h, "goal-context")).toHaveLength(1);
@@ -875,10 +876,12 @@ test("lifecycle tools follow the current goal state", async () => {
 	await h.commands.goal.handler("pause", h.ctx);
 	expect(h.activeTools.has("goal_set")).toBe(true);
 	expect(h.activeTools.has("goal_resume")).toBe(true);
+	expect(h.activeTools.has("goal_clear")).toBe(true);
 
 	await h.tools.goal_resume.execute("resume", {}, undefined, undefined, h.ctx);
 	expect(h.activeTools.has("goal_set")).toBe(false);
 	expect(h.activeTools.has("goal_resume")).toBe(false);
+	expect(h.activeTools.has("goal_clear")).toBe(false);
 });
 
 test("goal_resume preserves paused goal identity and lifetime state", async () => {
@@ -935,10 +938,28 @@ test("stale goal_resume calls are silent when no goal exists", async () => {
 	expect(renderBlock(block)).toEqual([]);
 });
 
+test("goal_clear silently preserves active goals", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("keep running", h.ctx);
+	const original = structuredClone(latestGoalState(h));
+	const entriesBefore = h.entries.length;
+	const contextsBefore = sentMessages(h, "goal-context").length;
+
+	const result = await h.tools.goal_clear.execute("clear", { reason: "wrong tool" }, undefined, undefined, h.ctx);
+
+	expect(result.details).toEqual({ ok: false, ignored: true, reason: "goal-active" });
+	expect(result.terminate).toBe(true);
+	expect(latestGoalState(h)).toEqual(original);
+	expect(h.entries).toHaveLength(entriesBefore);
+	expect(sentMessages(h, "goal-context")).toHaveLength(contextsBefore);
+	expect(renderBlock(h.tools.goal_clear.renderResult(result, { isPartial: false }, h.ctx.ui.theme, { lastComponent: undefined }))).toEqual([]);
+});
+
 test("goal_clear retires stale goals without deleting their history", async () => {
 	const h = makeHarness();
 	await h.commands.goal.handler("monitor the old rollout", h.ctx);
 	await h.commands.goal.handler("block", h.ctx);
+	expect(h.activeTools.has("goal_clear")).toBe(true);
 	const entriesBeforeClear = h.entries.length;
 
 	const result = await h.tools.goal_clear.execute("clear", { reason: "the user changed topics" }, undefined, undefined, h.ctx);

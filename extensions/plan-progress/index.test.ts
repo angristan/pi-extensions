@@ -65,7 +65,7 @@ test("does not rebuild the system prompt from mutable plan state", () => {
 	expect(handlers.before_agent_start).toBeUndefined();
 });
 
-test("wrapped plan result lines retain their left padding", () => {
+test("does not render legacy update explanations as plan content", () => {
 	const component = updatePlan.renderResult({
 		details: {
 			explanation: "Alpha beta gamma delta",
@@ -75,8 +75,6 @@ test("wrapped plan result lines retain their left padding", () => {
 
 	expect(component.render(18)).toEqual([
 		"• Updated Plan",
-		"  Alpha beta gamma",
-		"  delta",
 		"  └─ ● Do more",
 		"       work now",
 	]);
@@ -125,7 +123,7 @@ test("terminates completed-task styles before overlay card padding", async () =>
 test("narrows the overlay without reducing vertical detail", async () => {
 	const harness = createHarness();
 	await executePlan(harness, {
-		explanation: "This deliberately long explanation may use multiple rows because only horizontal space should be reduced.",
+		reason: "The objective changed.",
 		plan: Array.from({ length: 9 }, (_, index) => ({
 			step: `Task ${index + 1}`,
 			status: index === 0 ? "in_progress" : "pending",
@@ -135,7 +133,7 @@ test("narrows the overlay without reducing vertical detail", async () => {
 	const rows = harness.overlayCardDefinition.renderBody(46, 30, theme);
 	expect(harness.overlayCardDefinition.width).toBe(50);
 	expect(rows.length).toBeGreaterThan(7);
-	expect(rows).toContain("");
+	expect(rows.some((line: string) => line.includes("The objective changed"))).toBe(false);
 	expect(rows.some((line: string) => line.includes("Task 9"))).toBe(true);
 	expect(rows.join("\n")).not.toContain("/plan-status for full list");
 });
@@ -143,7 +141,7 @@ test("narrows the overlay without reducing vertical detail", async () => {
 test("accepts, normalizes, and persists a valid plan update", async () => {
 	const harness = createHarness();
 	const result = await executePlan(harness, {
-		explanation: "  Starting implementation  ",
+		reason: "  Starting implementation  ",
 		plan: [
 			{ step: "  Inspect code  ", status: "completed" },
 			{ step: "Add tests", description: "  Cover description\n behavior  ", status: "in_progress" },
@@ -152,7 +150,6 @@ test("accepts, normalizes, and persists a valid plan update", async () => {
 	});
 
 	const expected = {
-		explanation: "Starting implementation",
 		items: [
 			{ step: "Inspect code", status: "completed" },
 			{ step: "Add tests", description: "Cover description behavior", status: "in_progress" },
@@ -163,6 +160,25 @@ test("accepts, normalizes, and persists a valid plan update", async () => {
 	expect(harness.appended).toEqual([{ customType: "plan-progress", data: expected }]);
 	expect(result.content[0].text).toContain("Current step: Add tests");
 	expect(result.content[0].text).toContain("Description: Cover description behavior");
+	expect(result.content[0].text).not.toContain("Starting implementation");
+});
+
+test("maps legacy explanations to hidden update reasons", async () => {
+	const harness = createHarness();
+	const prepared = harness.updatePlan.prepareArguments({
+		explanation: "The objective changed.",
+		reset: true,
+		plan: [{ step: "Handle the new objective", status: "in_progress" }],
+	});
+
+	expect(prepared).toEqual({
+		reason: "The objective changed.",
+		reset: true,
+		plan: [{ step: "Handle the new objective", status: "in_progress" }],
+	});
+	const result = await executePlan(harness, prepared);
+	expect(result.details).toEqual({ items: [{ step: "Handle the new objective", status: "in_progress" }] });
+	expect(result.content[0].text).not.toContain("The objective changed");
 });
 
 test("keeps descriptions compact in the overlay and transcript", async () => {
@@ -256,6 +272,8 @@ test("derives nested group progress and collapses inactive groups in the overlay
 
 test("publishes and enforces the description length limit", async () => {
 	const harness = createHarness();
+	expect(harness.updatePlan.parameters.properties.reason.description).toContain("not shown in the plan");
+	expect(harness.updatePlan.parameters.properties.explanation).toBeUndefined();
 	const descriptionSchema = harness.updatePlan.parameters.properties.plan.items.properties.description;
 	expect(descriptionSchema.maxLength).toBe(500);
 
@@ -310,18 +328,18 @@ test("preserves completed milestones unless an objective reset is explicit", asy
 	await expect(executePlan(harness, {
 		reset: true,
 		plan: [{ step: "Handle the new objective", status: "in_progress" }],
-	})).rejects.toThrow("reset requires an explanation");
+	})).rejects.toThrow("reset requires a reason");
 
 	const result = await executePlan(harness, {
 		reset: true,
-		explanation: "The latest user request replaced the objective.",
+		reason: "The latest user request replaced the objective.",
 		plan: [{ step: "Handle the new objective", status: "in_progress" }],
 	});
 	expect(result.details.items).toEqual([{ step: "Handle the new objective", status: "in_progress" }]);
 	expect(harness.appended).toHaveLength(2);
 });
 
-test("rejects unfinished plans without an active step or inactive-work explanation", async () => {
+test("rejects unfinished plans without an active step or inactive-work reason", async () => {
 	const harness = createHarness();
 
 	await expect(executePlan(harness, {
@@ -333,18 +351,19 @@ test("rejects unfinished plans without an active step or inactive-work explanati
 	expect(harness.appended).toEqual([]);
 });
 
-for (const [reason, explanation] of [
+for (const [status, reason] of [
 	["blocked", "Blocked by an upstream dependency"],
 	["deferred", "Remaining work is deferred until approval"],
 ] as const) {
-	test(`accepts an unfinished inactive plan when explained as ${reason}`, async () => {
+	test(`accepts an unfinished inactive plan when marked as ${status}`, async () => {
 		const harness = createHarness();
 		const result = await executePlan(harness, {
-			explanation,
+			reason,
 			plan: [{ step: "Wait for follow-up", status: "pending" }],
 		});
 
-		expect(result.details.explanation).toBe(explanation);
+		expect(result.details).toEqual({ items: [{ step: "Wait for follow-up", status: "pending" }] });
+		expect(result.content[0].text).not.toContain(reason);
 		expect(harness.appended).toHaveLength(1);
 	});
 }
@@ -406,7 +425,7 @@ test("clears a completed plan on the next user prompt", async () => {
 test("re-anchors the exact plan after compaction and filters stale checkpoints", async () => {
 	const harness = createHarness();
 	await executePlan(harness, {
-		explanation: "Keep the full scope",
+		reason: "Keep the full scope",
 		plan: [
 			{ step: "Map <existing> & behavior", status: "completed" },
 			{ step: "Implement the fix", status: "in_progress" },
@@ -418,6 +437,7 @@ test("re-anchors the exact plan after compaction and filters stale checkpoints",
 	expect(checkpoint.options).toEqual({ deliverAs: "steer" });
 	expect(checkpoint.message).toMatchObject({ customType: "plan-progress-context", display: false, details: { active: true } });
 	expect(checkpoint.message.content).toContain("Map &lt;existing&gt; &amp; behavior");
+	expect(checkpoint.message.content).not.toContain("Keep the full scope");
 	expect(checkpoint.message.content).toContain("Preserve completed steps and broad remaining outcomes");
 
 	const latest = { customType: "plan-progress-context", content: "latest" };
@@ -458,7 +478,7 @@ test("restores the latest plan state from the active session branch", async () =
 
 	expect(harness.notifications).toEqual([{
 		level: "info",
-		message: "• Updated Plan\n  Restored state\n  ├─ ✓ Restored done\n  └─ ● Restored active\n       Resume from the saved checkpoint.",
+		message: "• Updated Plan\n  ├─ ✓ Restored done\n  └─ ● Restored active\n       Resume from the saved checkpoint.",
 	}]);
 	expect(harness.sentMessages).toHaveLength(1);
 	expect(harness.sentMessages[0]!.message.content).toContain("Restored done");

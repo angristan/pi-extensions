@@ -4,13 +4,12 @@ import { Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component }
 type Status = "pending" | "in_progress" | "completed";
 interface PlanItem { step: string; description?: string; status: Status; depth?: number }
 interface DraftPlanItem { step: string; description?: string; status?: Status; depth?: number }
-interface PlanState { explanation?: string; items: PlanItem[] }
+interface PlanState { items: PlanItem[] }
 interface PlanUpdate { state: PlanState; reset: boolean }
 const PLAN_CONTEXT_CUSTOM_TYPE = "plan-progress-context";
 const LEGACY_OVERLAY_HOST_KEY = "plan-overlay-host";
 const LEGACY_WIDGET_KEY = "plan";
 const OVERLAY_WIDTH = 50;
-const MAX_EXPLANATION_ROWS = 3;
 const MAX_ACTIVE_DESCRIPTION_ROWS = 2;
 const MAX_DESCRIPTION_LENGTH = 500;
 const MAX_PLAN_DEPTH = 8;
@@ -21,10 +20,10 @@ import { registerOverlayCard } from "../overlay-stack/index.js";
 const parameters = {
 	type: "object",
 	properties: {
-		explanation: { type: "string", description: "Optional short explanation for this plan update" },
+		reason: { type: "string", description: "Optional internal reason for this update; required for a reset and not shown in the plan" },
 		reset: {
 			type: "boolean",
-			description: "Allow completed steps to be removed only when the latest user request changed the objective; requires an explanation",
+			description: "Allow completed steps to be removed only when the latest user request changed the objective; requires a reason",
 		},
 		plan: {
 			type: "array",
@@ -67,7 +66,7 @@ const PROMPT_GUIDELINES = [
 	"Preserve completed steps and broad remaining outcomes while a plan is unfinished. Refine future work with nested steps instead of replacing the plan with only the current narrow phase. Use reset only when the latest user request genuinely changes the objective.",
 	"Keep update_plan step titles concise. Use optional descriptions only for context or completion criteria that the title cannot carry.",
 	"For nested update_plan lists, order parent rows before their children and set each child's depth to one more than its parent. Omit status on parent rows; parent status and progress are derived from leaf tasks.",
-	"Keep exactly one leaf update_plan step in_progress while work remains. Before finalizing, call update_plan so completed work is marked completed; if anything remains pending/in_progress, explain that it is blocked, canceled, or deferred.",
+	"Keep exactly one leaf update_plan step in_progress while work remains. Before finalizing, call update_plan so completed work is marked completed; if anything remains pending/in_progress, use the internal reason to say it is blocked, canceled, or deferred.",
 ];
 
 function assertNoExtraKeys(value: Record<string, unknown>, allowed: readonly string[], where: string) {
@@ -163,48 +162,56 @@ function normalizePlanItems(rawPlan: unknown): PlanItem[] {
 	return items;
 }
 
+function preparePlanArguments(args: unknown): unknown {
+	if (!args || typeof args !== "object" || Array.isArray(args)) return args;
+	const payload = args as Record<string, unknown>;
+	if (!("explanation" in payload)) return args;
+
+	// Older sessions used `explanation` for this internal update reason. Remove it
+	// before strict schema validation and map it to the clearer field name.
+	const { explanation, ...rest } = payload;
+	return rest.reason === undefined ? { ...rest, reason: explanation } : rest;
+}
+
 function normalizePlanUpdate(params: unknown): PlanUpdate {
 	if (!params || typeof params !== "object" || Array.isArray(params)) {
 		throw new Error("update_plan expects an object with a plan array.");
 	}
 	const payload = params as Record<string, unknown>;
-	assertNoExtraKeys(payload, ["explanation", "plan", "reset"], "top-level");
-	const explanation = payload.explanation === undefined
+	assertNoExtraKeys(payload, ["reason", "plan", "reset"], "top-level");
+	const reason = payload.reason === undefined
 		? undefined
-		: typeof payload.explanation === "string"
-			? payload.explanation.trim() || undefined
-			: (() => { throw new Error("Invalid update_plan payload: explanation must be a string when provided."); })();
+		: typeof payload.reason === "string"
+			? payload.reason.trim() || undefined
+			: (() => { throw new Error("Invalid update_plan payload: reason must be a string when provided."); })();
 	if (payload.reset !== undefined && typeof payload.reset !== "boolean") {
 		throw new Error("Invalid update_plan payload: reset must be a boolean when provided.");
 	}
 	const reset = payload.reset === true;
-	if (reset && !explanation) {
-		throw new Error("Invalid update_plan payload: reset requires an explanation of the objective change.");
+	if (reset && !reason) {
+		throw new Error("Invalid update_plan payload: reset requires a reason for the objective change.");
 	}
 	const items = normalizePlanItems(payload.plan);
-	validatePlanItems(items, explanation);
-	return { state: { explanation, items }, reset };
+	validatePlanItems(items, reason);
+	return { state: { items }, reset };
 }
 
-function explainsInactiveWork(explanation?: string): boolean {
-	return Boolean(explanation && /\b(blocked|deferred|deferring|cancell?ed|cancelled|paused|waiting|needs user|needs approval|cannot proceed|no longer relevant)\b/i.test(explanation));
+function explainsInactiveWork(reason?: string): boolean {
+	return Boolean(reason && /\b(blocked|deferred|deferring|cancell?ed|cancelled|paused|waiting|needs user|needs approval|cannot proceed|no longer relevant)\b/i.test(reason));
 }
 
-function validatePlanItems(items: PlanItem[], explanation?: string) {
+function validatePlanItems(items: PlanItem[], reason?: string) {
 	const stats = planStats(items);
 	if (stats.inProgress > 1) throw new Error("Invalid update_plan: only one plan step may be in_progress.");
-	if (stats.incomplete > 0 && stats.inProgress === 0 && !explainsInactiveWork(explanation)) {
-		throw new Error("Invalid update_plan: unfinished plans must have exactly one in_progress step, unless the explanation says the remaining work is blocked, canceled, paused, or deferred.");
+	if (stats.incomplete > 0 && stats.inProgress === 0 && !explainsInactiveWork(reason)) {
+		throw new Error("Invalid update_plan: unfinished plans must have exactly one in_progress step, unless the reason says the remaining work is blocked, canceled, paused, or deferred.");
 	}
 }
 
 function restorePlanState(data: any): PlanState | undefined {
 	if (!data || typeof data !== "object" || !Array.isArray(data.items)) return undefined;
 	try {
-		return {
-			explanation: typeof data.explanation === "string" ? data.explanation : undefined,
-			items: normalizePlanItems(data.items),
-		};
+		return { items: normalizePlanItems(data.items) };
 	} catch {
 		return undefined;
 	}
@@ -244,7 +251,6 @@ function itemPath(items: PlanItem[], index: number): string {
 function modelPlanLines(plan: PlanState): string[] {
 	const stats = planStats(plan.items);
 	const lines = [`Plan updated: ${stats.completed}/${stats.total} tasks completed.`];
-	if (plan.explanation?.trim()) lines.push(`Explanation: ${plan.explanation.trim()}`);
 	const currentIndex = plan.items.findIndex((item, index) => !hasChildren(plan.items, index) && item.status === "in_progress");
 	if (currentIndex >= 0) lines.push(`Current step: ${itemPath(plan.items, currentIndex)}`);
 	if (plan.items.length) {
@@ -265,7 +271,7 @@ function modelPlanLines(plan: PlanState): string[] {
 	if (stats.incomplete === 0) {
 		lines.push("All plan steps are complete; the final response can summarize the outcome.");
 	} else {
-		lines.push("Before finalizing, call update_plan again so completed work is marked completed. If remaining work is blocked, canceled, or deferred, include that in the explanation.");
+		lines.push("Before finalizing, call update_plan again so completed work is marked completed. If remaining work is blocked, canceled, or deferred, include that in the update reason.");
 	}
 	return lines;
 }
@@ -309,7 +315,7 @@ function validatePlanContinuity(previous: PlanState, next: PlanState, reset: boo
 	if (removed.length === 0) return;
 	throw new Error(
 		`Invalid update_plan: an unfinished plan cannot remove completed step(s): ${removed.join("; ")}. `
-		+ "Keep completed steps in the complete plan snapshot. Use reset: true with an explanation only when the latest user request changed the objective.",
+		+ "Keep completed steps in the complete plan snapshot. Use reset: true with a reason only when the latest user request changed the objective.",
 	);
 }
 
@@ -370,7 +376,6 @@ function styledItem(items: PlanItem[], index: number, theme: any): { marker: str
 
 function planLines(state: PlanState, theme: any): string[] {
 	const lines = [`${theme.fg("muted", "•")} ${theme.bold("Updated Plan")}`];
-	if (state.explanation?.trim()) lines.push(`  ${theme.fg("dim", theme.italic(state.explanation.trim()))}`);
 	for (let index = 0; index < state.items.length; index++) {
 		const item = state.items[index]!;
 		const { first, continuation } = treePrefixes(state.items, index);
@@ -393,9 +398,6 @@ function indentedWrap(content: string, width: number, firstPrefix: string, conti
 function renderedPlanLines(state: PlanState, theme: any, width: number, showDescriptions = false): string[] {
 	const maxWidth = Math.max(1, width);
 	const lines = [truncateToWidth(`${theme.fg("muted", "•")} ${theme.bold("Updated Plan")}`, maxWidth, "")];
-	if (state.explanation?.trim()) {
-		lines.push(...indentedWrap(theme.fg("dim", theme.italic(state.explanation.trim())), maxWidth, "  "));
-	}
 	for (let index = 0; index < state.items.length; index++) {
 		const item = state.items[index]!;
 		const { first, continuation } = treePrefixes(state.items, index);
@@ -439,10 +441,6 @@ function boundedRows(rows: string[], width: number, maxRows: number, theme: any)
 	return visible;
 }
 
-function boundedWrap(content: string, width: number, maxRows: number, theme: any): string[] {
-	return boundedRows(wrapTextWithAnsi(content, Math.max(1, width)), width, maxRows, theme);
-}
-
 function itemRows(items: PlanItem[], index: number, contentWidth: number, theme: any): string[] {
 	const { first, continuation } = treePrefixes(items, index, "");
 	const { marker, text } = styledItem(items, index, theme);
@@ -475,15 +473,6 @@ function renderPlanBody(
 ): string[] {
 	const contentWidth = Math.max(1, width);
 	const body: string[] = [];
-	if (state.explanation?.trim()) {
-		body.push(...boundedWrap(
-			theme.fg("dim", theme.italic(state.explanation.trim())),
-			contentWidth,
-			MAX_EXPLANATION_ROWS,
-			theme,
-		));
-		body.push("");
-	}
 
 	for (let index = 0; index < state.items.length; index++) {
 		const item = state.items[index]!;
@@ -567,6 +556,7 @@ export default function (pi: ExtensionAPI, dependencies: PlanProgressDependencie
 		description: "Create or update a flat or nested execution plan while preserving completed milestones and marking leaf tasks pending, in progress, or completed.",
 		parameters,
 		promptGuidelines: PROMPT_GUIDELINES,
+		prepareArguments: preparePlanArguments,
 		executionMode: "sequential",
 		async execute(_id: string, params: any, _signal: AbortSignal, _update: any, ctx: any) {
 			const update = normalizePlanUpdate(params);

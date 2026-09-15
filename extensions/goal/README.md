@@ -146,9 +146,12 @@ All sections except `# Goal` are optional.
   agent-callable equivalent of `/goal resume`. Reopening a session with a paused
   or blocked goal also offers this action in the UI. Stale calls after activation
   are silent and do not change state.
-- **`goal_clear`** — always available; retires an obsolete, superseded, cancelled,
-  or unrelated goal without deleting its append-only history. It is not a
-  substitute for `goal_complete` when the objective was achieved.
+- **`goal_clear`** — available only for paused or blocked goals; retires an
+  obsolete, superseded, cancelled, or unrelated goal without deleting its
+  append-only history. Stale calls against active or completed goals are
+  state-preserving silent no-ops. It is not a substitute for `goal_complete`
+  when the objective was achieved. Interactive `/goal clear` remains available
+  for an explicit, confirmed user action.
 - **`goal_reconcile`** — available only while a user request is awaiting
   reconciliation; resolves it with `keep`, `revise`, or `pause`. Revision replaces
   the effective objective and validation criteria while preserving goal identity,
@@ -167,8 +170,8 @@ All sections except `# Goal` are optional.
   goal regardless of wording. Multiple reports in one run count once.
 
 All lifecycle tools remain registered, but the active loadout follows goal state.
-`goal_set` is hidden while a goal is active, `goal_resume` appears only while a
-paused or blocked goal exists, and `goal_clear` remains available.
+`goal_set` is hidden while a goal is active, while `goal_resume` and `goal_clear`
+appear only when a paused or blocked goal exists.
 `goal_complete` and `goal_block` start inactive, are added when the first goal
 becomes active, and remain in the active loadout for the rest of that session.
 `goal_reconcile` appears only while reconciliation is pending. Stale queued calls

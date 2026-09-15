@@ -21,6 +21,7 @@ const BLOCKED_AUDIT_THRESHOLD = 3;
 const GOAL_RECONCILE_TOOL_NAME = "goal_reconcile";
 const GOAL_RESUME_TOOL_NAME = "goal_resume";
 const GOAL_SET_TOOL_NAME = "goal_set";
+const GOAL_CLEAR_TOOL_NAME = "goal_clear";
 const GOAL_TERMINAL_TOOL_NAMES = ["goal_complete", "goal_block"] as const;
 const GOAL_TOOL_NAMES = [...GOAL_TERMINAL_TOOL_NAMES, GOAL_RECONCILE_TOOL_NAME] as const;
 const GOAL_TOOL_NAME_SET = new Set<string>(GOAL_TOOL_NAMES);
@@ -766,6 +767,7 @@ function renderGoalClearResult(
 ): Component {
 	if (isPartial) return new Container();
 	const details = result?.details;
+	if (details?.ignored) return new Container();
 	const component = reuseGoalToolLines(context);
 	const storedText = textFromResult(result);
 	const objective = extractObjectiveLine(storedText);
@@ -944,13 +946,16 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 
 		const reconciliationPending = state?.status === "active" && state.reconciliationPending === true;
 		const resumeAvailable = state?.status === "paused" || state?.status === "blocked";
+		const clearAvailable = resumeAvailable;
 		const setAvailable = state?.status !== "active";
 		let next = active.filter((name: string) =>
 			(name !== GOAL_RECONCILE_TOOL_NAME || reconciliationPending)
 			&& (name !== GOAL_RESUME_TOOL_NAME || resumeAvailable)
+			&& (name !== GOAL_CLEAR_TOOL_NAME || clearAvailable)
 			&& (name !== GOAL_SET_TOOL_NAME || setAvailable));
 
 		if (resumeAvailable && !next.includes(GOAL_RESUME_TOOL_NAME)) next.push(GOAL_RESUME_TOOL_NAME);
+		if (clearAvailable && !next.includes(GOAL_CLEAR_TOOL_NAME)) next.push(GOAL_CLEAR_TOOL_NAME);
 		if (setAvailable && !next.includes(GOAL_SET_TOOL_NAME)) next.push(GOAL_SET_TOOL_NAME);
 
 		if (state?.status === "active") {
@@ -1708,10 +1713,10 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 	});
 
 	// ------------------------------------------------------------------------
-	// goal_clear remains available throughout the lifecycle. goal_resume is
-	// exposed only for paused or blocked goals, while goal_set is hidden for an
-	// active goal so scope changes go through reconciliation. Execution still
-	// rejects stale calls because a model turn may retain an older tool snapshot.
+	// goal_resume and goal_clear are exposed only for paused or blocked goals,
+	// while goal_set is hidden for an active goal so scope changes go through
+	// reconciliation. Execution still rejects stale calls because a model turn
+	// may retain an older tool snapshot.
 	// ------------------------------------------------------------------------
 	pi.registerTool({
 		name: "goal_resume",
@@ -1752,13 +1757,16 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 		renderCall: renderGoalClearCall,
 		renderResult: renderGoalClearResult,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const cleared = clearGoal(ctx);
-			if (!cleared) {
+			if (!state) {
 				return {
 					content: [{ type: "text", text: "No session goal to clear." }],
 					details: { ok: false, reason: "no-goal" },
 				};
 			}
+			if (state.status !== "paused" && state.status !== "blocked") {
+				return inactiveGoalToolResult(`goal-${state.status}`, true);
+			}
+			const cleared = clearGoal(ctx)!;
 			const reason = params.reason?.trim();
 			return {
 				content: [{ type: "text", text: `Goal cleared.\nObjective: ${cleared.objective}${reason ? `\nReason: ${reason}` : ""}` }],
