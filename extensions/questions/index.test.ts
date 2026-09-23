@@ -1,5 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
+import { initTheme } from "@earendil-works/pi-coding-agent";
+import { getKeybindings, visibleWidth } from "@earendil-works/pi-tui";
 import questions from "./index";
+
+initTheme();
 
 type BusHandler = (event: unknown) => unknown | Promise<unknown>;
 const shutdowns: Array<() => Promise<void>> = [];
@@ -43,18 +47,21 @@ function emitBus(busHandlers: Record<string, BusHandler[]>, name: string, payloa
 test("keeps the session name in the pending title", async () => {
 	const events: Array<{ name: string; payload: any }> = [];
 	const tool = registeredTool(events);
-	const selected: string[] = [];
-	const prompts: string[] = [];
+	const rendered: string[][] = [];
 	const titles: string[] = [];
 	const ctx = {
 		mode: "tui",
 		ui: {
 			theme: {
-				fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
-				bold: (text: string) => `<b>${text}</b>`,
+				fg: (_color: string, text: string) => text,
+				bold: (text: string) => text,
 			},
-			select: async (question: string, options: string[]) => { prompts.push(question); selected.push(...options); return "Blue"; },
-			input: async (question: string) => { prompts.push(question); return "Because it is calm"; },
+			custom: async (factory: any) => new Promise((resolve) => {
+				const component = factory({ requestRender() {} }, ctx.ui.theme, getKeybindings(), resolve);
+				rendered.push(component.render(50));
+				if (rendered.length === 1) { component.handleInput("\x1b[B"); component.handleInput("\r"); }
+				else { for (const char of "Because it is calm") component.handleInput(char); component.handleInput("\r"); }
+			}),
 			setTitle: (title: string) => titles.push(title),
 		},
 	};
@@ -63,11 +70,9 @@ test("keeps the session name in the pending title", async () => {
 		{ id: "why", question: "Why?", allow_other: false },
 	] }, undefined, undefined, ctx);
 
-	expect(selected).toEqual(["Red", "Blue"]);
-	expect(prompts).toEqual([
-		"<accent><b>Question 1/2</b></accent><dim> · </dim><text>Pick a color</text>",
-		"<accent><b>Question 2/2</b></accent><dim> · </dim><text>Why?</text>",
-	]);
+	expect(rendered[0].join("\n")).toContain("Question 1/2\nPick a color");
+	expect(rendered[0].map((line) => line.trimEnd()).join("\n")).toContain("→ Red\n  Blue");
+	expect(rendered[1].join("\n")).toContain("Question 2/2\nWhy?");
 	expect(titles).toEqual(["❓ Current session", "Current session"]);
 	expect(events).toEqual([
 		{ name: "terminal-title:override", payload: { source: "questions", title: "❓ Current session" } },
@@ -84,6 +89,121 @@ test("keeps the session name in the pending title", async () => {
 	expect(result.content[0].text).toBe("color: Blue\nwhy: Because it is calm");
 	expect(result.details.interrupted).toBe(false);
 	expect(result.details.answers).toHaveLength(2);
+});
+
+test("renders multi-line Markdown in questions and options without changing the answer", async () => {
+	const tool = registeredTool();
+	const option = "**Fast**\n\n- Sends two requests";
+	let display: string[] = [];
+	const result = await tool.execute("md", { questions: [
+		{ id: "mode", question: "Choose a **mode**\n\nSee `config`.", options: [option, "*Slow*"], allow_other: false },
+	] }, undefined, undefined, {
+		mode: "tui",
+		ui: {
+			theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text },
+			setTitle() {},
+			custom: async (factory: any) => new Promise((resolve) => {
+				const component = factory({ requestRender() {} }, { fg: (_color: string, text: string) => text, bold: (text: string) => text }, getKeybindings(), resolve);
+				display = component.render(40);
+				component.handleInput("\r");
+			}),
+		},
+	});
+
+	const plain = display.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+	expect(plain).toContain("Choose a mode");
+	expect(plain).toContain("See config.");
+	expect(plain).toContain("Fast");
+	expect(plain).toContain("Sends two requests");
+	expect(plain).not.toContain("**");
+	expect(display.every((line) => visibleWidth(line) <= 40)).toBe(true);
+	expect(result.details.answers[0].answer).toBe(option);
+});
+
+test("keeps a literal free-text label distinct from the free-text action", async () => {
+	const tool = registeredTool();
+	const result = await tool.execute("choice", { questions: [
+		{ id: "answer", question: "Pick one", options: ["Type something…"] },
+	] }, undefined, undefined, {
+		mode: "tui",
+		ui: {
+			theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text },
+			setTitle() {},
+			custom: async (factory: any) => new Promise((resolve) => {
+				const component = factory({ requestRender() {} }, {}, getKeybindings(), resolve);
+				component.handleInput("\r");
+			}),
+		},
+	});
+	expect(result.details.answers[0].answer).toBe("Type something…");
+});
+
+test("accepts a typed answer after the Markdown choice list", async () => {
+	const tool = registeredTool();
+	let dialogs = 0;
+	const result = await tool.execute("other", { questions: [
+		{ id: "mode", question: "Choose a **mode**", options: ["*Fast*"] },
+	] }, undefined, undefined, {
+		mode: "tui",
+		ui: {
+			theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text },
+			setTitle() {},
+			custom: async (factory: any) => new Promise((resolve) => {
+				const component = factory({ requestRender() {} }, { fg: (_color: string, text: string) => text, bold: (text: string) => text }, getKeybindings(), resolve);
+				if (++dialogs === 1) component.handleInput("\x1b[B");
+				else {
+					expect(component.render(40).join("\n")).toContain("Choose a mode");
+					for (const char of "Custom") component.handleInput(char);
+				}
+				component.handleInput("\r");
+			}),
+		},
+	});
+	expect(dialogs).toBe(2);
+	expect(result.details.answers[0].answer).toBe("Custom");
+});
+
+test("renders the free-text question and masks secret input", async () => {
+	const tool = registeredTool();
+	const views: string[][] = [];
+	const result = await tool.execute("secret-md", { questions: [
+		{ id: "token", question: "Enter the **token**", secret: true },
+	] }, undefined, undefined, {
+		mode: "tui",
+		ui: {
+			theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text },
+			setTitle() {},
+			custom: async (factory: any) => new Promise((resolve) => {
+				const component = factory({ requestRender() {} }, { fg: (_color: string, text: string) => text, bold: (text: string) => text }, getKeybindings(), resolve);
+				component.focused = true;
+				views.push(component.render(35));
+				for (const char of "hidden-token") component.handleInput(char);
+				views.push(component.render(35));
+				component.handleInput("\r");
+			}),
+		},
+	});
+	expect(views[0].join("\n")).toContain("Enter the token");
+	expect(views[1].join("\n")).not.toContain("hidden-token");
+	expect(views[1].join("\n")).toContain("••••");
+	expect(JSON.stringify(result)).not.toContain("hidden-token");
+});
+
+test("skips the local dialog when an answer arrives immediately", async () => {
+	const handlers: Record<string, BusHandler[]> = {};
+	const tool = registeredTool([], handlers);
+	handlers["questions:waiting"] = [() => emitBus(handlers, "questions:answer", { requestId: "early:0", answer: "production" })];
+	const result = await tool.execute("early", { questions: [
+		{ id: "target", question: "Choose **target**", options: ["production"] },
+	] }, undefined, undefined, {
+		mode: "tui",
+		ui: {
+			theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text },
+			setTitle() {},
+			custom: () => { throw new Error("local dialog must not open"); },
+		},
+	});
+	expect(result.details.answers[0].answer).toBe("production");
 });
 
 test("reports Herdr blocked state only while user input is pending", async () => {
@@ -151,8 +271,9 @@ test("accepts a remote option and dismisses the local selector", async () => {
 		ui: {
 			theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text },
 			setTitle() {},
-			select: async (_prompt: string, _options: string[], opts: { signal: AbortSignal }) =>
-				new Promise<undefined>((resolve) => opts.signal.addEventListener("abort", () => { dialogAborted = true; resolve(undefined); }, { once: true })),
+			custom: async (factory: any) => new Promise((resolve) => {
+				factory({ requestRender() {} }, {}, getKeybindings(), (answer: unknown) => { dialogAborted = true; resolve(answer); });
+			}),
 		},
 	});
 	await Promise.resolve();
@@ -238,8 +359,9 @@ test("ignores invalid remote choices until an allowed answer arrives", async () 
 		ui: {
 			theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text },
 			setTitle() {},
-			select: async (_prompt: string, _options: string[], opts: { signal: AbortSignal }) =>
-				new Promise<undefined>((resolve) => opts.signal.addEventListener("abort", () => resolve(undefined), { once: true })),
+			custom: async (factory: any) => new Promise((resolve) => {
+				factory({ requestRender() {} }, {}, getKeybindings(), resolve);
+			}),
 		},
 	});
 	await Promise.resolve();

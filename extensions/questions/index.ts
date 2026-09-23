@@ -1,5 +1,5 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Input, Text, wrapTextWithAnsi, type Component, type Focusable, type TUI } from "@earendil-works/pi-tui";
+import { getMarkdownTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Input, Markdown, Text, wrapTextWithAnsi, type Component, type Focusable, type KeybindingsManager, type TUI } from "@earendil-works/pi-tui";
 import { randomUUID } from "node:crypto";
 import { registerSecretSource, SecretRedactor } from "../../shared/secret-redaction.js";
 
@@ -118,18 +118,40 @@ class MaskedInput extends Input {
 	}
 }
 
-class SecretPrompt implements Component, Focusable {
-	private readonly input = new MaskedInput();
+class MarkdownPrompt {
+	private readonly question: Markdown;
+
+	constructor(private readonly progress: string, question: string, protected readonly theme: any) {
+		this.question = new Markdown(question, 0, 0, getMarkdownTheme());
+	}
+
+	render(width: number): string[] {
+		return [
+			...wrapTextWithAnsi(this.theme.fg("accent", this.theme.bold(this.progress)), width),
+			...this.question.render(width),
+			"",
+		];
+	}
+
+	invalidate(): void { this.question.invalidate(); }
+}
+
+class AnswerPrompt extends MarkdownPrompt implements Component, Focusable {
+	private readonly input: Input;
 	private _focused = false;
 
 	constructor(
-		private readonly question: string,
+		progress: string,
+		question: string,
+		private readonly secret: boolean,
 		private readonly tui: TUI,
-		private readonly theme: any,
-		private readonly done: (answer: string | undefined) => void,
+		theme: any,
+		done: (answer: string | undefined) => void,
 	) {
-		this.input.onSubmit = (value) => this.done(value);
-		this.input.onEscape = () => this.done(undefined);
+		super(progress, question, theme);
+		this.input = secret ? new MaskedInput() : new Input();
+		this.input.onSubmit = done;
+		this.input.onEscape = () => done(undefined);
 	}
 
 	get focused(): boolean { return this._focused; }
@@ -143,26 +165,72 @@ class SecretPrompt implements Component, Focusable {
 		this.tui.requestRender();
 	}
 
-	render(width: number): string[] {
+	override render(width: number): string[] {
 		const max = Math.max(1, width);
 		return [
-			...wrapTextWithAnsi(this.question, max),
-			...wrapTextWithAnsi(this.theme.fg("dim", "Secret response (not stored in the transcript)"), max),
+			...super.render(max),
+			...(this.secret ? wrapTextWithAnsi(this.theme.fg("dim", "Secret response (not stored in the transcript)"), max) : []),
 			...this.input.render(max),
 			...wrapTextWithAnsi(this.theme.fg("dim", "Enter submit · Esc cancel"), max),
 		];
 	}
 
-	invalidate(): void { this.input.invalidate(); }
+	override invalidate(): void { super.invalidate(); this.input.invalidate(); }
 }
 
-async function secretInput(question: string, ctx: any): Promise<string | undefined> {
+class ChoicePrompt extends MarkdownPrompt implements Component {
+	private readonly choices: Markdown[];
+	private selected = 0;
+
+	constructor(
+		progress: string,
+		question: string,
+		choices: string[],
+		private readonly tui: TUI,
+		theme: any,
+		private readonly keys: KeybindingsManager,
+		private readonly done: (index: number | undefined) => void,
+	) {
+		super(progress, question, theme);
+		this.choices = choices.map((choice) => new Markdown(choice, 0, 0, getMarkdownTheme()));
+	}
+
+	handleInput(data: string): void {
+		if (this.keys.matches(data, "tui.select.up")) this.selected = (this.selected + this.choices.length - 1) % this.choices.length;
+		else if (this.keys.matches(data, "tui.select.down")) this.selected = (this.selected + 1) % this.choices.length;
+		else if (this.keys.matches(data, "tui.select.confirm")) return this.done(this.selected);
+		else if (this.keys.matches(data, "tui.select.cancel")) return this.done(undefined);
+		this.tui.requestRender();
+	}
+
+	override render(width: number): string[] {
+		const max = Math.max(1, width);
+		const lines = super.render(max);
+		const start = Math.max(0, Math.min(this.selected - 2, this.choices.length - 5));
+		const indent = max > 2 ? "  " : "";
+		for (let i = start; i < Math.min(start + 5, this.choices.length); i++) {
+			const prefix = i === this.selected && indent ? this.theme.fg("accent", "→ ") : indent;
+			const rendered = this.choices[i].render(max - indent.length);
+			for (const [lineIndex, line] of rendered.entries()) lines.push((lineIndex === 0 ? prefix : indent) + line);
+		}
+		if (this.choices.length > 5) lines.push(...wrapTextWithAnsi(this.theme.fg("dim", `  (${this.selected + 1}/${this.choices.length})`), max));
+		lines.push(...wrapTextWithAnsi(this.theme.fg("dim", "↑/↓ select · Enter confirm · Esc cancel"), max));
+		return lines;
+	}
+
+	override invalidate(): void {
+		super.invalidate();
+		for (const choice of this.choices) choice.invalidate();
+	}
+}
+
+async function secretInput(progress: string, question: string, ctx: any): Promise<string | undefined> {
 	if (ctx.mode !== "tui") {
 		ctx.ui.notify("Secret questions require interactive TUI mode.", "warning");
 		return undefined;
 	}
 	return ctx.ui.custom<string | undefined>((tui: TUI, theme: any, _kb: any, done: (answer: string | undefined) => void) =>
-		new SecretPrompt(question, tui, theme, done));
+		new AnswerPrompt(progress, question, true, tui, theme, done));
 }
 
 interface CollectedAnswer {
@@ -176,10 +244,18 @@ async function collectAnswer(
 	requestId: string,
 	question: Question,
 	prompt: string,
+	progress: string,
 	ctx: any,
 	onReady: () => void,
 ): Promise<CollectedAnswer> {
 	const dialogController = new AbortController();
+	let dismissDialog: (() => void) | undefined;
+	const customDialog = <T>(factory: (tui: TUI, theme: any, keys: KeybindingsManager, done: (answer: T) => void) => Component) =>
+		ctx.ui.custom<T>((tui: TUI, theme: any, keys: KeybindingsManager, done: (answer: T) => void) => {
+			const dismiss = () => done(undefined as T);
+			dismissDialog = dismiss;
+			return factory(tui, theme, keys, (answer) => { dismissDialog = undefined; done(answer); });
+		}).finally(() => { dismissDialog = undefined; });
 	let resolveRemote!: (answer: string) => void;
 	let remoteSettled = false;
 	const remoteAnswer = new Promise<string>((resolve) => { resolveRemote = resolve; });
@@ -194,11 +270,13 @@ async function collectAnswer(
 		if (options.length > 0 && !allowOther && !options.includes(answer)) return;
 		remoteSettled = true;
 		resolveRemote(answer);
+		dismissDialog?.();
 	});
 
-	const raceRemote = async <T>(local: Promise<T>): Promise<{ source: "local"; value: T } | { source: "remote"; value: string }> => {
+	const raceRemote = async <T>(startLocal: () => Promise<T>): Promise<{ source: "local"; value: T } | { source: "remote"; value: string }> => {
+		if (remoteSettled) return { source: "remote", value: await remoteAnswer };
 		const result = await Promise.race([
-			local.then((value) => ({ source: "local" as const, value })),
+			startLocal().then((value) => ({ source: "local" as const, value })),
 			remoteAnswer.then((value) => ({ source: "remote" as const, value })),
 		]);
 		if (result.source === "remote") dialogController.abort();
@@ -208,21 +286,31 @@ async function collectAnswer(
 	try {
 		onReady();
 		if (options.length > 0) {
-			const choices = [...options];
-			if (question.allow_other !== false) choices.push("Type something…");
-			const selected = await raceRemote(ctx.ui.select(prompt, choices, { signal: dialogController.signal }));
-			if (selected.source === "remote") return { answer: selected.value, cancelled: false, source: "remote" };
-			if (selected.value === undefined) return { cancelled: true, source: "tui" };
-			if (selected.value !== "Type something…") return { answer: selected.value, cancelled: false, source: "tui" };
+			const choices = question.allow_other !== false ? [...options, "Type something…"] : options;
+			if (ctx.mode === "tui") {
+				// Use the index so a real option named "Type something…" stays selectable.
+				const selected = await raceRemote(() => customDialog<number | undefined>((tui, theme, keys, done) =>
+					new ChoicePrompt(progress, question.question, choices, tui, theme, keys, done)));
+				if (selected.source === "remote") return { answer: selected.value, cancelled: false, source: "remote" };
+				if (selected.value === undefined) return { cancelled: true, source: "tui" };
+				if (selected.value < options.length) return { answer: options[selected.value], cancelled: false, source: "tui" };
+			} else {
+				const selected = await raceRemote(() => ctx.ui.select(prompt, choices, { signal: dialogController.signal }));
+				if (selected.source === "remote") return { answer: selected.value, cancelled: false, source: "remote" };
+				if (selected.value === undefined) return { cancelled: true, source: "tui" };
+				if (selected.value !== "Type something…") return { answer: selected.value, cancelled: false, source: "tui" };
+			}
 		}
 
 		if (question.secret) {
-			const answer = await secretInput(prompt, ctx);
+			const answer = await secretInput(progress, question.question, ctx);
 			return answer === undefined
 				? { cancelled: true, source: "tui" }
 				: { answer, cancelled: false, source: "tui" };
 		}
-		const entered = await raceRemote(ctx.ui.input(prompt, "Type your answer", { signal: dialogController.signal }));
+		const entered = await raceRemote(() => ctx.mode === "tui"
+			? customDialog<string | undefined>((tui, theme, _keys, done) => new AnswerPrompt(progress, question.question, false, tui, theme, done))
+			: ctx.ui.input(prompt, "Type your answer", { signal: dialogController.signal }));
 		return entered.source === "remote"
 			? { answer: entered.value, cancelled: false, source: "remote" }
 			: entered.value === undefined
@@ -284,7 +372,7 @@ export default function (pi: ExtensionAPI) {
 					const requestId = `${toolCallId}:${index}`;
 					let resolution: { outcome: "answered" | "cancelled"; source: "tui" | "remote" } = { outcome: "cancelled", source: "tui" };
 					try {
-						const collected = await collectAnswer(pi, requestId, question, prompt, ctx, () => {
+						const collected = await collectAnswer(pi, requestId, question, prompt, `Question ${index + 1}/${questions.length}`, ctx, () => {
 							// Herdr's agent-state integration treats this optional event as an
 							// authoritative wait signal. Keep the label generic so secret question
 							// text never leaves the questionnaire UI.
