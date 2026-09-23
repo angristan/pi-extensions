@@ -209,7 +209,10 @@ class ChoicePrompt extends MarkdownPrompt implements Component {
 		const start = Math.max(0, Math.min(this.selected - 2, this.choices.length - 5));
 		const indent = max > 2 ? "  " : "";
 		for (let i = start; i < Math.min(start + 5, this.choices.length); i++) {
-			const prefix = i === this.selected && indent ? this.theme.fg("accent", "→ ") : indent;
+			if (i > start) lines.push("");
+			const prefix = indent
+				? this.theme.fg(i === this.selected ? "accent" : "dim", i === this.selected ? "→ " : "○ ")
+				: "";
 			const rendered = this.choices[i].render(max - indent.length);
 			for (const [lineIndex, line] of rendered.entries()) lines.push((lineIndex === 0 ? prefix : indent) + line);
 		}

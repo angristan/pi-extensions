@@ -71,7 +71,7 @@ test("keeps the session name in the pending title", async () => {
 	] }, undefined, undefined, ctx);
 
 	expect(rendered[0].join("\n")).toContain("Question 1/2\nPick a color");
-	expect(rendered[0].map((line) => line.trimEnd()).join("\n")).toContain("→ Red\n  Blue");
+	expect(rendered[0].map((line) => line.trimEnd()).join("\n")).toContain("→ Red\n\n○ Blue");
 	expect(rendered[1].join("\n")).toContain("Question 2/2\nWhy?");
 	expect(titles).toEqual(["❓ Current session", "Current session"]);
 	expect(events).toEqual([
@@ -116,6 +116,11 @@ test("renders multi-line Markdown in questions and options without changing the 
 	expect(plain).toContain("Fast");
 	expect(plain).toContain("Sends two requests");
 	expect(plain).not.toContain("**");
+	const lines = plain.split("\n").map((line) => line.trimEnd());
+	const secondChoice = lines.findIndex((line) => line === "○ Slow");
+	expect(secondChoice).toBeGreaterThan(0);
+	expect(lines[secondChoice - 1]).toBe("");
+	expect(lines[secondChoice - 2]).toContain("Sends two requests");
 	expect(display.every((line) => visibleWidth(line) <= 40)).toBe(true);
 	expect(result.details.answers[0].answer).toBe(option);
 });

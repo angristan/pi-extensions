@@ -18,8 +18,9 @@ you pick:     ▶ new branch
 
 Supports multiple questions in one call, "other" free-text answers, and
 secret inputs. In the interactive terminal, question text and choice labels
-render as Markdown, including multi-line lists and code. The selected answer
-remains the original option string, not the rendered text. Every prompt shows
+render as Markdown, including multi-line lists and code. Each choice has its
+own marker and spacing, so multi-line choices stay distinct. The selected
+answer remains the original option string, not the rendered text. Every prompt shows
 its position and total (`Question 2/3`) above the question. Non-interactive
 clients keep their own plain-text dialog rendering.
 The terminal title becomes `❓ <session name>` while a response is pending.
