@@ -224,10 +224,14 @@ class PetitChatOverlayHost implements Component {
 		this.current?.overlay.setBehavior(mode, working);
 	}
 
-	dispose(): void {
+	dispose({ restoreCursor = false }: { restoreCursor?: boolean } = {}): void {
 		if (this.disposed) return;
 		this.disposed = true;
+		const hadOverlay = this.current !== undefined;
 		this.removeOverlay();
+		// On quit, Pi stops the TUI before extension teardown, yet removing the
+		// last overlay still hides the cursor. Undo that for the parent shell.
+		if (restoreCursor && hadOverlay) this.tui.terminal.showCursor();
 		this.uninstallGeometryHook?.();
 		this.uninstallGeometryHook = undefined;
 		this.geometryHookState = undefined;
@@ -488,8 +492,8 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.on("session_shutdown", (_event, ctx) => {
-		host?.dispose();
+	pi.on("session_shutdown", (event, ctx) => {
+		host?.dispose({ restoreCursor: event.reason === "quit" });
 		ctx.ui.setWidget(HOST_WIDGET_KEY, undefined);
 		host = undefined;
 	});

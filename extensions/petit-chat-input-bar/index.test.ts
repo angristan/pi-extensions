@@ -71,6 +71,41 @@ test("removes inactive overlays and recreates them when editor geometry returns"
 	expect(tui.render).toBe(originalRender);
 });
 
+test("leaves the cursor visible after quitting", () => {
+	const handlers = new Map<string, (...args: any[]) => any>();
+	let widgetFactory: any;
+	petitChat({
+		on: (name: string, handler: any) => handlers.set(name, handler),
+		registerCommand() {},
+	} as any);
+	const ctx = { mode: "tui", ui: { setWidget(_key: string, value: any) { widgetFactory ??= value; } } };
+	handlers.get("session_start")?.({}, ctx);
+
+	let cursorVisible = true;
+	const border = "─".repeat(40);
+	const tui: any = {
+		mode: "regular",
+		terminal: { columns: 40, rows: 12, showCursor() { cursorVisible = true; } },
+		render: () => [border, "input", border],
+		requestRender() {},
+		// Pi hides the cursor when the last overlay is removed, even after stop().
+		showOverlay() { return { hide() { cursorVisible = false; } }; },
+	};
+	const theme = { fg: (_color: string, text: string) => text };
+
+	// Session replacement keeps the TUI running, so Pi owns the cursor.
+	widgetFactory(tui, theme);
+	tui.render(40);
+	handlers.get("session_shutdown")?.({ reason: "new" }, ctx);
+	expect(cursorVisible).toBe(false);
+
+	handlers.get("session_start")?.({}, ctx);
+	widgetFactory(tui, theme);
+	tui.render(40);
+	handlers.get("session_shutdown")?.({ reason: "quit" }, ctx);
+	expect(cursorVisible).toBe(true);
+});
+
 test("does not recurse through Pi's forwarding TUI reference", () => {
 	const handlers = new Map<string, (...args: any[]) => any>();
 	let widgetFactory: any;
