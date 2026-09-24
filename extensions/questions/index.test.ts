@@ -54,6 +54,7 @@ test("keeps the session name in the pending title", async () => {
 		ui: {
 			theme: {
 				fg: (_color: string, text: string) => text,
+				bg: (_color: string, text: string) => text,
 				bold: (text: string) => text,
 			},
 			custom: async (factory: any) => new Promise((resolve) => {
@@ -97,17 +98,30 @@ test("renders multi-line Markdown in questions and options without changing the 
 	const option = "**Fast**\n\n- Sends two requests";
 	let display: string[] = [];
 	let narrow: string[] = [];
+	let moved: string[] = [];
+	const background = "\x1b[48;2;58;58;74m";
+	const theme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+		bg: (color: string, text: string) => {
+			expect(color).toBe("selectedBg");
+			return `${background}${text}\x1b[49m`;
+		},
+	};
 	const result = await tool.execute("md", { questions: [
 		{ id: "mode", question: "Choose a **mode**\n\nSee `config`.", options: [option, "*Slow*"], allow_other: false },
 	] }, undefined, undefined, {
 		mode: "tui",
 		ui: {
-			theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text },
+			theme,
 			setTitle() {},
 			custom: async (factory: any) => new Promise((resolve) => {
-				const component = factory({ requestRender() {} }, { fg: (_color: string, text: string) => text, bold: (text: string) => text }, getKeybindings(), resolve);
+				const component = factory({ requestRender() {} }, theme, getKeybindings(), resolve);
 				display = component.render(40);
 				narrow = component.render(12);
+				component.handleInput("\x1b[B");
+				moved = component.render(40);
+				component.handleInput("\x1b[A");
 				component.handleInput("\r");
 			}),
 		},
@@ -124,6 +138,12 @@ test("renders multi-line Markdown in questions and options without changing the 
 	expect(secondChoice).toBeGreaterThan(0);
 	expect(lines[secondChoice - 1]).toBe("");
 	expect(lines[secondChoice - 2]).toContain("Sends two requests");
+	const firstChoice = lines.findIndex((line) => line.startsWith(" → Fast"));
+	expect(firstChoice).toBeGreaterThan(0);
+	expect(display.slice(firstChoice, secondChoice - 1).every((line) => line.startsWith(` ${background}`) && visibleWidth(line) === 39)).toBe(true);
+	expect(display[secondChoice]).not.toContain(background);
+	expect(moved.find((line) => line.includes("○ Fast"))).not.toContain(background);
+	expect(moved.find((line) => line.includes("→ Slow"))).toContain(background);
 	expect(display.every((line) => !line || line.startsWith(" "))).toBe(true);
 	expect(narrow.every((line) => (!line || line.startsWith(" ")) && visibleWidth(line) <= 12)).toBe(true);
 	expect(display.every((line) => visibleWidth(line) <= 40)).toBe(true);

@@ -1,5 +1,5 @@
 import { getMarkdownTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Input, Markdown, Text, wrapTextWithAnsi, type Component, type Focusable, type KeybindingsManager, type TUI } from "@earendil-works/pi-tui";
+import { Input, Markdown, Text, visibleWidth, wrapTextWithAnsi, type Component, type Focusable, type KeybindingsManager, type TUI } from "@earendil-works/pi-tui";
 import { randomUUID } from "node:crypto";
 import { registerSecretSource, SecretRedactor } from "../../shared/secret-redaction.js";
 
@@ -226,7 +226,14 @@ class ChoicePrompt extends MarkdownPrompt implements Component {
 				? this.theme.fg(i === this.selected ? "accent" : "dim", i === this.selected ? "→ " : "○ ")
 				: "";
 			const rendered = this.choices[i].render(inner - indent.length);
-			lines.push(...this.inset(rendered.map((line, index) => (index === 0 ? prefix : indent) + line), max));
+			const choiceLines = rendered.map((line, index) => (index === 0 ? prefix : indent) + line);
+			if (i === this.selected) {
+				// Fill wrapped and empty Markdown lines so the highlight forms one block.
+				lines.push(...this.inset(choiceLines.map((line) =>
+					this.theme.bg("selectedBg", line + " ".repeat(Math.max(0, inner - visibleWidth(line))))), max));
+			} else {
+				lines.push(...this.inset(choiceLines, max));
+			}
 		}
 		if (this.choices.length > 5) lines.push(...this.inset(wrapTextWithAnsi(this.theme.fg("dim", `  (${this.selected + 1}/${this.choices.length})`), inner), max));
 		lines.push(...this.inset(wrapTextWithAnsi(this.theme.fg("dim", "↑/↓ select · Enter confirm · Esc cancel"), inner), max));
