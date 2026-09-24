@@ -494,6 +494,8 @@ interface GoalToolResultDetails {
 	needsReplace?: boolean;
 	/** goal_resume reactivated the existing goal without replacing it. */
 	resumed?: boolean;
+	/** goal_resume requires the current user request to be reconciled. */
+	reconciliationRequired?: boolean;
 	/** goal_clear retired the existing goal without deleting append-only history. */
 	cleared?: boolean;
 	/** Status immediately before goal_resume reactivated the goal. */
@@ -856,6 +858,7 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 	let noToolContinuationStreak = 0;
 	let pendingContinuationPrompt: string | undefined;
 	let lastTerminalError: { errorMessage?: string } | undefined;
+	let inactiveUserRequestPending = false;
 	let goalToolsIntroduced = false;
 
 	// Dedicated overlay card so the goal renders as its own box, separate from
@@ -1035,6 +1038,7 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 		if (!state) return undefined;
 		const cleared = state;
 		state = undefined;
+		inactiveUserRequestPending = false;
 		saveAndEmit(ctx);
 		appendClearedGoalContext(cleared);
 		return cleared;
@@ -1191,12 +1195,13 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 	};
 
 	/** Reactivate the current goal without replacing its identity or lifetime stats. */
-	const resumeGoal = async (ctx: any): Promise<GoalStatus | undefined> => {
+	const resumeGoal = async (ctx: any, requireReconciliation = false): Promise<GoalStatus | undefined> => {
 		if (!state) return undefined;
 		const previousStatus = state.status;
-		// An explicit resume means the user wants to keep pursuing the existing
-		// objective, so any older unresolved reconciliation request is superseded.
-		state.reconciliationPending = undefined;
+		// A model-triggered resume answers the latest user request. Reconcile that
+		// request after activation so changed acceptance criteria cannot be lost.
+		state.reconciliationPending = requireReconciliation || undefined;
+		inactiveUserRequestPending = false;
 		setStatus("active", ctx);
 		// A resumed loop starts fresh blocked/no-tool audits while preserving the
 		// durable objective, validation, timing, and continuation history.
@@ -1204,7 +1209,7 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 		lastTurnHadToolCall = false;
 		currentRunReportedBlocker = false;
 		noToolContinuationStreak = 0;
-		await maybeContinue(ctx);
+		if (!requireReconciliation) await maybeContinue(ctx);
 		return previousStatus;
 	};
 
@@ -1307,7 +1312,13 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 	// ------------------------------------------------------------------------
 
 	pi.on("input", (event: any, ctx: any) => {
-		if (event.source === "extension" || !state || state.status !== "active") return;
+		if (event.source === "extension" || !state || state.status === "complete") return;
+		if (state.status !== "active") {
+			// Keep inactive goals out of unrelated turns. If the model resumes this
+			// goal in response, resumeGoal promotes this request to reconciliation.
+			inactiveUserRequestPending = true;
+			return { action: "continue" as const };
+		}
 		// Do not let automatic continuation reinterpret a newer user request
 		// through an older objective. The current user turn may keep, revise, or
 		// pause the goal through goal_reconcile; unresolved requests pause safely.
@@ -1426,6 +1437,7 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 		noToolContinuationStreak = 0;
 		pendingContinuationPrompt = undefined;
 		lastTerminalError = undefined;
+		inactiveUserRequestPending = false;
 		const entries = branchEntries(ctx);
 		for (const [index, entry] of entries.entries()) {
 			if (entry.type === "custom_message" && entry.customType === GOAL_CONTEXT_CUSTOM_TYPE) {
@@ -1722,8 +1734,9 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 		name: "goal_resume",
 		label: "Resume Session Goal",
 		description:
-			"Resume the existing session goal and restart auto-continuation without changing its objective, validation criteria, identity, timing, or continuation history. " +
-			"Use when the user asks to resume or continue a paused or blocked goal. Do not use goal_set with replace: true to resume an existing goal.",
+			"Resume the existing session goal without changing its identity, timing, or continuation history. " +
+			"Use when the user asks to resume or continue a paused or blocked goal. The latest user request must then be reconciled before automatic continuation. " +
+			"Do not use goal_set with replace: true to resume an existing goal.",
 		parameters: Type.Object({}),
 		renderShell: "self",
 		renderCall: renderGoalResumeCall,
@@ -1735,10 +1748,14 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 			}
 			if (state.status === "complete") return inactiveGoalToolResult("goal-complete", true);
 			const objective = state.objective;
-			const previousStatus = await resumeGoal(ctx);
+			const reconciliationRequired = inactiveUserRequestPending;
+			const previousStatus = await resumeGoal(ctx, reconciliationRequired);
 			return {
-				content: [{ type: "text", text: `Goal resumed.\nObjective: ${objective}` }],
-				details: { ok: true, resumed: true, previousStatus },
+				content: [{
+					type: "text",
+					text: `Goal resumed.\nObjective: ${objective}${reconciliationRequired ? "\nReconcile the latest user request with goal_reconcile before continuing." : ""}`,
+				}],
+				details: { ok: true, resumed: true, previousStatus, reconciliationRequired },
 			};
 		},
 	});

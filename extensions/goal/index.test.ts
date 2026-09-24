@@ -469,6 +469,66 @@ test("goal_reconcile is active only while reconciliation is pending", async () =
 	expect(sentMessages(h, "goal-context").at(-1)!.message).toMatchObject({ details: { status: "cleared" } });
 });
 
+test("a blocked goal reconciles a revised user request before resuming", async () => {
+	const h = makeHarness();
+	await h.tools.goal_set.execute("set", {
+		objective: "complete the rollout",
+		validation: ["all STEM pods use the stable image"],
+	}, undefined, undefined, h.ctx);
+	await h.commands.goal.handler("block", h.ctx);
+
+	await emit(h, "input", { source: "interactive", text: "the one-pod STEM canary is expected" });
+
+	expect(latestGoalState(h)).toMatchObject({ status: "blocked" });
+	expect(h.activeTools.has("goal_resume")).toBe(true);
+	const resumed = await h.tools.goal_resume.execute("resume", {}, undefined, undefined, h.ctx);
+	expect(resumed.details).toMatchObject({ ok: true, resumed: true, reconciliationRequired: true });
+	expect(latestGoalState(h)).toMatchObject({ status: "active", reconciliationPending: true });
+	expect(h.activeTools.has("goal_reconcile")).toBe(true);
+	expect(h.activeTools.has("goal_resume")).toBe(false);
+	expect(h.activeTools.has("goal_set")).toBe(false);
+	const staleResume = await h.tools.goal_resume.execute("resume-again", {}, undefined, undefined, h.ctx);
+	expect(staleResume.details).toMatchObject({ ok: false, reason: "reconciliation-required" });
+
+	const reconciled = await h.tools.goal_reconcile.execute("reconcile", {
+		action: "revise",
+		objective: "complete the rollout",
+		validation: ["STEM runs 31 stable pods and one canary pod"],
+	}, undefined, undefined, h.ctx);
+
+	expect(reconciled.details).toMatchObject({ ok: true, reconciled: true, action: "revise" });
+	expect(latestGoalState(h)).toMatchObject({
+		status: "active",
+		objective: "complete the rollout",
+		validation: ["STEM runs 31 stable pods and one canary pod"],
+	});
+	expect(latestGoalState(h).reconciliationPending).toBeUndefined();
+	expect(h.activeTools.has("goal_reconcile")).toBe(false);
+	expect(h.activeTools.has("goal_resume")).toBe(false);
+	const completed = await h.tools.goal_complete.execute("complete", {}, undefined, undefined, h.ctx);
+	expect(completed.details.ok).toBe(true);
+});
+
+test("a paused goal resumes through keep reconciliation", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("ship the feature", h.ctx);
+	const createdAt = latestGoalState(h).createdAt;
+	await h.commands.goal.handler("pause", h.ctx);
+
+	await emit(h, "input", { source: "interactive", text: "continue the same goal" });
+
+	expect(latestGoalState(h)).toMatchObject({ status: "paused" });
+	expect(h.activeTools.has("goal_resume")).toBe(true);
+	const resumed = await h.tools.goal_resume.execute("resume", {}, undefined, undefined, h.ctx);
+	expect(resumed.details).toMatchObject({ ok: true, resumed: true, reconciliationRequired: true });
+	expect(latestGoalState(h)).toMatchObject({ status: "active", reconciliationPending: true });
+	expect(h.activeTools.has("goal_reconcile")).toBe(true);
+	expect(h.activeTools.has("goal_resume")).toBe(false);
+	const reconciled = await h.tools.goal_reconcile.execute("reconcile", { action: "keep" }, undefined, undefined, h.ctx);
+	expect(reconciled.details).toMatchObject({ ok: true, reconciled: true, action: "keep" });
+	expect(latestGoalState(h)).toMatchObject({ status: "active", createdAt, objective: "ship the feature" });
+});
+
 test("editing a completed goal reactivates it and starts the loop", async () => {
 	const h = makeHarness();
 	await h.commands.goal.handler("initial goal", h.ctx);

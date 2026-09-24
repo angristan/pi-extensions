@@ -39,11 +39,13 @@ prompt. The continuation re-orients the agent around the objective and asks for
 a requirement-by-requirement completion audit before completion.
 
 User-originated input (interactive or RPC) preempts automatic continuation. The
-next agent turn must reconcile that request with the active goal by keeping it, revising its complete
-objective and validation criteria, or pausing it. Revisions preserve the goal's
-identity, timing, continuation count, and append-only history. If reconciliation
-is missing or invalid when the turn settles, the extension pauses instead of
-resuming the older objective.
+next agent turn must reconcile that request with an active goal by keeping it,
+revising its complete objective and validation criteria, or pausing it. A paused
+or blocked goal stays inactive unless the agent resumes it. When the agent resumes
+one in response to a user request, reconciliation becomes mandatory before the
+loop can continue. Revisions preserve the goal's identity, timing, continuation
+count, and append-only history. If reconciliation is missing or invalid when the
+turn settles, the extension pauses instead of resuming the older objective.
 
 ```
 /goal set <objective>
@@ -83,10 +85,12 @@ resuming the older objective.
 - **Interruption → pause** — if you abort a turn (Esc), the goal auto-pauses
   so it doesn't immediately resume on the next boundary.
 - **User request → reconciliation** — user-originated input marks reconciliation as
-  pending. `goal_complete` and `goal_block` reject the transition until the agent
-  calls `goal_reconcile`; `goal_resume` and `goal_set` are not exposed while the
-  goal is active. An unresolved or invalid reconciliation pauses the loop at the
-  next safe boundary.
+  pending for an active goal. A paused or blocked goal remains inactive; if the
+  agent calls `goal_resume` in response, the resumed goal requires
+  `goal_reconcile` before work continues. `goal_complete` and `goal_block` reject
+  the transition until reconciliation succeeds. `goal_resume` and `goal_set` are
+  not exposed while the goal is active. An unresolved or invalid reconciliation
+  pauses the loop at the next safe boundary.
 - **Provider error → pause** — if a turn ends with a terminal provider error, the
   goal is paused at the next safe idle boundary instead of retry-looping.
   Usage/rate/quota errors get a specific resume hint. Reopening the session offers
@@ -141,11 +145,11 @@ All sections except `# Goal` are optional.
   freely. Active-goal scope changes use `goal_reconcile` instead. Stale active
   calls, including identical replacements, are state-preserving silent no-ops.
 - **`goal_resume`** — available only for paused or blocked goals; reactivates the
-  existing goal and restarts auto-continuation without replacing its objective,
-  validation criteria, identity, timing, or continuation history. This is the
-  agent-callable equivalent of `/goal resume`. Reopening a session with a paused
-  or blocked goal also offers this action in the UI. Stale calls after activation
-  are silent and do not change state.
+  existing goal without replacing its identity, timing, or continuation history.
+  When the agent calls it in response to user input, `goal_reconcile` must keep or
+  revise the goal before auto-continuation restarts. Interactive `/goal resume`
+  and the resume choice shown when reopening a session restart the existing goal
+  directly. Stale calls after activation are silent and do not change state.
 - **`goal_clear`** — available only for paused or blocked goals; retires an
   obsolete, superseded, cancelled, or unrelated goal without deleting its
   append-only history. Stale calls against active or completed goals are
