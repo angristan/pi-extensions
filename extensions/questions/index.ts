@@ -132,13 +132,18 @@ class MarkdownPrompt {
 		return lines.map((line) => padding + line);
 	}
 
+	protected panel(lines: string[], width: number): string[] {
+		return lines.map((line) => this.theme.bg("customMessageBg",
+			line + " ".repeat(Math.max(0, width - visibleWidth(line)))));
+	}
+
 	render(width: number): string[] {
 		const inner = this.contentWidth(width);
-		return this.inset([
+		return this.panel(["", ...this.inset([
 			...wrapTextWithAnsi(this.theme.fg("accent", this.theme.bold(this.progress)), inner),
 			...this.question.render(inner),
 			"",
-		], width);
+		], width)], width);
 	}
 
 	invalidate(): void { this.question.invalidate(); }
@@ -178,12 +183,13 @@ class AnswerPrompt extends MarkdownPrompt implements Component, Focusable {
 		const inner = this.contentWidth(max);
 		return [
 			...super.render(max),
-			...this.inset([
+			...this.panel(this.inset([
 				...(this.secret ? wrapTextWithAnsi(this.theme.fg("dim", "Secret response (not stored in the transcript)"), inner) : []),
 				...this.input.render(inner),
+				"",
 				...wrapTextWithAnsi(this.theme.fg("dim", "Enter submit · Esc cancel"), inner),
-			], max),
-			"",
+			], max), max),
+			...this.panel([""], max),
 		];
 	}
 
@@ -222,23 +228,28 @@ class ChoicePrompt extends MarkdownPrompt implements Component {
 		const start = Math.max(0, Math.min(this.selected - 2, this.choices.length - 5));
 		const indent = inner > 2 ? "  " : "";
 		for (let i = start; i < Math.min(start + 5, this.choices.length); i++) {
-			if (i > start) lines.push("");
+			if (i > start) lines.push(...this.panel([""], max));
 			const prefix = indent
 				? this.theme.fg(i === this.selected ? "accent" : "dim", i === this.selected ? "→ " : "○ ")
 				: "";
 			const rendered = this.choices[i].render(inner - indent.length);
 			const choiceLines = rendered.map((line, index) => (index === 0 ? prefix : indent) + line);
 			if (i === this.selected) {
-				// Fill wrapped and empty Markdown lines so the highlight forms one block.
-				lines.push(...this.inset(choiceLines.map((line) =>
-					this.theme.bg("selectedBg", line + " ".repeat(Math.max(0, inner - visibleWidth(line))))), max));
+				// Keep the panel-colored inset around the selected Markdown block.
+				const left = max > 1 ? " " : "";
+				const right = " ".repeat(Math.max(0, max - left.length - inner));
+				lines.push(...choiceLines.map((line) =>
+					this.theme.bg("customMessageBg", left)
+					+ this.theme.bg("selectedBg", line + " ".repeat(Math.max(0, inner - visibleWidth(line))))
+					+ this.theme.bg("customMessageBg", right)));
 			} else {
-				lines.push(...this.inset(choiceLines, max));
+				lines.push(...this.panel(this.inset(choiceLines, max), max));
 			}
 		}
-		if (this.choices.length > 5) lines.push(...this.inset(wrapTextWithAnsi(this.theme.fg("dim", `  (${this.selected + 1}/${this.choices.length})`), inner), max));
-		lines.push(...this.inset(wrapTextWithAnsi(this.theme.fg("dim", "↑/↓ select · Enter confirm · Esc cancel"), inner), max));
-		lines.push("");
+		if (this.choices.length > 5) lines.push(...this.panel(this.inset(wrapTextWithAnsi(this.theme.fg("dim", `  (${this.selected + 1}/${this.choices.length})`), inner), max), max));
+		lines.push(...this.panel([""], max));
+		lines.push(...this.panel(this.inset(wrapTextWithAnsi(this.theme.fg("dim", "↑/↓ select · Enter confirm · Esc cancel"), inner), max), max));
+		lines.push(...this.panel([""], max));
 		return lines;
 	}
 

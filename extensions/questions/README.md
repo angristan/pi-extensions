@@ -18,13 +18,14 @@ you pick:     ▶ new branch
 
 Supports multiple questions in one call, "other" free-text answers, and
 secret inputs. In the interactive terminal, question text and choice labels
-render as Markdown, including multi-line lists and code. Each choice has its
-own marker and spacing, so multi-line choices stay distinct. The active choice
-uses the theme's selection background across its wrapped lines. The selected
-answer remains the original option string, not the rendered text. Every prompt
-shows its position and total (`Question 2/3`) above the question, with the same left
-inset as Pi's built-in dialogs. A blank row separates the keyboard hints from
-the content below. Non-interactive clients keep their own plain-text rendering.
+render as Markdown, including multi-line lists and code. The dialog uses the
+theme's custom-message background. Each choice has its own marker and spacing,
+and the active choice uses the theme's selection background across its wrapped
+lines. The selected answer remains the original option string, not the rendered
+text. Every prompt shows its position and total (`Question 2/3`) above the
+question, with the same left inset as Pi's built-in dialogs. A blank row
+separates the choices or input from the keyboard hints, and another follows the
+hints. Non-interactive clients keep their own plain-text rendering.
 The terminal title becomes `❓ <session name>` while a response is pending.
 When running inside Herdr, its agent-state integration receives balanced
 `herdr:blocked` events, so the pane and sidebar show the question status instead

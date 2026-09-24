@@ -71,13 +71,15 @@ test("keeps the session name in the pending title", async () => {
 		{ id: "why", question: "Why?", allow_other: false },
 	] }, undefined, undefined, ctx);
 
-	expect(rendered[0].join("\n")).toContain("Question 1/2\n Pick a color");
+	expect(rendered[0].map((line) => line.trimEnd()).join("\n")).toContain("Question 1/2\n Pick a color");
 	expect(rendered[0].map((line) => line.trimEnd()).join("\n")).toContain(" → Red\n\n ○ Blue");
-	expect(rendered[1].join("\n")).toContain("Question 2/2\n Why?");
+	expect(rendered[1].map((line) => line.trimEnd()).join("\n")).toContain("Question 2/2\n Why?");
 	expect(rendered.flat().every((line) => !line || line.startsWith(" "))).toBe(true);
 	for (const dialog of rendered) {
 		expect(dialog.at(-2)).toContain("Esc cancel");
-		expect(dialog.at(-1)).toBe("");
+		expect(dialog.at(-1)?.trim()).toBe("");
+		const hint = dialog.findIndex((line) => line.includes("Esc cancel"));
+		expect(dialog[hint - 1].trim()).toBe("");
 	}
 	expect(titles).toEqual(["❓ Current session", "Current session"]);
 	expect(events).toEqual([
@@ -104,12 +106,13 @@ test("renders multi-line Markdown in questions and options without changing the 
 	let narrow: string[] = [];
 	let moved: string[] = [];
 	const background = "\x1b[48;2;58;58;74m";
+	const panelBackground = "\x1b[48;2;45;40;56m";
 	const theme = {
 		fg: (_color: string, text: string) => text,
 		bold: (text: string) => text,
 		bg: (color: string, text: string) => {
-			expect(color).toBe("selectedBg");
-			return `${background}${text}\x1b[49m`;
+			expect(["selectedBg", "customMessageBg"]).toContain(color);
+			return `${color === "selectedBg" ? background : panelBackground}${text}\x1b[49m`;
 		},
 	};
 	const result = await tool.execute("md", { questions: [
@@ -144,13 +147,14 @@ test("renders multi-line Markdown in questions and options without changing the 
 	expect(lines[secondChoice - 2]).toContain("Sends two requests");
 	const firstChoice = lines.findIndex((line) => line.startsWith(" → Fast"));
 	expect(firstChoice).toBeGreaterThan(0);
-	expect(display.slice(firstChoice, secondChoice - 1).every((line) => line.startsWith(` ${background}`) && visibleWidth(line) === 39)).toBe(true);
+	expect(display.slice(firstChoice, secondChoice - 1).every((line) => line.startsWith(`${panelBackground} \x1b[49m${background}`) && visibleWidth(line) === 40)).toBe(true);
 	expect(display[secondChoice]).not.toContain(background);
 	expect(moved.find((line) => line.includes("○ Fast"))).not.toContain(background);
 	expect(moved.find((line) => line.includes("→ Slow"))).toContain(background);
-	expect(display.every((line) => !line || line.startsWith(" "))).toBe(true);
-	expect(narrow.every((line) => (!line || line.startsWith(" ")) && visibleWidth(line) <= 12)).toBe(true);
-	expect(display.every((line) => visibleWidth(line) <= 40)).toBe(true);
+	expect(display.every((line) => line.startsWith(panelBackground) && visibleWidth(line) === 40)).toBe(true);
+	expect(narrow.every((line) => line.startsWith(panelBackground) && visibleWidth(line) <= 12)).toBe(true);
+	expect(lines[lines.findIndex((line) => line.includes("↑/↓ select")) - 1]).toBe("");
+	expect(display.at(-1)).toBe(`${panelBackground}${" ".repeat(40)}\x1b[49m`);
 	expect(result.details.answers[0].answer).toBe(option);
 });
 
@@ -183,7 +187,7 @@ test("accepts a typed answer after the Markdown choice list", async () => {
 			theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text },
 			setTitle() {},
 			custom: async (factory: any) => new Promise((resolve) => {
-				const component = factory({ requestRender() {} }, { fg: (_color: string, text: string) => text, bold: (text: string) => text }, getKeybindings(), resolve);
+				const component = factory({ requestRender() {} }, { fg: (_color: string, text: string) => text, bg: (_color: string, text: string) => text, bold: (text: string) => text }, getKeybindings(), resolve);
 				if (++dialogs === 1) component.handleInput("\x1b[B");
 				else {
 					expect(component.render(40).join("\n")).toContain("Choose a mode");
@@ -200,15 +204,24 @@ test("accepts a typed answer after the Markdown choice list", async () => {
 test("renders the free-text question and masks secret input", async () => {
 	const tool = registeredTool();
 	const views: string[][] = [];
+	const panelBackground = "\x1b[48;2;45;40;56m";
+	const theme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+		bg: (color: string, text: string) => {
+			expect(color).toBe("customMessageBg");
+			return `${panelBackground}${text}\x1b[49m`;
+		},
+	};
 	const result = await tool.execute("secret-md", { questions: [
 		{ id: "token", question: "Enter the **token**", secret: true },
 	] }, undefined, undefined, {
 		mode: "tui",
 		ui: {
-			theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text },
+			theme,
 			setTitle() {},
 			custom: async (factory: any) => new Promise((resolve) => {
-				const component = factory({ requestRender() {} }, { fg: (_color: string, text: string) => text, bold: (text: string) => text }, getKeybindings(), resolve);
+				const component = factory({ requestRender() {} }, theme, getKeybindings(), resolve);
 				component.focused = true;
 				views.push(component.render(35));
 				for (const char of "hidden-token") component.handleInput(char);
@@ -218,9 +231,11 @@ test("renders the free-text question and masks secret input", async () => {
 		},
 	});
 	expect(views[0].join("\n")).toContain("Enter the token");
-	expect(views.flat().every((line) => !line || line.startsWith(" "))).toBe(true);
+	expect(views.flat().every((line) => line.startsWith(panelBackground) && visibleWidth(line) === 35)).toBe(true);
 	expect(views[0].at(-2)).toContain("Esc cancel");
-	expect(views[0].at(-1)).toBe("");
+	expect(views[0].at(-1)?.replace(/\x1b\[[0-9;]*m/g, "").trim()).toBe("");
+	const hint = views[0].findIndex((line) => line.includes("Esc cancel"));
+	expect(views[0][hint - 1].replace(/\x1b\[[0-9;]*m/g, "").trim()).toBe("");
 	expect(views[1].join("\n")).not.toContain("hidden-token");
 	expect(views[1].join("\n")).toContain("••••");
 	expect(JSON.stringify(result)).not.toContain("hidden-token");
