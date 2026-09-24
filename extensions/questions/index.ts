@@ -229,11 +229,12 @@ class ChoicePrompt extends MarkdownPrompt implements Component {
 		const indent = inner > 2 ? "  " : "";
 		for (let i = start; i < Math.min(start + 5, this.choices.length); i++) {
 			if (i > start) lines.push(...this.panel([""], max));
-			const prefix = indent
-				? this.theme.fg(i === this.selected ? "accent" : "dim", i === this.selected ? "→ " : "○ ")
+			const selected = i === this.selected;
+			const marker = indent
+				? this.theme.fg(selected ? "accent" : "dim", selected ? "▌ " : "○ ")
 				: "";
 			const rendered = this.choices[i].render(inner - indent.length);
-			const choiceLines = rendered.map((line, index) => (index === 0 ? prefix : indent) + line);
+			const choiceLines = rendered.map((line, index) => (index === 0 || selected ? marker : indent) + line);
 			if (i === this.selected) {
 				// Keep the panel-colored inset around the selected Markdown block.
 				const left = max > 1 ? " " : "";

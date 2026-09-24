@@ -72,7 +72,7 @@ test("keeps the session name in the pending title", async () => {
 	] }, undefined, undefined, ctx);
 
 	expect(rendered[0].map((line) => line.trimEnd()).join("\n")).toContain("Question 1/2\n Pick a color");
-	expect(rendered[0].map((line) => line.trimEnd()).join("\n")).toContain(" → Red\n\n ○ Blue");
+	expect(rendered[0].map((line) => line.trimEnd()).join("\n")).toContain(" ▌ Red\n\n ○ Blue");
 	expect(rendered[1].map((line) => line.trimEnd()).join("\n")).toContain("Question 2/2\n Why?");
 	expect(rendered.flat().every((line) => !line || line.startsWith(" "))).toBe(true);
 	for (const dialog of rendered) {
@@ -107,8 +107,9 @@ test("renders multi-line Markdown in questions and options without changing the 
 	let moved: string[] = [];
 	const background = "\x1b[48;2;58;58;74m";
 	const panelBackground = "\x1b[48;2;45;40;56m";
+	const accent = "\x1b[38;2;138;190;183m";
 	const theme = {
-		fg: (_color: string, text: string) => text,
+		fg: (color: string, text: string) => color === "accent" ? `${accent}${text}\x1b[39m` : text,
 		bold: (text: string) => text,
 		bg: (color: string, text: string) => {
 			expect(["selectedBg", "customMessageBg"]).toContain(color);
@@ -145,12 +146,13 @@ test("renders multi-line Markdown in questions and options without changing the 
 	expect(secondChoice).toBeGreaterThan(0);
 	expect(lines[secondChoice - 1]).toBe("");
 	expect(lines[secondChoice - 2]).toContain("Sends two requests");
-	const firstChoice = lines.findIndex((line) => line.startsWith(" → Fast"));
+	const firstChoice = lines.findIndex((line) => line.startsWith(" ▌ Fast"));
 	expect(firstChoice).toBeGreaterThan(0);
-	expect(display.slice(firstChoice, secondChoice - 1).every((line) => line.startsWith(`${panelBackground} \x1b[49m${background}`) && visibleWidth(line) === 40)).toBe(true);
+	expect(display.slice(firstChoice, secondChoice - 1).every((line) => line.startsWith(`${panelBackground} \x1b[49m${background}`) && visibleWidth(line) === 40 && line.includes(`${accent}▌ `))).toBe(true);
 	expect(display[secondChoice]).not.toContain(background);
+	expect(display[secondChoice]).not.toContain("▌");
 	expect(moved.find((line) => line.includes("○ Fast"))).not.toContain(background);
-	expect(moved.find((line) => line.includes("→ Slow"))).toContain(background);
+	expect(moved.find((line) => line.includes("▌") && line.includes("Slow"))).toContain(background);
 	expect(display.every((line) => line.startsWith(panelBackground) && visibleWidth(line) === 40)).toBe(true);
 	expect(narrow.every((line) => line.startsWith(panelBackground) && visibleWidth(line) <= 12)).toBe(true);
 	expect(lines[lines.findIndex((line) => line.includes("↑/↓ select")) - 1]).toBe("");
