@@ -26,8 +26,9 @@ rendered text. Every prompt shows its position and total (`Question 2/3`) above 
 question, with the same left inset as Pi's built-in dialogs. A blank row
 separates the choices or input from the keyboard hints, and another follows the
 hints. Non-interactive clients keep their own plain-text rendering. After an
-answer, the transcript renders the question and answer as Markdown; secret
-answers stay masked.
+answer, the transcript shows the same choice panel with the chosen option
+highlighted and no input controls. Custom answers appear as a selected choice;
+secret answers stay masked.
 
 The terminal title becomes `❓ <session name>` while a response is pending.
 When running inside Herdr, its agent-state integration receives balanced

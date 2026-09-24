@@ -160,26 +160,71 @@ test("renders multi-line Markdown in questions and options without changing the 
 	expect(result.details.answers[0].answer).toBe(option);
 });
 
-test("renders answered Markdown without showing source markers", () => {
+test("keeps the chosen Markdown option highlighted after answering", () => {
 	const tool = registeredTool();
 	const question = "## Markdown demo\n\nChoose a **format** with `code`.";
 	const answer = "**Compact**\n\n- One short answer\n- Minimal detail";
+	const selectedBg = "\x1b[48;2;58;58;74m";
+	const theme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+		bg: (color: string, text: string) => `${color === "selectedBg" ? selectedBg : "\x1b[48;2;45;40;56m"}${text}\x1b[49m`,
+	};
 	const component = tool.renderResult({ details: {
-		questions: [{ id: "format", question }],
+		questions: [{ id: "format", question, options: [answer, "*Detailed*"] }],
 		answers: [{ id: "format", question, answer }],
 		interrupted: false,
-	} }, {}, { fg: (_color: string, text: string) => text, bold: (text: string) => text });
-	const plain = component.render(55).map((line: string) => line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd()).join("\n");
+	} }, {}, theme);
+	const lines = component.render(55);
+	const plain = lines.map((line: string) => line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd()).join("\n");
 
 	expect(plain).toContain("Markdown demo");
 	expect(plain).toContain("Choose a format with code.");
-	expect(plain).toContain("\n\n    Answer\n    Compact");
+	expect(plain).toContain("Question 1/1");
+	expect(plain).toContain(" ▌ Compact");
+	expect(plain).toContain(" ○ Detailed");
 	expect(plain).toContain("One short answer");
-	expect(plain).toContain("Minimal detail");
+	expect(plain).not.toContain("↑/↓ select");
+	expect(component.handleInput).toBeUndefined();
 	expect(plain).not.toMatch(/\*\*|##|`/);
+	expect(lines.find((line: string) => line.includes("Compact"))).toContain(selectedBg);
+	expect(lines.find((line: string) => line.includes("Detailed"))).not.toContain(selectedBg);
 	for (const width of [1, 5, 24]) {
 		expect(component.render(width).every((line: string) => visibleWidth(line) <= width)).toBe(true);
 	}
+});
+
+test("highlights remote choices and displays custom answers as choices", () => {
+	const tool = registeredTool();
+	const theme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+		bg: (_color: string, text: string) => text,
+	};
+	const render = (answer: string) => {
+		const component = tool.renderResult({ details: {
+			questions: [{ id: "mode", question: "Pick a **mode**", options: ["**Fast**", "*Slow*"] }],
+			answers: [{ id: "mode", question: "Pick a **mode**", answer }],
+			interrupted: false,
+		} }, {}, theme);
+		return component.render(60).map((line: string) => line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd()).join("\n");
+	};
+
+	expect(render("*Slow*")).toContain(" ○ Fast\n\n ▌ Slow");
+	expect(render("Custom **mode**")).toContain(" ○ Slow\n\n ▌ Custom mode");
+	const freeText = tool.renderResult({ details: {
+		questions: [{ id: "reply", question: "Your reply?" }],
+		answers: [{ id: "reply", question: "Your reply?", answer: "**Custom** reply" }],
+		interrupted: false,
+	} }, {}, theme);
+	expect(freeText.render(60).some((line: string) => line.includes("▌") && line.includes("Custom"))).toBe(true);
+	const options = Array.from({ length: 8 }, (_, index) => `Choice ${index + 1}`);
+	const longList = tool.renderResult({ details: {
+		questions: [{ id: "many", question: "Pick one", options }],
+		answers: [{ id: "many", question: "Pick one", answer: options[7] }],
+		interrupted: false,
+	} }, {}, theme);
+	expect(longList.render(60).some((line: string) => line.includes("▌") && line.includes("Choice 8"))).toBe(true);
 });
 
 test("masks secret answers and shows unanswered questions in the recap", () => {

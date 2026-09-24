@@ -196,29 +196,19 @@ class AnswerPrompt extends MarkdownPrompt implements Component, Focusable {
 	override invalidate(): void { super.invalidate(); this.input.invalidate(); }
 }
 
-class ChoicePrompt extends MarkdownPrompt implements Component {
+class ChoicePanel extends MarkdownPrompt implements Component {
 	private readonly choices: Markdown[];
-	private selected = 0;
 
 	constructor(
 		progress: string,
 		question: string,
 		choices: string[],
-		private readonly tui: TUI,
 		theme: any,
-		private readonly keys: KeybindingsManager,
-		private readonly done: (index: number | undefined) => void,
+		protected selected = 0,
+		private readonly completed = false,
 	) {
 		super(progress, question, theme);
-		this.choices = choices.map((choice) => new Markdown(choice, 0, 0, getMarkdownTheme()));
-	}
-
-	handleInput(data: string): void {
-		if (this.keys.matches(data, "tui.select.up")) this.selected = (this.selected + this.choices.length - 1) % this.choices.length;
-		else if (this.keys.matches(data, "tui.select.down")) this.selected = (this.selected + 1) % this.choices.length;
-		else if (this.keys.matches(data, "tui.select.confirm")) return this.done(this.selected);
-		else if (this.keys.matches(data, "tui.select.cancel")) return this.done(undefined);
-		this.tui.requestRender();
+		this.choices = choices.map((choice) => new Markdown(choice || "(empty answer)", 0, 0, getMarkdownTheme()));
 	}
 
 	override render(width: number): string[] {
@@ -247,16 +237,40 @@ class ChoicePrompt extends MarkdownPrompt implements Component {
 				lines.push(...this.panel(this.inset(choiceLines, max), max));
 			}
 		}
-		if (this.choices.length > 5) lines.push(...this.panel(this.inset(wrapTextWithAnsi(this.theme.fg("dim", `  (${this.selected + 1}/${this.choices.length})`), inner), max), max));
+		if (this.choices.length > 5 && !this.completed) lines.push(...this.panel(this.inset(wrapTextWithAnsi(this.theme.fg("dim", `  (${this.selected + 1}/${this.choices.length})`), inner), max), max));
 		lines.push(...this.panel([""], max));
-		lines.push(...this.panel(this.inset(wrapTextWithAnsi(this.theme.fg("dim", "↑/↓ select · Enter confirm · Esc cancel"), inner), max), max));
-		lines.push(...this.panel([""], max));
+		if (!this.completed) {
+			lines.push(...this.panel(this.inset(wrapTextWithAnsi(this.theme.fg("dim", "↑/↓ select · Enter confirm · Esc cancel"), inner), max), max));
+			lines.push(...this.panel([""], max));
+		}
 		return lines;
 	}
 
 	override invalidate(): void {
 		super.invalidate();
 		for (const choice of this.choices) choice.invalidate();
+	}
+}
+
+class ChoicePrompt extends ChoicePanel {
+	constructor(
+		progress: string,
+		question: string,
+		choices: string[],
+		private readonly tui: TUI,
+		theme: any,
+		private readonly keys: KeybindingsManager,
+		private readonly done: (index: number | undefined) => void,
+	) {
+		super(progress, question, choices, theme);
+	}
+
+	handleInput(data: string): void {
+		if (this.keys.matches(data, "tui.select.up")) this.selected = (this.selected + this.choices.length - 1) % this.choices.length;
+		else if (this.keys.matches(data, "tui.select.down")) this.selected = (this.selected + 1) % this.choices.length;
+		else if (this.keys.matches(data, "tui.select.confirm")) return this.done(this.selected);
+		else if (this.keys.matches(data, "tui.select.cancel")) return this.done(undefined);
+		this.tui.requestRender();
 	}
 }
 
@@ -375,6 +389,16 @@ function recap(details: Details, theme: any): Component {
 	for (const [index, question] of details.questions.entries()) {
 		const answer = details.answers.find((candidate) => candidate.id === question.id);
 		content.addChild(new Spacer(1));
+		if (hasAnswer(answer) && !question.secret && typeof answer?.answer === "string") {
+			const choices = Array.isArray(question.options) ? [...question.options] : [];
+			let selected = choices.indexOf(answer.answer);
+			if (selected < 0) {
+				selected = choices.length;
+				choices.push(answer.answer);
+			}
+			content.addChild(new ChoicePanel(`Question ${index + 1}/${details.questions.length} · Answered`, question.question, choices, theme, selected, true));
+			continue;
+		}
 		content.addChild(indentComponent(new Text(`${theme.fg("accent", `Question ${index + 1}`)}${!hasAnswer(answer) ? theme.fg("warning", " (unanswered)") : ""}`, 0, 0), 2));
 		content.addChild(indentComponent(new Markdown(question.question, 0, 0, getMarkdownTheme()), 4));
 		if (hasAnswer(answer)) {
