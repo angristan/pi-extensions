@@ -125,12 +125,20 @@ class MarkdownPrompt {
 		this.question = new Markdown(question, 0, 0, getMarkdownTheme());
 	}
 
+	// Native extension dialogs reserve one column on each side of their content.
+	protected contentWidth(width: number): number { return Math.max(1, width - (width > 1 ? 2 : 0)); }
+	protected inset(lines: string[], width: number): string[] {
+		const padding = width > 1 ? " " : "";
+		return lines.map((line) => padding + line);
+	}
+
 	render(width: number): string[] {
-		return [
-			...wrapTextWithAnsi(this.theme.fg("accent", this.theme.bold(this.progress)), width),
-			...this.question.render(width),
+		const inner = this.contentWidth(width);
+		return this.inset([
+			...wrapTextWithAnsi(this.theme.fg("accent", this.theme.bold(this.progress)), inner),
+			...this.question.render(inner),
 			"",
-		];
+		], width);
 	}
 
 	invalidate(): void { this.question.invalidate(); }
@@ -167,11 +175,14 @@ class AnswerPrompt extends MarkdownPrompt implements Component, Focusable {
 
 	override render(width: number): string[] {
 		const max = Math.max(1, width);
+		const inner = this.contentWidth(max);
 		return [
 			...super.render(max),
-			...(this.secret ? wrapTextWithAnsi(this.theme.fg("dim", "Secret response (not stored in the transcript)"), max) : []),
-			...this.input.render(max),
-			...wrapTextWithAnsi(this.theme.fg("dim", "Enter submit · Esc cancel"), max),
+			...this.inset([
+				...(this.secret ? wrapTextWithAnsi(this.theme.fg("dim", "Secret response (not stored in the transcript)"), inner) : []),
+				...this.input.render(inner),
+				...wrapTextWithAnsi(this.theme.fg("dim", "Enter submit · Esc cancel"), inner),
+			], max),
 		];
 	}
 
@@ -206,18 +217,19 @@ class ChoicePrompt extends MarkdownPrompt implements Component {
 	override render(width: number): string[] {
 		const max = Math.max(1, width);
 		const lines = super.render(max);
+		const inner = this.contentWidth(max);
 		const start = Math.max(0, Math.min(this.selected - 2, this.choices.length - 5));
-		const indent = max > 2 ? "  " : "";
+		const indent = inner > 2 ? "  " : "";
 		for (let i = start; i < Math.min(start + 5, this.choices.length); i++) {
 			if (i > start) lines.push("");
 			const prefix = indent
 				? this.theme.fg(i === this.selected ? "accent" : "dim", i === this.selected ? "→ " : "○ ")
 				: "";
-			const rendered = this.choices[i].render(max - indent.length);
-			for (const [lineIndex, line] of rendered.entries()) lines.push((lineIndex === 0 ? prefix : indent) + line);
+			const rendered = this.choices[i].render(inner - indent.length);
+			lines.push(...this.inset(rendered.map((line, index) => (index === 0 ? prefix : indent) + line), max));
 		}
-		if (this.choices.length > 5) lines.push(...wrapTextWithAnsi(this.theme.fg("dim", `  (${this.selected + 1}/${this.choices.length})`), max));
-		lines.push(...wrapTextWithAnsi(this.theme.fg("dim", "↑/↓ select · Enter confirm · Esc cancel"), max));
+		if (this.choices.length > 5) lines.push(...this.inset(wrapTextWithAnsi(this.theme.fg("dim", `  (${this.selected + 1}/${this.choices.length})`), inner), max));
+		lines.push(...this.inset(wrapTextWithAnsi(this.theme.fg("dim", "↑/↓ select · Enter confirm · Esc cancel"), inner), max));
 		return lines;
 	}
 

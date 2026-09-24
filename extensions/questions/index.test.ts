@@ -70,9 +70,10 @@ test("keeps the session name in the pending title", async () => {
 		{ id: "why", question: "Why?", allow_other: false },
 	] }, undefined, undefined, ctx);
 
-	expect(rendered[0].join("\n")).toContain("Question 1/2\nPick a color");
-	expect(rendered[0].map((line) => line.trimEnd()).join("\n")).toContain("→ Red\n\n○ Blue");
-	expect(rendered[1].join("\n")).toContain("Question 2/2\nWhy?");
+	expect(rendered[0].join("\n")).toContain("Question 1/2\n Pick a color");
+	expect(rendered[0].map((line) => line.trimEnd()).join("\n")).toContain(" → Red\n\n ○ Blue");
+	expect(rendered[1].join("\n")).toContain("Question 2/2\n Why?");
+	expect(rendered.flat().every((line) => !line || line.startsWith(" "))).toBe(true);
 	expect(titles).toEqual(["❓ Current session", "Current session"]);
 	expect(events).toEqual([
 		{ name: "terminal-title:override", payload: { source: "questions", title: "❓ Current session" } },
@@ -95,6 +96,7 @@ test("renders multi-line Markdown in questions and options without changing the 
 	const tool = registeredTool();
 	const option = "**Fast**\n\n- Sends two requests";
 	let display: string[] = [];
+	let narrow: string[] = [];
 	const result = await tool.execute("md", { questions: [
 		{ id: "mode", question: "Choose a **mode**\n\nSee `config`.", options: [option, "*Slow*"], allow_other: false },
 	] }, undefined, undefined, {
@@ -105,6 +107,7 @@ test("renders multi-line Markdown in questions and options without changing the 
 			custom: async (factory: any) => new Promise((resolve) => {
 				const component = factory({ requestRender() {} }, { fg: (_color: string, text: string) => text, bold: (text: string) => text }, getKeybindings(), resolve);
 				display = component.render(40);
+				narrow = component.render(12);
 				component.handleInput("\r");
 			}),
 		},
@@ -117,10 +120,12 @@ test("renders multi-line Markdown in questions and options without changing the 
 	expect(plain).toContain("Sends two requests");
 	expect(plain).not.toContain("**");
 	const lines = plain.split("\n").map((line) => line.trimEnd());
-	const secondChoice = lines.findIndex((line) => line === "○ Slow");
+	const secondChoice = lines.findIndex((line) => line === " ○ Slow");
 	expect(secondChoice).toBeGreaterThan(0);
 	expect(lines[secondChoice - 1]).toBe("");
 	expect(lines[secondChoice - 2]).toContain("Sends two requests");
+	expect(display.every((line) => !line || line.startsWith(" "))).toBe(true);
+	expect(narrow.every((line) => (!line || line.startsWith(" ")) && visibleWidth(line) <= 12)).toBe(true);
 	expect(display.every((line) => visibleWidth(line) <= 40)).toBe(true);
 	expect(result.details.answers[0].answer).toBe(option);
 });
@@ -189,6 +194,7 @@ test("renders the free-text question and masks secret input", async () => {
 		},
 	});
 	expect(views[0].join("\n")).toContain("Enter the token");
+	expect(views.flat().every((line) => !line || line.startsWith(" "))).toBe(true);
 	expect(views[1].join("\n")).not.toContain("hidden-token");
 	expect(views[1].join("\n")).toContain("••••");
 	expect(JSON.stringify(result)).not.toContain("hidden-token");
