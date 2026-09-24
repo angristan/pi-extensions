@@ -183,6 +183,7 @@ class AnswerPrompt extends MarkdownPrompt implements Component, Focusable {
 				...this.input.render(inner),
 				...wrapTextWithAnsi(this.theme.fg("dim", "Enter submit · Esc cancel"), inner),
 			], max),
+			"",
 		];
 	}
 
@@ -237,6 +238,7 @@ class ChoicePrompt extends MarkdownPrompt implements Component {
 		}
 		if (this.choices.length > 5) lines.push(...this.inset(wrapTextWithAnsi(this.theme.fg("dim", `  (${this.selected + 1}/${this.choices.length})`), inner), max));
 		lines.push(...this.inset(wrapTextWithAnsi(this.theme.fg("dim", "↑/↓ select · Enter confirm · Esc cancel"), inner), max));
+		lines.push("");
 		return lines;
 	}
 

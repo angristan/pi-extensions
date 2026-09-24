@@ -75,6 +75,10 @@ test("keeps the session name in the pending title", async () => {
 	expect(rendered[0].map((line) => line.trimEnd()).join("\n")).toContain(" → Red\n\n ○ Blue");
 	expect(rendered[1].join("\n")).toContain("Question 2/2\n Why?");
 	expect(rendered.flat().every((line) => !line || line.startsWith(" "))).toBe(true);
+	for (const dialog of rendered) {
+		expect(dialog.at(-2)).toContain("Esc cancel");
+		expect(dialog.at(-1)).toBe("");
+	}
 	expect(titles).toEqual(["❓ Current session", "Current session"]);
 	expect(events).toEqual([
 		{ name: "terminal-title:override", payload: { source: "questions", title: "❓ Current session" } },
@@ -215,6 +219,8 @@ test("renders the free-text question and masks secret input", async () => {
 	});
 	expect(views[0].join("\n")).toContain("Enter the token");
 	expect(views.flat().every((line) => !line || line.startsWith(" "))).toBe(true);
+	expect(views[0].at(-2)).toContain("Esc cancel");
+	expect(views[0].at(-1)).toBe("");
 	expect(views[1].join("\n")).not.toContain("hidden-token");
 	expect(views[1].join("\n")).toContain("••••");
 	expect(JSON.stringify(result)).not.toContain("hidden-token");

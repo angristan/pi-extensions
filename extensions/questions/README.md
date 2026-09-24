@@ -23,8 +23,8 @@ own marker and spacing, so multi-line choices stay distinct. The active choice
 uses the theme's selection background across its wrapped lines. The selected
 answer remains the original option string, not the rendered text. Every prompt
 shows its position and total (`Question 2/3`) above the question, with the same left
-inset as Pi's built-in dialogs. Non-interactive clients keep their own plain-text
-dialog rendering.
+inset as Pi's built-in dialogs. A blank row separates the keyboard hints from
+the content below. Non-interactive clients keep their own plain-text rendering.
 The terminal title becomes `❓ <session name>` while a response is pending.
 When running inside Herdr, its agent-state integration receives balanced
 `herdr:blocked` events, so the pane and sidebar show the question status instead
