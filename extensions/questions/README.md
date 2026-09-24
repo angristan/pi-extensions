@@ -13,7 +13,7 @@ agent calls: questionnaire({ questions: [{
   id: "branch", question: "Work on main or a new branch?",
   options: ["main", "new branch"]
 }] })
-you pick:     ▶ new branch
+you pick:     ▌ new branch
 ```
 
 Supports multiple questions in one call, "other" free-text answers, and
@@ -25,7 +25,10 @@ wrapped lines. The selected answer remains the original option string, not the
 rendered text. Every prompt shows its position and total (`Question 2/3`) above the
 question, with the same left inset as Pi's built-in dialogs. A blank row
 separates the choices or input from the keyboard hints, and another follows the
-hints. Non-interactive clients keep their own plain-text rendering.
+hints. Non-interactive clients keep their own plain-text rendering. After an
+answer, the transcript renders the question and answer as Markdown; secret
+answers stay masked.
+
 The terminal title becomes `❓ <session name>` while a response is pending.
 When running inside Herdr, its agent-state integration receives balanced
 `herdr:blocked` events, so the pane and sidebar show the question status instead

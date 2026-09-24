@@ -160,6 +160,49 @@ test("renders multi-line Markdown in questions and options without changing the 
 	expect(result.details.answers[0].answer).toBe(option);
 });
 
+test("renders answered Markdown without showing source markers", () => {
+	const tool = registeredTool();
+	const question = "## Markdown demo\n\nChoose a **format** with `code`.";
+	const answer = "**Compact**\n\n- One short answer\n- Minimal detail";
+	const component = tool.renderResult({ details: {
+		questions: [{ id: "format", question }],
+		answers: [{ id: "format", question, answer }],
+		interrupted: false,
+	} }, {}, { fg: (_color: string, text: string) => text, bold: (text: string) => text });
+	const plain = component.render(55).map((line: string) => line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd()).join("\n");
+
+	expect(plain).toContain("Markdown demo");
+	expect(plain).toContain("Choose a format with code.");
+	expect(plain).toContain("\n\n    Answer\n    Compact");
+	expect(plain).toContain("One short answer");
+	expect(plain).toContain("Minimal detail");
+	expect(plain).not.toMatch(/\*\*|##|`/);
+	for (const width of [1, 5, 24]) {
+		expect(component.render(width).every((line: string) => visibleWidth(line) <= width)).toBe(true);
+	}
+});
+
+test("masks secret answers and shows unanswered questions in the recap", () => {
+	const tool = registeredTool();
+	const component = tool.renderResult({ details: {
+		questions: [
+			{ id: "token", question: "Enter the **token**", secret: true },
+			{ id: "later", question: "Try *later*?" },
+		],
+		answers: [{ id: "token", question: "Enter the **token**", reference: "{{questionnaire-secret:opaque}}", provided: true, secret: true }],
+		interrupted: true,
+	} }, {}, { fg: (_color: string, text: string) => text, bold: (text: string) => text });
+	const plain = component.render(55).map((line: string) => line.replace(/\x1b\[[0-9;]*m/g, "")).join("\n");
+
+	expect(plain).toContain("Questions 1/2 answered (interrupted)");
+	expect(plain).toContain("Enter the token");
+	expect(plain).toContain("••••••");
+	expect(plain).toContain("(unanswered)");
+	expect(plain).not.toContain("questionnaire-secret");
+	expect(plain).not.toContain("**");
+	expect(component.render(5).every((line: string) => visibleWidth(line) <= 5)).toBe(true);
+});
+
 test("keeps a literal free-text label distinct from the free-text action", async () => {
 	const tool = registeredTool();
 	const result = await tool.execute("choice", { questions: [

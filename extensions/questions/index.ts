@@ -1,5 +1,5 @@
 import { getMarkdownTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Input, Markdown, Text, visibleWidth, wrapTextWithAnsi, type Component, type Focusable, type KeybindingsManager, type TUI } from "@earendil-works/pi-tui";
+import { Container, Input, Markdown, Spacer, Text, visibleWidth, wrapTextWithAnsi, type Component, type Focusable, type KeybindingsManager, type TUI } from "@earendil-works/pi-tui";
 import { randomUUID } from "node:crypto";
 import { registerSecretSource, SecretRedactor } from "../../shared/secret-redaction.js";
 
@@ -358,15 +358,32 @@ async function collectAnswer(
 	}
 }
 
-function recap(details: Details, theme: any): string[] {
+function indentComponent(child: Component, columns: number): Component {
+	return {
+		render(width: number): string[] {
+			const indent = " ".repeat(Math.min(columns, Math.max(0, width - 1)));
+			return child.render(Math.max(1, width - indent.length)).map((line) => indent + line);
+		},
+		invalidate(): void { child.invalidate(); },
+	};
+}
+
+function recap(details: Details, theme: any): Component {
 	const answered = details.answers.filter(hasAnswer).length;
-	const lines = [`${theme.fg("accent", "•")} ${theme.bold("Questions")} ${answered}/${details.questions.length} answered${details.interrupted ? theme.fg("accent", " (interrupted)") : ""}`];
-	for (const question of details.questions) {
+	const content = new Container();
+	content.addChild(new Text(`${theme.fg("accent", "•")} ${theme.bold("Questions")} ${answered}/${details.questions.length} answered${details.interrupted ? theme.fg("accent", " (interrupted)") : ""}`, 0, 0));
+	for (const [index, question] of details.questions.entries()) {
 		const answer = details.answers.find((candidate) => candidate.id === question.id);
-		lines.push(`  • ${question.question}${!hasAnswer(answer) ? theme.fg("warning", " (unanswered)") : ""}`);
-		if (hasAnswer(answer)) lines.push(`    answer: ${theme.fg("accent", question.secret ? "••••••" : answer?.answer ?? "")}`);
+		content.addChild(new Spacer(1));
+		content.addChild(indentComponent(new Text(`${theme.fg("accent", `Question ${index + 1}`)}${!hasAnswer(answer) ? theme.fg("warning", " (unanswered)") : ""}`, 0, 0), 2));
+		content.addChild(indentComponent(new Markdown(question.question, 0, 0, getMarkdownTheme()), 4));
+		if (hasAnswer(answer)) {
+			content.addChild(new Spacer(1));
+			content.addChild(indentComponent(new Text(theme.fg("accent", "Answer"), 0, 0), 4));
+			content.addChild(indentComponent(new Markdown(question.secret ? "••••••" : answer?.answer ?? "", 0, 0, getMarkdownTheme()), 4));
+		}
 	}
-	return lines;
+	return content;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -458,7 +475,7 @@ export default function (pi: ExtensionAPI) {
 			return { content: [{ type: "text", text: interrupted ? `${response}\nQuestionnaire interrupted`.trim() : response }], details };
 		},
 		renderCall: () => new Text("", 0, 0),
-		renderResult: (result: any, _options: any, theme: any) => new Text(recap(result.details ?? { questions: [], answers: [], interrupted: false }, theme).join("\n"), 0, 0),
+		renderResult: (result: any, _options: any, theme: any) => recap(result.details ?? { questions: [], answers: [], interrupted: false }, theme),
 		renderShell: "self",
 	});
 }
