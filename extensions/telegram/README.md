@@ -105,6 +105,11 @@ rename.
 }
 ```
 
+For a group chat (a negative chat ID), setup also asks for your Telegram user ID
+and stores it as `"answerUserId": "123456789"`. Any group member can press a
+button or reply, so only that user's answers count. A private chat needs no extra
+setting because its chat ID is the user's ID.
+
 The token is stored locally in this file rather than in an environment variable.
 Anyone who can read the token can control the bot, so do not commit or share the
 config file.
@@ -114,6 +119,10 @@ config file.
 - Choice answers are correlated through the bot message and button index.
 - Free text is accepted only when it replies to the matching bot message in the
   configured chat.
+- Answers count only when Telegram reports them from the chat's own user
+  (private chat) or from `answerUserId` (group chat). Answers from anyone else,
+  from bots, or without a sender are ignored; a rejected button press shows
+  `Only the configured user can answer this question.`
 - Secret prompts never expose their question text or accept Telegram answers;
   their redacted notification updates to `Answered securely in Pi` when done.
 - Answer polling uses Telegram `getUpdates`; the bot must not have a webhook.

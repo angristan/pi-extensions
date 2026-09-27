@@ -29,6 +29,7 @@ const QUESTION_RESOLVED_EVENT = "questions:resolved";
 const TELEGRAM_TOPIC_ENTRY = "telegram-session-topic";
 const DEFAULT_DELAY_MINUTES = 5;
 const MAX_DELAY_MINUTES = 7 * 24 * 60;
+const TELEGRAM_USER_ID = /^[1-9]\d*$/;
 const MAX_TELEGRAM_MESSAGE_CHARACTERS = 4_096;
 const MAX_CONTEXT_LABEL_CHARACTERS = 100;
 const MAX_TOPIC_NAME_CHARACTERS = 128;
@@ -47,6 +48,8 @@ export interface TelegramConfig {
 	chatId: string;
 	delayMinutes: number;
 	enabled: boolean;
+	/** Required for group chats: the only Telegram user whose answers count. */
+	answerUserId?: string;
 }
 
 interface TelegramDeliveryConfig extends TelegramConfig {
@@ -99,11 +102,13 @@ function normalizedConfig(value: unknown): TelegramConfig | undefined {
 	const chatId = typeof config.chatId === "string" ? config.chatId.trim() : "";
 	const configuredDelay = typeof config.delayMinutes === "number" ? config.delayMinutes : DEFAULT_DELAY_MINUTES;
 	if (!botToken || !chatId || !Number.isFinite(configuredDelay) || configuredDelay <= 0) return undefined;
+	const answerUserId = typeof config.answerUserId === "string" ? config.answerUserId.trim() : "";
 	return {
 		botToken,
 		chatId,
 		delayMinutes: Math.min(configuredDelay, MAX_DELAY_MINUTES),
 		enabled: config.enabled !== false,
+		...(TELEGRAM_USER_ID.test(answerUserId) ? { answerUserId } : {}),
 	};
 }
 
@@ -689,6 +694,17 @@ export function createTelegramExtension(dependencies: RuntimeDependencies = {}) 
 					if (!botToken) return;
 					const chatId = (await ctx.ui.input("Telegram chat ID", config?.chatId || "e.g. 123456789"))?.trim();
 					if (!chatId) return;
+					// Group chat IDs are negative. Any member could answer there, so name the
+					// one user whose answers count; private chats need no extra setting.
+					let answerUserId: string | undefined;
+					if (chatId.startsWith("-")) {
+						answerUserId = (await ctx.ui.input("Your Telegram user ID (only this user can answer)", config?.answerUserId || "e.g. 123456789"))?.trim();
+						if (!answerUserId) return;
+						if (!TELEGRAM_USER_ID.test(answerUserId)) {
+							ctx.ui.notify("Telegram user ID must be a positive number.", "warning");
+							return;
+						}
+					}
 					const delayText = (await ctx.ui.input("Delay in minutes", String(config?.delayMinutes ?? DEFAULT_DELAY_MINUTES)))?.trim();
 					if (!delayText) return;
 					const delayMinutes = Number(delayText);
@@ -696,7 +712,7 @@ export function createTelegramExtension(dependencies: RuntimeDependencies = {}) 
 						ctx.ui.notify(`Delay must be between 0 and ${MAX_DELAY_MINUTES} minutes.`, "warning");
 						return;
 					}
-					const candidate: TelegramConfig = { botToken, chatId, delayMinutes, enabled: true };
+					const candidate: TelegramConfig = { botToken, chatId, delayMinutes, enabled: true, ...(answerUserId ? { answerUserId } : {}) };
 					try {
 						const project = contextLabel(pi, ctx.cwd);
 						await sendMessage(candidate, `${project}: Telegram integration configured.`);

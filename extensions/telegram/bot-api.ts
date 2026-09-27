@@ -8,6 +8,8 @@ export interface TelegramCredentials {
 	botToken: string;
 	chatId: string;
 	messageThreadId?: number;
+	/** Telegram user allowed to answer questions; defaults to the private chat's user. */
+	answerUserId?: string;
 }
 
 export interface TelegramTopic {
@@ -25,10 +27,16 @@ export interface SentTelegramQuestion {
 	messageId: number;
 }
 
+export interface TelegramUser {
+	id?: unknown;
+	is_bot?: unknown;
+}
+
 export interface TelegramMessage {
 	message_id?: unknown;
 	message_thread_id?: unknown;
 	text?: unknown;
+	from?: TelegramUser;
 	chat?: { id?: unknown };
 	reply_to_message?: { message_id?: unknown };
 }
@@ -39,6 +47,7 @@ export interface TelegramUpdate {
 	callback_query?: {
 		id?: unknown;
 		data?: unknown;
+		from?: TelegramUser;
 		message?: TelegramMessage;
 	};
 }
@@ -270,6 +279,16 @@ function replyMatches(message: TelegramMessage | undefined, sent: SentTelegramQu
 	);
 }
 
+/**
+ * Answers can approve actions, so only one person may give them. In a private
+ * chat the chat ID is that person's user ID. In a group any member can press a
+ * button or reply, so answers count only from the configured `answerUserId`.
+ */
+function senderAllowed(from: TelegramUser | undefined, credentials: TelegramCredentials, sent: SentTelegramQuestion): boolean {
+	if (!from || from.is_bot === true || (typeof from.id !== "number" && typeof from.id !== "string")) return false;
+	return String(from.id) === (credentials.answerUserId?.trim() || sent.chatId);
+}
+
 async function acknowledgeCallback(
 	credentials: TelegramCredentials,
 	callbackQueryId: string,
@@ -314,6 +333,10 @@ export async function matchTelegramAnswerUpdate(
 	const callback = update.callback_query;
 	if (callback && chatMatches(callback.message, sent)) {
 		if (typeof callback.id !== "string") return { consumed: true };
+		if (!senderAllowed(callback.from, credentials, sent)) {
+			await acknowledgeCallback(credentials, callback.id, "Only the configured user can answer this question.", signal, fetchImpl);
+			return { consumed: true };
+		}
 		const match = typeof callback.data === "string" ? /^option:(\d+)$/.exec(callback.data) : undefined;
 		const optionIndex = match ? Number(match[1]) : -1;
 		const option = Number.isInteger(optionIndex) ? question.options[optionIndex] : undefined;
@@ -327,6 +350,7 @@ export async function matchTelegramAnswerUpdate(
 
 	const message = update.message;
 	if (!replyMatches(message, sent)) return { consumed: false };
+	if (!senderAllowed(message?.from, credentials, sent)) return { consumed: true };
 	if (typeof message?.text !== "string") return { consumed: true };
 	const answer = message.text.trim();
 	if (!answer || answer.length > 4_000) return { consumed: true };

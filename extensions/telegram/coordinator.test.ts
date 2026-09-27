@@ -26,6 +26,7 @@ function reply(updateId: number, messageId: number, text: string): TelegramUpdat
 		update_id: updateId,
 		message: {
 			text,
+			from: { id: 987654321 },
 			chat: { id: 987654321 },
 			reply_to_message: { message_id: messageId },
 		},

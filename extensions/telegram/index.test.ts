@@ -664,6 +664,14 @@ describe("configuration and Telegram client", () => {
 
 		expect(statSync(path).mode & 0o777).toBe(0o600);
 		expect(loadTelegramConfig(path)).toEqual(config);
+
+		// A group's answer user survives a reload; malformed IDs are dropped so
+		// they cannot widen who may answer.
+		const group = { ...config, chatId: "-1001234", answerUserId: "555" };
+		await saveTelegramConfig(group, path);
+		expect(loadTelegramConfig(path)).toEqual(group);
+		await saveTelegramConfig({ ...group, answerUserId: "-555" }, path);
+		expect(loadTelegramConfig(path)).not.toHaveProperty("answerUserId");
 	});
 
 	test("posts plain JSON to the Telegram Bot API", async () => {

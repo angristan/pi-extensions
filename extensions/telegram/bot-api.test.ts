@@ -7,6 +7,7 @@ import {
 	sendTelegramMarkdownMessage,
 	sendTelegramQuestion,
 	getTelegramUpdates,
+	matchTelegramAnswerUpdate,
 	telegramBotSupportsTopics,
 	TelegramApiError,
 	waitForTelegramAnswer,
@@ -171,13 +172,14 @@ describe("Telegram answer polling", () => {
 				return telegramResponse([
 					{
 						update_id: 99,
-						message: { text: "unlisted", chat: { id: 987654321 }, reply_to_message: { message_id: 42 } },
+						message: { text: "unlisted", from: { id: 987654321 }, chat: { id: 987654321 }, reply_to_message: { message_id: 42 } },
 					},
 					{
 						update_id: 100,
 						callback_query: {
 							id: "callback-1",
 							data: "option:1",
+							from: { id: 987654321 },
 							message: { message_id: 42, chat: { id: 987654321 } },
 						},
 					},
@@ -198,19 +200,56 @@ describe("Telegram answer polling", () => {
 		}, new AbortController().signal, async () => telegramResponse([
 			{
 				update_id: 101,
-				message: { text: "wrong chat", chat: { id: 111 }, reply_to_message: { message_id: 42 } },
+				message: { text: "wrong chat", from: { id: 987654321 }, chat: { id: 111 }, reply_to_message: { message_id: 42 } },
 			},
 			{
 				update_id: 102,
-				message: { text: "wrong message", chat: { id: 987654321 }, reply_to_message: { message_id: 41 } },
+				message: { text: "wrong message", from: { id: 987654321 }, chat: { id: 987654321 }, reply_to_message: { message_id: 41 } },
 			},
 			{
 				update_id: 103,
-				message: { text: "  the remote answer  ", chat: { id: 987654321 }, reply_to_message: { message_id: 42 } },
+				message: { text: "  the remote answer  ", from: { id: 987654321 }, chat: { id: 987654321 }, reply_to_message: { message_id: 42 } },
 			},
 		]));
 
 		expect(answer).toBe("the remote answer");
+	});
+
+	test("accepts answers only from the private chat's user or the configured group user", async () => {
+		const acknowledgements: string[] = [];
+		const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+			acknowledgements.push(JSON.parse(String(init?.body)).text);
+			return telegramResponse(true);
+		}) as typeof fetch;
+		const answer = async (creds: TelegramCredentials, chatId: string, from: unknown, kind: "button" | "reply") => {
+			const chat = { id: Number(chatId) };
+			const update = kind === "button"
+				? { callback_query: { id: "cb", data: "option:0", from, message: { message_id: 42, chat } } }
+				: { message: { text: "approve", from, chat, reply_to_message: { message_id: 42 } } };
+			const result = await matchTelegramAnswerUpdate(creds, { chatId, messageId: 42 }, {
+				options: ["approve"],
+				allowOther: true,
+			}, update as any, new AbortController().signal, fetchImpl);
+			expect(result.consumed).toBe(true);
+			return result.answer;
+		};
+
+		// Private chat: the chat ID is the user's ID.
+		for (const kind of ["button", "reply"] as const) {
+			expect(await answer(credentials, "987654321", { id: 987654321 }, kind)).toBe("approve");
+			expect(await answer(credentials, "987654321", { id: 555 }, kind)).toBeUndefined();
+			expect(await answer(credentials, "987654321", { id: 987654321, is_bot: true }, kind)).toBeUndefined();
+			expect(await answer(credentials, "987654321", undefined, kind)).toBeUndefined();
+		}
+
+		// Group chat: only answerUserId counts; without it no member can answer.
+		const group: TelegramCredentials = { ...credentials, chatId: "-1001234", answerUserId: "555" };
+		for (const kind of ["button", "reply"] as const) {
+			expect(await answer(group, "-1001234", { id: 555 }, kind)).toBe("approve");
+			expect(await answer(group, "-1001234", { id: 777 }, kind)).toBeUndefined();
+			expect(await answer({ ...group, answerUserId: undefined }, "-1001234", { id: 777 }, kind)).toBeUndefined();
+		}
+		expect(acknowledgements).toContain("Only the configured user can answer this question.");
 	});
 
 	test("classifies polling failures and reports Telegram's retry delay", async () => {
@@ -247,7 +286,7 @@ describe("Telegram answer polling", () => {
 				? telegramResponse([{ update_id: 200, message: { text: "unrelated", chat: { id: 987654321 } } }])
 				: telegramResponse([{
 					update_id: 201,
-					message: { text: "matched", chat: { id: 987654321 }, reply_to_message: { message_id: 42 } },
+					message: { text: "matched", from: { id: 987654321 }, chat: { id: 987654321 }, reply_to_message: { message_id: 42 } },
 				}]);
 		});
 
