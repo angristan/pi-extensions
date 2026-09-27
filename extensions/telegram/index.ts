@@ -319,7 +319,7 @@ function telegramToolLines(context: TelegramToolRenderContext): TelegramToolLine
 
 function telegramHeadline(partial: boolean, error: boolean, text: string): string {
 	const mark = partial ? `${MAGENTA}•${RESET}` : error ? `${RED}•${RESET}` : `${GREEN}•${RESET}`;
-	return `${mark} 💬 ${BOLD}${text}${RESET}`;
+	return `${mark} ${BOLD}${text}${RESET} 💬`;
 }
 
 function messageArgument(context: TelegramToolRenderContext): string {
