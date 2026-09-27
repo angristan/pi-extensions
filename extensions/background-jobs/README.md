@@ -138,6 +138,8 @@ entry.
 - Explicit timeouts and session shutdown send SIGTERM first, wait up to five seconds, then escalate surviving process trees to SIGKILL.
 - Pi's normal SIGINT, SIGTERM, and SIGHUP shutdown path remains in control and gives `session_shutdown` time to complete that escalation.
 - If a non-PTY shell wrapper exits while descendants remain in its process group, the terminal stays active until the group exits and session shutdown still terminates it.
+- A descendant that leaves the process group (`setsid`, `ssh -f`, self-daemonizing tools) is not managed and keeps running. If it holds the output pipes open, the terminal settles 0.5 seconds after the wrapper exits and its group is empty; later output from that process is not captured.
+- Session shutdown waits at most the kill grace period plus two seconds, so a process that ignores SIGKILL (for example, stuck in uninterruptible I/O) cannot block quit or reload.
 - PTY wrapper and child process groups are both terminated to prevent orphans.
 - A process-global synchronous `exit` reaper is shared across extension reloads and tracks callbacks only while child PIDs are live. It remains a last resort for hard exits and does not install signal listeners or suppress default signal behavior.
 - Yielded command lifecycle changes update the shared overlay and any open live viewer without emitting desktop notifications or mutating historical transcript rows.

@@ -517,6 +517,67 @@ describe("terminal tools", () => {
 		expect(completed.details.status).toBe("completed");
 	}, 5000);
 
+	// `setsid` moves the daemon out of the job's process group while it keeps the
+	// inherited stdout/stderr pipes open, like `ssh -f` or a self-daemonizing tool.
+	const hasSetsid = process.platform === "linux" && spawnSync("sh", ["-c", "command -v setsid"]).status === 0;
+	const escapedDaemon = (pidPath: string) => `setsid sh -c 'echo $$ > ${pidPath.replace(/'/g, "")}; exec sleep 30' &`;
+
+	test("settles when an escaped daemon keeps the output pipes open", async () => {
+		if (!hasSetsid) return;
+		const directory = await mkdtemp(join(tmpdir(), "pi-background-escaped-"));
+		const pidPath = join(directory, "daemon.pid");
+		const harness = createHarness({ killGraceMs: 50 });
+		await startHarness(harness);
+		try {
+			const started = await harness.tools.get("bash").execute("start", {
+				command: `${escapedDaemon(pidPath)} echo launched`,
+				reasoning: "verify escaped daemon settlement",
+				"yield-time_ms": 250,
+			}, undefined, undefined, harness.ctx);
+			const daemonPid = await waitForPid(pidPath);
+			expect(processExists(daemonPid)).toBe(true);
+
+			const completed = started.details.status === "running"
+				? (await harness.tools.get("job_output").execute("output", {
+					reasoning: "wait for settlement",
+					job_id: started.details.id,
+					wait: true,
+					waitMs: 2000,
+				})).details
+				: started.details;
+			expect(completed.status).toBe("completed");
+			expect(completed.output).toContain("launched");
+		} finally {
+			try { process.kill(await waitForPid(pidPath), "SIGKILL"); } catch { /* already gone */ }
+			await rm(directory, { recursive: true, force: true });
+		}
+	}, 5000);
+
+	test("shutdown does not wait for an escaped daemon holding the pipes", async () => {
+		if (!hasSetsid) return;
+		const directory = await mkdtemp(join(tmpdir(), "pi-background-escaped-"));
+		const pidPath = join(directory, "daemon.pid");
+		const harness = createHarness({ killGraceMs: 50 });
+		await startHarness(harness);
+		try {
+			const started = await harness.tools.get("bash").execute("start", {
+				command: `${escapedDaemon(pidPath)} sleep 60`,
+				reasoning: "verify shutdown with escaped daemon",
+				"yield-time_ms": 250,
+			}, undefined, undefined, harness.ctx);
+			expect(started.details.status).toBe("running");
+			await waitForPid(pidPath);
+
+			// Settles through the pipe drain, well before the bounded shutdown fallback.
+			const shutdownStarted = performance.now();
+			await shutdownHarness(harness);
+			expect(performance.now() - shutdownStarted).toBeLessThan(1500);
+		} finally {
+			try { process.kill(await waitForPid(pidPath), "SIGKILL"); } catch { /* already gone */ }
+			await rm(directory, { recursive: true, force: true });
+		}
+	}, 5000);
+
 	test("requires integer timeout seconds in schema and execution", async () => {
 		const harness = createHarness();
 		await startHarness(harness);

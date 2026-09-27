@@ -137,6 +137,12 @@ function outputBytesForTokens(tokens?: number): number {
 }
 const KILL_GRACE_MS = 5_000;
 const PROCESS_GROUP_POLL_MS = 100;
+// After the wrapper exits and its process group is empty, any process still
+// holding the output pipes has escaped the group (`setsid`, `ssh -f`). Give the
+// pipes this long to drain, then close them so the job can settle.
+const ESCAPED_PIPE_GRACE_MS = 500;
+// Shutdown never waits longer than the kill grace plus this margin.
+const SHUTDOWN_SETTLE_MS = 2_000;
 const MAX_TIMEOUT_SECONDS = 24 * 60 * 60;
 const DEFAULT_YIELD_MS = 10_000;
 const DEFAULT_POLL_MS = 5_000;
@@ -203,6 +209,8 @@ interface ManagedJob {
 	timeout?: ReturnType<typeof setTimeout>;
 	killTimer?: ReturnType<typeof setTimeout>;
 	processGroupMonitor?: ReturnType<typeof setInterval>;
+	pipeDrainMonitor?: ReturnType<typeof setInterval>;
+	closed?: boolean;
 	completion: Promise<void>;
 	resolveCompletion: () => void;
 	finalized: boolean;
@@ -783,6 +791,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		if (job.timeout) clearTimeout(job.timeout);
 		if (job.killTimer) clearTimeout(job.killTimer);
 		if (job.processGroupMonitor) clearInterval(job.processGroupMonitor);
+		if (job.pipeDrainMonitor) clearInterval(job.pipeDrainMonitor);
 		if (spawnError) {
 			appendOutput(job, "stderr", Buffer.from(`${job.stderr.text() ? "\n" : ""}${spawnError.message}\n`));
 			job.status = "failed";
@@ -873,7 +882,34 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			untrackJobPid(job.process?.pid);
 			finalize(job, null, null, error);
 		});
+		// Node emits "close" only after every holder of the stdout/stderr pipes
+		// closes them. A descendant that left the process group keeps them open
+		// after the wrapper exits, and no group signal can reach it. Without this,
+		// the job never settles and session shutdown waits for it forever.
+		job.process.once("exit", () => {
+			const wrapperPid = job.process?.pid;
+			let emptySince: number | undefined;
+			job.pipeDrainMonitor = setInterval(() => {
+				if (job.closed) {
+					clearInterval(job.pipeDrainMonitor);
+					return;
+				}
+				// Group members and the PTY child are managed; keep reading their output.
+				if (processGroupExists(wrapperPid) || (job.ptyPid && pidExists(job.ptyPid))) {
+					emptySince = undefined;
+					return;
+				}
+				emptySince ??= Date.now();
+				if (Date.now() - emptySince < ESCAPED_PIPE_GRACE_MS) return;
+				clearInterval(job.pipeDrainMonitor);
+				// Destroying our ends lets Node emit "close" with the real exit status.
+				job.process?.stdout?.destroy();
+				job.process?.stderr?.destroy();
+			}, PROCESS_GROUP_POLL_MS);
+			job.pipeDrainMonitor.unref?.();
+		});
 		job.process.once("close", (code, signal) => {
+			job.closed = true;
 			const wrapperPid = job.process?.pid;
 			if (job.ptyPid && pidExists(job.ptyPid)) {
 				untrackJobPid(wrapperPid);
@@ -1325,7 +1361,14 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			job.suppressPersistence = true;
 			requestKill(job, "shutdown");
 		}
-		await Promise.all(stopping.map((job) => job.completion));
+		// Bound the wait: a process stuck in uninterruptible I/O must not block quit.
+		let settleTimer: ReturnType<typeof setTimeout> | undefined;
+		await Promise.race([
+			Promise.all(stopping.map((job) => job.completion)),
+			new Promise<void>((resolveWait) => { settleTimer = setTimeout(resolveWait, killGraceMs + SHUTDOWN_SETTLE_MS); }),
+		]);
+		clearTimeout(settleTimer);
+		for (const job of stopping) finalize(job, null, null);
 		activeCtx?.ui.setStatus(STATUS_KEY, undefined);
 		jobs.clear();
 		overlayCard.invalidate();
