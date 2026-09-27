@@ -60,6 +60,19 @@ test("uses the intended responsive removal order as space narrows", () => {
 	expect(plain(26)).not.toContain("directory");
 });
 
+test("renders the thinking level in amber even when a theme is active", () => {
+	const theme = { fg: (token: string, text: string) => `<${token}>${text}</${token}>` };
+	const row = renderAdaptiveRow([
+		{
+			segments: [{ accent: "model", text: "Test Model" }, { accent: "thinking", text: "high" }],
+			priority: FOOTER_GROUP_PRIORITY.model,
+		},
+	], "", 80, theme);
+
+	expect(row).toContain("<syntaxType>Test Model</syntaxType>");
+	expect(row).toContain("\u001b[38;2;253;143;30mhigh\u001b[39m");
+});
+
 test("keeps directory and git anchored to the right edge", () => {
 	const segment = (accent: "thread" | "path" | "branch" | "model", text: string) => ({ accent, text });
 	const groups = (thread: string): Parameters<typeof renderAdaptiveRow>[0] => [

@@ -33,6 +33,10 @@ const FOOTER_COLORS = {
 	addition: [166, 227, 161], // diff added
 	deletion: [243, 139, 168], // diff removed
 	model: [246, 226, 183], // entity.name.type
+	// Amber, three quarters of the way from gruvbox bright_yellow (#fabd2f) to
+	// bright_orange (#fe8019). Themes have no token for this shade, so it is always rendered
+	// as a fixed truecolor value (see FOOTER_THEME_TOKEN).
+	thinking: [253, 143, 30],
 	usage: [242, 181, 144], // constant.numeric
 	timing: [185, 170, 224], // balanced accent for ttft/tps
 	cost: [203, 166, 247], // mauve — matches turn-stats cost accent
@@ -42,7 +46,7 @@ const FOOTER_COLORS = {
 /** Map a footer segment accent to a theme color token. Token values (↓/↑/ctx)
  * use 'text' to match turn-stats; labels are muted. Other segments use distinct
  * theme tokens so the footer has color life, not just two greys. */
-const FOOTER_THEME_TOKEN: Record<StatusSegment["accent"], string> = {
+const FOOTER_THEME_TOKEN: Partial<Record<StatusSegment["accent"], string>> = {
 	thread: "mdCode",        // session identity — orange, distinct from cost
 	path: "mdLink",          // cwd — blue
 	branch: "success",      // git branch + cache-good — green status
@@ -61,7 +65,7 @@ interface BranchChanges {
 }
 
 interface StatusSegment {
-	accent: "thread" | "path" | "branch" | "addition" | "deletion" | "model" | "usage" | "timing" | "cost" | "warning";
+	accent: "thread" | "path" | "branch" | "addition" | "deletion" | "model" | "thinking" | "usage" | "timing" | "cost" | "warning";
 	text: string;
 	/** Optional leading label (e.g. "↓", "↑", "ctx") rendered in the muted tone,
 	 * mirroring turn-stats' muted-label + colored-value pattern. */
@@ -213,17 +217,18 @@ function terminalThreadTitle(ctx: any): string {
 	return name || ctx.sessionManager.getSessionId().slice(0, 8);
 }
 
-function modelWithReasoning(ctx: any, thinkingLevel: string): string {
-	const name = ctx.model?.name ?? ctx.model?.id ?? "no model";
-	// Hide the thinking-level suffix when the model can't reason at all, or when
-	// reasoning is explicitly turned off. Showing "off" on reasoning-capable models
-	// or any suffix on non-reasoning models just adds noise.
-	const modelReasoning = ctx.model?.reasoning === true;
+function modelName(ctx: any): string {
+	return ctx.model?.name ?? ctx.model?.id ?? "no model";
+}
+
+/** Thinking level to show after the model name, or undefined to hide it.
+ * Hide it when the model can't reason at all, or when reasoning is explicitly
+ * turned off. Showing "off" on reasoning-capable models or any level on
+ * non-reasoning models just adds noise. */
+function visibleThinkingLevel(ctx: any, thinkingLevel: string): string | undefined {
 	const level = thinkingLevel?.trim();
-	if (!modelReasoning || level === "off" || level === "" || level === undefined) {
-		return name;
-	}
-	return `${name} ${level}`;
+	if (ctx.model?.reasoning !== true || !level || level === "off") return undefined;
+	return level;
 }
 
 function rgb(text: string, color: readonly [number, number, number]): string {
@@ -235,8 +240,10 @@ function dim(text: string): string {
 }
 
 function styleSegment(segment: StatusSegment, theme?: any): string {
-	const value = theme && typeof theme.fg === "function"
-		? theme.fg(FOOTER_THEME_TOKEN[segment.accent] as any, segment.text)
+	// Accents without a theme token (thinking) keep their fixed truecolor value.
+	const token = FOOTER_THEME_TOKEN[segment.accent];
+	const value = token && theme && typeof theme.fg === "function"
+		? theme.fg(token as any, segment.text)
 		: rgb(segment.text, FOOTER_COLORS[segment.accent]);
 	if (segment.label) {
 		const labelText = theme && typeof theme.fg === "function"
@@ -569,8 +576,12 @@ export default function (pi: ExtensionAPI, dependencies: RuntimeDependencies = {
 					const extensionStatuses = footerData.getExtensionStatuses();
 					const fastStatus = sanitizeStatusText(extensionStatuses.get("fast") ?? "");
 					const modelSegments: StatusSegment[] = [
-						{ accent: "model", text: modelWithReasoning(current, thinkingLevel) },
+						{ accent: "model", text: modelName(current) },
 					];
+					// Same group as the model, so it renders as "Model high" with a
+					// space instead of a separator, but in its own amber tone.
+					const level = visibleThinkingLevel(current, thinkingLevel);
+					if (level) modelSegments.push({ accent: "thinking", text: level });
 					if (fastStatus) modelSegments.push({ accent: "cost", text: fastStatus });
 					const badgeTexts = [...modelBadges.entries()]
 						.sort(([left], [right]) => left.localeCompare(right))
