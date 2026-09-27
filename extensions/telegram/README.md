@@ -117,6 +117,11 @@ config file.
 - Secret prompts never expose their question text or accept Telegram answers;
   their redacted notification updates to `Answered securely in Pi` when done.
 - Answer polling uses Telegram `getUpdates`; the bot must not have a webhook.
+- While a question waits, polling retries timeouts, network errors, conflicts
+  (HTTP 409), rate limits (HTTP 429, honoring Telegram's `retry_after`), and
+  server errors (HTTP 5xx) until the question is answered or cancelled. Other
+  errors, such as an invalid bot token, stop Telegram answers for that question;
+  it can still be answered in Pi.
 - Pi processes under one user account on a machine coordinate through an
   owner-only runtime spool, so only one process polls a given bot token and
   answers still route to the Pi

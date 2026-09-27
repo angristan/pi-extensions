@@ -43,6 +43,38 @@ export interface TelegramUpdate {
 	};
 }
 
+const MAX_RETRY_AFTER_MS = 60_000;
+
+/**
+ * A failed Bot API call. `transient` marks failures that a later identical
+ * request can recover from: timeouts, network errors, a competing getUpdates
+ * consumer (409), rate limits (429), and server errors (5xx).
+ */
+export class TelegramApiError extends Error {
+	readonly status?: number;
+	readonly retryAfterMs?: number;
+	readonly transient: boolean;
+
+	constructor(message: string, options: { status?: number; retryAfterMs?: number; transient: boolean }) {
+		super(message);
+		this.name = "TelegramApiError";
+		this.status = options.status;
+		this.retryAfterMs = options.retryAfterMs;
+		this.transient = options.transient;
+	}
+}
+
+function transientStatus(status: number): boolean {
+	return status === 409 || status === 429 || status >= 500;
+}
+
+/** Telegram reports the flood-control wait in `parameters.retry_after` seconds. */
+function retryAfterMs(parameters: unknown): number | undefined {
+	const seconds = (parameters as { retry_after?: unknown } | undefined)?.retry_after;
+	if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) return undefined;
+	return Math.min(seconds * 1_000, MAX_RETRY_AFTER_MS);
+}
+
 function sanitizedDescription(description: string, botToken: string): string {
 	return description.replaceAll(botToken, "[redacted]").replace(/\s+/g, " ").slice(0, 180);
 }
@@ -69,14 +101,14 @@ async function telegramRequest<T>(
 	} catch (error) {
 		if (signal?.aborted) throw error;
 		const name = error instanceof Error ? error.name : "";
-		throw new Error(name === "TimeoutError" || timeoutSignal.aborted
+		throw new TelegramApiError(name === "TimeoutError" || timeoutSignal.aborted
 			? "Telegram API request timed out."
-			: "Telegram API network request failed.");
+			: "Telegram API network request failed.", { transient: true });
 	}
 
-	let payload: { ok?: unknown; result?: unknown; description?: unknown } | undefined;
+	let payload: { ok?: unknown; result?: unknown; description?: unknown; parameters?: unknown } | undefined;
 	try {
-		payload = await response.json() as { ok?: unknown; result?: unknown; description?: unknown };
+		payload = await response.json() as typeof payload;
 	} catch {
 		// HTTP status still provides a useful bounded error below.
 	}
@@ -84,7 +116,11 @@ async function telegramRequest<T>(
 		const description = typeof payload?.description === "string"
 			? `: ${sanitizedDescription(payload.description, credentials.botToken)}`
 			: "";
-		throw new Error(`Telegram API request failed (HTTP ${response.status})${description}`);
+		throw new TelegramApiError(`Telegram API request failed (HTTP ${response.status})${description}`, {
+			status: response.status,
+			retryAfterMs: retryAfterMs(payload?.parameters),
+			transient: transientStatus(response.status),
+		});
 	}
 	return payload.result as T;
 }

@@ -16,6 +16,7 @@ import { basename, join } from "node:path";
 import {
 	getTelegramUpdates,
 	matchTelegramAnswerUpdate,
+	TelegramApiError,
 	type SentTelegramQuestion,
 	type TelegramCredentials,
 	type TelegramQuestion,
@@ -24,6 +25,7 @@ import {
 
 const UPDATE_POLL_INTERVAL_MS = 250;
 const MAX_SPOOLED_UPDATES = 10_000;
+const MAX_POLL_RETRY_DELAY_MS = 5_000;
 
 interface LeaderRecord {
 	instanceId: string;
@@ -128,6 +130,8 @@ async function processStartIdentity(pid: number): Promise<string | undefined> {
 }
 
 function retryablePollingError(error: unknown): boolean {
+	if (error instanceof TelegramApiError) return error.transient;
+	// Injected pollers may throw plain errors; keep the historical message checks.
 	const message = error instanceof Error ? error.message : String(error);
 	return message.includes("HTTP 409")
 		|| message.includes("timed out")
@@ -348,9 +352,14 @@ class SharedUpdateCoordinator {
 				await this.pruneUpdates();
 			} catch (error) {
 				if (signal.aborted) return;
+				// Only permanent failures (bad token, bad request) end the wait. The
+				// leader runs only while a question is waiting, so retrying transient
+				// failures for as long as it takes keeps that question answerable.
+				if (!retryablePollingError(error)) throw error;
 				consecutiveFailures += 1;
-				if (!retryablePollingError(error) || consecutiveFailures >= 5) throw error;
-				await sleep(Math.min(this.pollRetryBaseMs * consecutiveFailures, 5_000), signal).catch(() => {});
+				const backoffMs = Math.min(this.pollRetryBaseMs * consecutiveFailures, MAX_POLL_RETRY_DELAY_MS);
+				const retryAfterMs = error instanceof TelegramApiError ? error.retryAfterMs : undefined;
+				await sleep(Math.max(backoffMs, retryAfterMs ?? 0), signal).catch(() => {});
 			}
 		}
 	}

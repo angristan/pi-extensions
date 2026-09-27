@@ -6,7 +6,9 @@ import {
 	sendTelegramHtmlMessage,
 	sendTelegramMarkdownMessage,
 	sendTelegramQuestion,
+	getTelegramUpdates,
 	telegramBotSupportsTopics,
+	TelegramApiError,
 	waitForTelegramAnswer,
 	type SentTelegramQuestion,
 	type TelegramCredentials,
@@ -209,6 +211,27 @@ describe("Telegram answer polling", () => {
 		]));
 
 		expect(answer).toBe("the remote answer");
+	});
+
+	test("classifies polling failures and reports Telegram's retry delay", async () => {
+		const failure = async (status: number, parameters?: unknown) => {
+			try {
+				await getTelegramUpdates(credentials, undefined, new AbortController().signal, async () => new Response(
+					JSON.stringify({ ok: false, description: "failed", parameters }),
+					{ status },
+				));
+			} catch (error) {
+				expect(error).toBeInstanceOf(TelegramApiError);
+				return error as TelegramApiError;
+			}
+			throw new Error("expected getUpdates to fail");
+		};
+
+		expect(await failure(429, { retry_after: 7 })).toMatchObject({ status: 429, transient: true, retryAfterMs: 7_000 });
+		expect(await failure(409)).toMatchObject({ transient: true });
+		expect(await failure(502)).toMatchObject({ transient: true });
+		expect(await failure(401)).toMatchObject({ status: 401, transient: false });
+		expect(await failure(400)).toMatchObject({ transient: false });
 	});
 
 	test("carries the update offset into the next long poll", async () => {

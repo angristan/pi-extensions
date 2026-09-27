@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { waitForSharedTelegramAnswer } from "./coordinator";
-import type { TelegramCredentials, TelegramUpdate } from "./bot-api";
+import { TelegramApiError, type TelegramCredentials, type TelegramUpdate } from "./bot-api";
 
 const temporaryDirectories: string[] = [];
 const credentials: TelegramCredentials = {
@@ -145,6 +145,31 @@ describe("shared Telegram update coordination", () => {
 
 		expect(answers).toEqual(["first", "second"]);
 		expect(maximumActivePolls).toBe(1);
+	});
+
+	test("keeps polling through rate limits and server errors until answered", async () => {
+		const runtimeDirectory = temporaryRuntime();
+		// More consecutive transient failures than the old five-failure limit.
+		const failures = [429, 502, 429, 503, 500, 429, 504];
+		let calls = 0;
+		const answer = await waitForSharedTelegramAnswer(credentials, { chatId: "987654321", messageId: 91 }, {
+			options: [],
+			allowOther: true,
+		}, new AbortController().signal, {
+			runtimeDirectory,
+			pollIntervalMs: 1,
+			pollRetryBaseMs: 1,
+			pollUpdates: async () => {
+				const status = failures[calls++];
+				if (status !== undefined) {
+					throw new TelegramApiError(`Telegram API request failed (HTTP ${status})`, { status, transient: true, retryAfterMs: status === 429 ? 1 : undefined });
+				}
+				return [reply(300, 91, "still here")];
+			},
+		});
+
+		expect(answer).toBe("still here");
+		expect(calls).toBe(failures.length + 1);
 	});
 
 	test("reports permanent polling failures instead of hanging", async () => {
