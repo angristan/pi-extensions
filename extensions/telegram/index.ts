@@ -335,10 +335,16 @@ function toolResultText(result: any): string {
 	return content.find((item: any) => item?.type === "text" && typeof item.text === "string")?.text ?? "";
 }
 
-function fullMessageRows(message: string, width: number, theme: any): string[] {
+/**
+ * Wraps the full message under the tool headline. The first row carries the
+ * tree branch when `branch` is set, so a sent message reads like a native tool
+ * result; later rows use the plain indent to keep the text aligned.
+ */
+function fullMessageRows(message: string, width: number, theme: any, branch = false): string[] {
 	const available = Math.max(1, width - visibleWidth(TOOL_INDENT));
-	return message.replace(/\s+$/g, "").split("\n").flatMap((line) =>
-		wrapTextWithAnsi(theme.fg("dim", line || " "), available).map((row) => `${TOOL_INDENT}${row}`));
+	const rows = message.replace(/\s+$/g, "").split("\n").flatMap((line) =>
+		wrapTextWithAnsi(theme.fg("dim", line || " "), available));
+	return rows.map((row, index) => `${branch && index === 0 ? TOOL_BRANCH : TOOL_INDENT}${row}`);
 }
 
 function renderTelegramCall(args: { message?: unknown }, theme: any, context: TelegramToolRenderContext): Component {
@@ -352,9 +358,12 @@ function renderTelegramCall(args: { message?: unknown }, theme: any, context: Te
 	return component;
 }
 
+// The result always shows the full message, not a one-line preview: the
+// notification is short and the user wants to read exactly what was sent
+// without toggling tool expansion.
 function renderTelegramResult(
 	result: any,
-	options: { isPartial?: boolean; expanded?: boolean },
+	options: { isPartial?: boolean },
 	theme: any,
 	context: TelegramToolRenderContext,
 ): Component {
@@ -366,13 +375,12 @@ function renderTelegramResult(
 			return [
 				telegramHeadline(false, true, "Telegram message failed"),
 				`${TOOL_BRANCH}${theme.fg("error", oneLineMessage(toolResultText(result)) || "Unknown error")}`,
-				...(options.expanded && message ? fullMessageRows(message, width, theme) : []),
+				...(message ? fullMessageRows(message, width, theme) : []),
 			];
 		}
 		return [
 			telegramHeadline(false, false, "Sent Telegram message"),
-			...(message ? [`${TOOL_BRANCH}${theme.fg("dim", oneLineMessage(message))}`] : []),
-			...(options.expanded && message ? fullMessageRows(message, width, theme) : []),
+			...(message ? fullMessageRows(message, width, theme, true) : []),
 		];
 	});
 	return component;
