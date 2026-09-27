@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { telegramMarkdownToHtml } from "./markdown";
+
+// The transcript renders messages with Pi's Markdown theme, which needs an
+// initialized global theme outside the interactive app.
+initTheme("dark", false);
 import {
 	createTelegramExtension,
 	formatResolvedMessage,
@@ -576,6 +581,15 @@ describe("direct user messages", () => {
 		).render(20);
 		expect(narrow.length).toBeGreaterThan(3);
 		expect(narrow.every((line: string) => visibleWidth(line) <= 20)).toBe(true);
+
+		// Markdown syntax renders as formatting instead of raw markers.
+		const markdown = rendered(tool.renderResult(
+			{ content: [{ type: "text", text: "Telegram message sent to the user." }], details: { status: "sent" } },
+			{ isPartial: false, expanded: false },
+			renderTheme,
+			{ args: { message: "**Crawl complete.** See `run-42`." }, isError: false },
+		));
+		expect(markdown).toEqual(["• Sent Telegram message", "  └ Crawl complete. See run-42."]);
 	});
 
 	test("guides the agent toward explicit, timely, or sensitive updates", async () => {

@@ -1,5 +1,5 @@
-import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Container, Input, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type Focusable, type TUI } from "@earendil-works/pi-tui";
+import { getAgentDir, getMarkdownTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Container, Input, Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type Focusable, type TUI } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -336,15 +336,17 @@ function toolResultText(result: any): string {
 }
 
 /**
- * Wraps the full message under the tool headline. The first row carries the
- * tree branch when `branch` is set, so a sent message reads like a native tool
- * result; later rows use the plain indent to keep the text aligned.
+ * Renders the full message as Markdown under the tool headline, matching how
+ * Telegram shows it. The first row carries the tree branch when `branch` is
+ * set, so a sent message reads like a native tool result; later rows use the
+ * plain indent to keep the text aligned.
  */
-function fullMessageRows(message: string, width: number, theme: any, branch = false): string[] {
+function fullMessageRows(message: string, width: number, branch = false): string[] {
 	const available = Math.max(1, width - visibleWidth(TOOL_INDENT));
-	const rows = message.replace(/\s+$/g, "").split("\n").flatMap((line) =>
-		wrapTextWithAnsi(theme.fg("dim", line || " "), available));
-	return rows.map((row, index) => `${branch && index === 0 ? TOOL_BRANCH : TOOL_INDENT}${row}`);
+	const rows = new Markdown(message.trim(), 0, 0, getMarkdownTheme()).render(available);
+	// Markdown pads every row to the full width; drop that padding so short
+	// messages do not leave trailing blanks in the transcript.
+	return rows.map((row, index) => `${branch && index === 0 ? TOOL_BRANCH : TOOL_INDENT}${row.replace(/ +$/, "")}`);
 }
 
 function renderTelegramCall(args: { message?: unknown }, theme: any, context: TelegramToolRenderContext): Component {
@@ -375,12 +377,12 @@ function renderTelegramResult(
 			return [
 				telegramHeadline(false, true, "Telegram message failed"),
 				`${TOOL_BRANCH}${theme.fg("error", oneLineMessage(toolResultText(result)) || "Unknown error")}`,
-				...(message ? fullMessageRows(message, width, theme) : []),
+				...(message ? fullMessageRows(message, width) : []),
 			];
 		}
 		return [
 			telegramHeadline(false, false, "Sent Telegram message"),
-			...(message ? fullMessageRows(message, width, theme, true) : []),
+			...(message ? fullMessageRows(message, width, true) : []),
 		];
 	});
 	return component;
