@@ -40,8 +40,10 @@ are enforced locally instead. Domain and known-date constraints are enforced
 again after every provider response, including fallbacks; category and
 freshness controls are best effort outside Exa.
 
-Fallbacks happen after timeouts, rate limits, server failures, blocked pages,
-empty content, or empty search results. Exa has up to six HTTP 429 retry slots,
+Fallbacks happen after timeouts, rate limits, server failures, auth, payment, or
+quota errors, blocked pages, empty content, or empty search results. Only request
+validation errors (HTTP 400 or 422) stop the chain, because every provider would
+reject the same request. Exa has up to six HTTP 429 retry slots,
 using `Retry-After` when available or exponential delays of roughly 1, 2, 4, 8,
 16, and 32 seconds with jitter. The complete Exa attempt has a 30-second budget.
 A delay beyond the remaining budget falls back immediately to the next provider.

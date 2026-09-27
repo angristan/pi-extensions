@@ -1,5 +1,5 @@
 import { detectOpenUrlFailure, normalizeHttpUrl, truncateText } from "../client";
-import { combineSignals, WebProviderError } from "../provider-error";
+import { combineSignals, isFallbackStatus, WebProviderError } from "../provider-error";
 import type {
 	OpenUrlResult,
 	ProviderOptions,
@@ -50,7 +50,7 @@ async function post(path: string, body: Record<string, unknown>, options: Provid
 		const message = typeof payload?.error === "string" ? payload.error : raw.slice(0, 300) || response.statusText;
 		throw new WebProviderError(`Firecrawl HTTP ${response.status}: ${message}`, {
 			status: response.status,
-			retriable: response.status === 408 || response.status === 429 || response.status >= 500,
+			retriable: isFallbackStatus(response.status),
 		});
 	}
 	return { payload, elapsedMs: performance.now() - started };

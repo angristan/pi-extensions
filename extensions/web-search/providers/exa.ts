@@ -3,7 +3,7 @@ import {
 	normalizeHttpUrl,
 	truncateText,
 } from "../client";
-import { combineSignals, WebProviderError } from "../provider-error";
+import { combineSignals, isFallbackStatus, WebProviderError } from "../provider-error";
 import type {
 	OpenUrlResult,
 	ProviderOptions,
@@ -51,7 +51,7 @@ function mcpToolError(text: string): WebProviderError {
 	const knownStatus = Number.isInteger(status) ? status : undefined;
 	return new WebProviderError(`Exa MCP tool error: ${detail}`, {
 		status: knownStatus,
-		retriable: knownStatus === undefined || knownStatus === 402 || knownStatus === 408 || knownStatus === 429 || knownStatus >= 500,
+		retriable: isFallbackStatus(knownStatus),
 	});
 }
 
@@ -127,7 +127,7 @@ async function callExa(tool: string, args: Record<string, unknown>, options: Pro
 		if (!response.ok) {
 			throw new WebProviderError(`Exa HTTP ${response.status}: ${raw.slice(0, 300) || response.statusText}`, {
 				status: response.status,
-				retriable: response.status === 402 || response.status === 429 || response.status >= 500,
+				retriable: isFallbackStatus(response.status),
 			});
 		}
 		let payload: any;

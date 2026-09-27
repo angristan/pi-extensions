@@ -1,7 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { WebProviderError } from "./provider-error";
 import { parseExaAdvancedSearchText, parseExaSearchText, searchExaWeb } from "./providers/exa";
-import { dateFilter, parseFirecrawlItems } from "./providers/firecrawl";
+import { dateFilter, parseFirecrawlItems, searchFirecrawlWeb } from "./providers/firecrawl";
 import { openTinyFishUrl, parseTinyFishItems, searchTinyFishWeb } from "./providers/tinyfish";
 
 function restoreEnv(name: string, value: string | undefined): void {
@@ -516,5 +516,43 @@ describe("provider normalization", () => {
 	test("uses exact custom web-search dates", () => {
 		expect(dateFilter("2026-06-17")).toBe("cdr:1,cd_min:06/17/2026");
 		expect(dateFilter(undefined, "2026-07-17")).toBe("cdr:1,cd_max:07/17/2026");
+	});
+});
+
+describe("provider failure classification", () => {
+	// The router stops only on non-retriable errors, so these flags decide
+	// whether the next provider is tried.
+	async function failureFor(search: () => Promise<unknown>, status: number): Promise<WebProviderError> {
+		const previousFetch = globalThis.fetch;
+		globalThis.fetch = (async () => new Response(JSON.stringify({ success: false, error: "denied" }), { status })) as typeof fetch;
+		try {
+			await search();
+		} catch (error) {
+			expect(error).toBeInstanceOf(WebProviderError);
+			return error as WebProviderError;
+		} finally {
+			globalThis.fetch = previousFetch;
+		}
+		throw new Error("expected the provider to fail");
+	}
+
+	test("auth, payment, and quota failures fall back to the next provider", async () => {
+		const previousExaKey = process.env.EXA_API_KEY;
+		const previousFirecrawlKey = process.env.FIRECRAWL_API_KEY;
+		try {
+			delete process.env.EXA_API_KEY;
+			process.env.FIRECRAWL_API_KEY = "test-key";
+			for (const status of [401, 402, 403]) {
+				expect(await failureFor(() => searchExaWeb({ query: "q" }), status)).toMatchObject({ status, retriable: true });
+				expect(await failureFor(() => searchFirecrawlWeb({ query: "q" }), status)).toMatchObject({ status, retriable: true });
+			}
+			for (const status of [400, 422]) {
+				expect(await failureFor(() => searchExaWeb({ query: "q" }), status)).toMatchObject({ status, retriable: false });
+				expect(await failureFor(() => searchFirecrawlWeb({ query: "q" }), status)).toMatchObject({ status, retriable: false });
+			}
+		} finally {
+			restoreEnv("EXA_API_KEY", previousExaKey);
+			restoreEnv("FIRECRAWL_API_KEY", previousFirecrawlKey);
+		}
 	});
 });

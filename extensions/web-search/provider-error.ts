@@ -23,6 +23,15 @@ export function compactProviderError(error: unknown): string {
 		.slice(0, 300) || "Unknown provider error";
 }
 
+/**
+ * Whether the next provider may still succeed after this HTTP status. Only
+ * request validation errors (400, 422) would repeat on every provider; auth,
+ * payment, quota, rate-limit, and server failures belong to the failing one.
+ */
+export function isFallbackStatus(status: number | undefined): boolean {
+	return status !== 400 && status !== 422;
+}
+
 export function isRetriableProviderError(error: unknown): boolean {
 	if (error instanceof WebProviderError) return error.retriable || error.blocked;
 	return true;

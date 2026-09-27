@@ -3,7 +3,7 @@ import {
 	normalizeHttpUrl,
 	truncateText,
 } from "../client";
-import { combineSignals, WebProviderError } from "../provider-error";
+import { combineSignals, isFallbackStatus, WebProviderError } from "../provider-error";
 import type {
 	OpenUrlResult,
 	ProviderOptions,
@@ -72,7 +72,7 @@ async function requestJson(
 	if (!response.ok) {
 		throw new WebProviderError(`TinyFish ${service} HTTP ${response.status}: ${errorDetail(payload, raw)}`, {
 			status: response.status,
-			retriable: response.status !== 400 && response.status !== 422,
+			retriable: isFallbackStatus(response.status),
 		});
 	}
 	return payload;
@@ -223,7 +223,7 @@ export async function openTinyFishUrl(url: string, options: ProviderOptions = {}
 		throw new WebProviderError(message, {
 			status,
 			blocked: status === 401 || status === 403,
-			retriable: status !== 400 && status !== 422,
+			retriable: isFallbackStatus(status),
 		});
 	}
 	const content = asString(result.text);
