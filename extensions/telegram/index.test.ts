@@ -590,6 +590,16 @@ describe("direct user messages", () => {
 			{ args: { message: "**Crawl complete.** See `run-42`." }, isError: false },
 		));
 		expect(markdown).toEqual(["• Sent Telegram message 💬", "  │ Crawl complete. See run-42."]);
+
+		// The body uses the muted color so it reads as quoted content.
+		const taggingTheme = { fg: (name: string, text: string) => `<${name}>${text}</${name}>` };
+		const [, body] = tool.renderResult(
+			{ content: [{ type: "text", text: "Telegram message sent to the user." }], details: { status: "sent" } },
+			{ isPartial: false, expanded: false },
+			taggingTheme,
+			{ args: { message: "Plain text" }, isError: false },
+		).render(120);
+		expect(body).toContain("<muted>Plain text</muted>");
 	});
 
 	test("guides the agent toward explicit, timely, or sensitive updates", async () => {

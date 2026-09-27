@@ -344,7 +344,10 @@ function toolResultText(result: any): string {
 function fullMessageRows(message: string, width: number, theme: any): string[] {
 	const available = Math.max(1, width - visibleWidth(MESSAGE_BAR));
 	const bar = theme.fg("dim", MESSAGE_BAR);
-	const rows = new Markdown(message.trim(), 0, 0, getMarkdownTheme()).render(available);
+	// Mute the body so the message reads as quoted content, slightly quieter
+	// than the surrounding assistant prose.
+	const style = { color: (text: string) => theme.fg("muted", text) };
+	const rows = new Markdown(message.trim(), 0, 0, getMarkdownTheme(), style).render(available);
 	// Markdown pads every row to the full width; drop that padding so short
 	// messages do not leave trailing blanks in the transcript.
 	return rows.map((row) => `${bar}${row.replace(/ +$/, "")}`);
