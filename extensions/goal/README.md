@@ -19,9 +19,12 @@ should not create a goal.
 The goal is a short statement plus optional **validation criteria**. A compact
 summary is surfaced in its own overlay card, while the full goal is available via
 `/goal-status`. Goal lifecycle updates are appended as hidden model-context
-messages, including fresh **active-goal** anchors after restore and compaction, so
-the system prompt remains stable. Before each model call, older anchors are pruned
-from the temporary context so only the latest persisted goal instruction remains.
+messages, so the system prompt remains stable. A fresh **active-goal** anchor is
+added after compaction, and after restore or tree navigation only when the newest
+anchor since the last compaction differs from the current goal. Reloading a
+session therefore does not invalidate the prompt cache. Before each model call,
+older anchors are pruned from the temporary context so only the latest persisted
+goal instruction remains.
 Paused, blocked, completed, and cleared transitions retire older active-goal
 instructions once; they are not re-anchored later because they must not override
 newer work. When a session with a paused or blocked goal is reopened, the UI

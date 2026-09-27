@@ -484,3 +484,39 @@ test("restores the latest plan state from the active session branch", async () =
 	expect(harness.sentMessages[0]!.message.content).toContain("Restored done");
 	expect(harness.sentMessages[0]!.message.content).toContain("Restored active");
 });
+
+test("restore re-anchors only when the model does not already see the plan", async () => {
+	const plan = { items: [{ step: "Ship the fix", status: "in_progress" }] };
+	const branch: any[] = [
+		{ type: "custom", customType: "plan-progress", data: plan },
+		{ type: "message", message: { role: "toolResult", toolName: "update_plan", isError: false, content: [], details: plan } },
+	];
+	const harness = createHarness(branch);
+	const restore = () => harness.handlers.session_start[0]({ reason: "reload" }, harness.ctx);
+	// sendMessage persists hidden messages in real sessions; mirror that here.
+	const persistSent = () => {
+		const { message } = harness.sentMessages.at(-1)!;
+		branch.push({ type: "custom_message", customType: message.customType, content: message.content, display: false });
+	};
+
+	// The update_plan result already shows this plan to the model.
+	await restore();
+	expect(harness.sentMessages).toHaveLength(0);
+
+	// Compaction may summarize that result away, so the plan is restated once.
+	branch.push({ type: "compaction", summary: "", firstKeptEntryId: "0", tokensBefore: 0 });
+	await restore();
+	expect(harness.sentMessages).toHaveLength(1);
+	persistSent();
+	await restore();
+	await harness.handlers.session_tree[0]({}, harness.ctx);
+	expect(harness.sentMessages).toHaveLength(1);
+
+	// A cleared plan announces the clear once, not on every later restore.
+	await harness.commands["plan-clear"].handler("", harness.ctx);
+	branch.push({ type: "custom", customType: "plan-progress", data: { items: [] } });
+	persistSent();
+	expect(harness.sentMessages).toHaveLength(2);
+	await restore();
+	expect(harness.sentMessages).toHaveLength(2);
+});

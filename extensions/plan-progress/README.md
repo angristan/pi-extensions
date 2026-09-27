@@ -8,8 +8,11 @@ tool logic, validation, persistence, agent guidance, and plan-section rendering.
 Each update remains in its append-only tool result instead of rebuilding the
 system prompt with mutable plan state, preserving prompt-prefix cache reuse. The
 extension re-anchors the exact current plan as a hidden append-only context
-message after compaction, session restore, and tree navigation. Only the latest
-checkpoint enters model context.
+message after compaction. On session restore and tree navigation it re-anchors
+only when the newest checkpoint or `update_plan` result since the last compaction
+does not already show the current plan, so reloading does not invalidate the
+prompt cache. A cleared plan is announced once. Only the latest checkpoint enters
+model context.
 
 An unfinished plan remains visible across turns. Completed milestones cannot be
 removed while work remains unless the agent explicitly sets `reset: true` and

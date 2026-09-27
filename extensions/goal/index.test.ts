@@ -330,6 +330,31 @@ test("re-anchors persisted goal context after restore and compaction", async () 
 	expect(sentMessages(h, "goal-context").at(-1)!.message.content).toContain("finish the migration");
 });
 
+test("restore re-anchors an active goal only when the model does not already see it", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("finish the migration", h.ctx);
+	// sendMessage persists hidden messages in real sessions; mirror that here.
+	const persistLatestAnchor = () => {
+		const { message } = sentMessages(h, "goal-context").at(-1)!;
+		h.entries.push({ type: "custom_message", customType: message.customType, content: message.content, details: message.details, display: false });
+	};
+	persistLatestAnchor();
+	const anchors = () => sentMessages(h, "goal-context").length;
+	const initial = anchors();
+
+	await emit(h, "session_start", { reason: "reload" });
+	await emit(h, "session_tree");
+	expect(anchors()).toBe(initial);
+
+	// Anchors before a compaction may only survive as summary text.
+	h.entries.push({ type: "compaction", summary: "", firstKeptEntryId: "1", tokensBefore: 0 });
+	await emit(h, "session_start", { reason: "resume" });
+	expect(anchors()).toBe(initial + 1);
+	persistLatestAnchor();
+	await emit(h, "session_start", { reason: "reload" });
+	expect(anchors()).toBe(initial + 1);
+});
+
 test("retires legacy cleared goal instructions on restore", async () => {
 	const h = makeHarness();
 	h.entries.push(

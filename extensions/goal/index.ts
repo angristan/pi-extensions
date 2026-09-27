@@ -7,6 +7,7 @@ import { registerOverlayCard } from "../overlay-stack/index.js";
 // tools (same bullets, colors, and tree prefixes).
 import { fitToolLine } from "../better-native-pi/core.js";
 import { BOLD, GREEN, MAGENTA, RED, RESET } from "../better-native-pi/render.js";
+import { customMessageText, latestAnchorText } from "../../shared/context-anchor.js";
 
 // ============================================================================
 // Constants
@@ -1502,7 +1503,11 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 		refreshOverlayStats(ctx, true);
 		emit(ctx);
 		if (state?.status === "active") {
-			appendGoalStateContext();
+			// Reload and tree navigation must not re-send an anchor the model already
+			// sees: the context hook would prune the older copy and invalidate the
+			// prompt cache from that point on.
+			const currentAnchor = latestAnchorText(entries, (entry) => customMessageText(entry, GOAL_CONTEXT_CUSTOM_TYPE));
+			if (currentAnchor !== buildGoalContext(state)) appendGoalStateContext();
 			return;
 		}
 
