@@ -547,7 +547,7 @@ describe("direct user messages", () => {
 
 		expect(tool.renderShell).toBe("self");
 		expect(rendered(tool.renderCall(args, renderTheme, { isPartial: true }))).toEqual([
-			"• Sending Telegram message",
+			"• 💬 Sending Telegram message",
 			"  └ The crawl is complete. Artifacts are ready.",
 		]);
 		expect(rendered(tool.renderResult(
@@ -556,9 +556,9 @@ describe("direct user messages", () => {
 			renderTheme,
 			{ args, isError: false },
 		))).toEqual([
-			"• Sent Telegram message",
-			"  └ The crawl is complete.",
-			"    Artifacts are ready.",
+			"• 💬 Sent Telegram message",
+			"  │ The crawl is complete.",
+			"  │ Artifacts are ready.",
 		]);
 		expect(rendered(tool.renderResult(
 			{ content: [{ type: "text", text: "Request timed out" }] },
@@ -566,10 +566,10 @@ describe("direct user messages", () => {
 			renderTheme,
 			{ args, isError: true },
 		))).toEqual([
-			"• Telegram message failed",
+			"• 💬 Telegram message failed",
+			"  │ The crawl is complete.",
+			"  │ Artifacts are ready.",
 			"  └ Request timed out",
-			"    The crawl is complete.",
-			"    Artifacts are ready.",
 		]);
 
 		// The full message wraps to the available width instead of overflowing.
@@ -589,7 +589,7 @@ describe("direct user messages", () => {
 			renderTheme,
 			{ args: { message: "**Crawl complete.** See `run-42`." }, isError: false },
 		));
-		expect(markdown).toEqual(["• Sent Telegram message", "  └ Crawl complete. See run-42."]);
+		expect(markdown).toEqual(["• 💬 Sent Telegram message", "  │ Crawl complete. See run-42."]);
 	});
 
 	test("guides the agent toward explicit, timely, or sensitive updates", async () => {

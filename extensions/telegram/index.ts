@@ -277,7 +277,8 @@ export function formatResolvedMessage(
 }
 
 const TOOL_BRANCH = "  └ ";
-const TOOL_INDENT = "    ";
+// Left bar that sets the sent message apart from the tool chrome, like a quote.
+const MESSAGE_BAR = "  │ ";
 
 interface TelegramToolRenderContext {
 	lastComponent?: unknown;
@@ -318,7 +319,7 @@ function telegramToolLines(context: TelegramToolRenderContext): TelegramToolLine
 
 function telegramHeadline(partial: boolean, error: boolean, text: string): string {
 	const mark = partial ? `${MAGENTA}•${RESET}` : error ? `${RED}•${RESET}` : `${GREEN}•${RESET}`;
-	return `${mark} ${BOLD}${text}${RESET}`;
+	return `${mark} 💬 ${BOLD}${text}${RESET}`;
 }
 
 function messageArgument(context: TelegramToolRenderContext): string {
@@ -337,16 +338,16 @@ function toolResultText(result: any): string {
 
 /**
  * Renders the full message as Markdown under the tool headline, matching how
- * Telegram shows it. The first row carries the tree branch when `branch` is
- * set, so a sent message reads like a native tool result; later rows use the
- * plain indent to keep the text aligned.
+ * Telegram shows it. A dim bar on every row marks where the message starts
+ * and ends.
  */
-function fullMessageRows(message: string, width: number, branch = false): string[] {
-	const available = Math.max(1, width - visibleWidth(TOOL_INDENT));
+function fullMessageRows(message: string, width: number, theme: any): string[] {
+	const available = Math.max(1, width - visibleWidth(MESSAGE_BAR));
+	const bar = theme.fg("dim", MESSAGE_BAR);
 	const rows = new Markdown(message.trim(), 0, 0, getMarkdownTheme()).render(available);
 	// Markdown pads every row to the full width; drop that padding so short
 	// messages do not leave trailing blanks in the transcript.
-	return rows.map((row, index) => `${branch && index === 0 ? TOOL_BRANCH : TOOL_INDENT}${row.replace(/ +$/, "")}`);
+	return rows.map((row) => `${bar}${row.replace(/ +$/, "")}`);
 }
 
 function renderTelegramCall(args: { message?: unknown }, theme: any, context: TelegramToolRenderContext): Component {
@@ -376,13 +377,13 @@ function renderTelegramResult(
 		if (context.isError) {
 			return [
 				telegramHeadline(false, true, "Telegram message failed"),
+				...(message ? fullMessageRows(message, width, theme) : []),
 				`${TOOL_BRANCH}${theme.fg("error", oneLineMessage(toolResultText(result)) || "Unknown error")}`,
-				...(message ? fullMessageRows(message, width) : []),
 			];
 		}
 		return [
 			telegramHeadline(false, false, "Sent Telegram message"),
-			...(message ? fullMessageRows(message, width, true) : []),
+			...(message ? fullMessageRows(message, width, theme) : []),
 		];
 	});
 	return component;
