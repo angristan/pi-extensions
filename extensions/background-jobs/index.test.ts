@@ -546,7 +546,10 @@ describe("terminal tools", () => {
 				})).details
 				: started.details;
 			expect(completed.status).toBe("completed");
-			expect(completed.output).toContain("launched");
+			// job_output returns only output added since the previous read, so the
+			// line may arrive in either call; it must not be lost when pipes close.
+			const output = started.details.status === "running" ? `${started.content[0].text}${completed.output}` : completed.output;
+			expect(output).toContain("launched");
 		} finally {
 			try { process.kill(await waitForPid(pidPath), "SIGKILL"); } catch { /* already gone */ }
 			await rm(directory, { recursive: true, force: true });
