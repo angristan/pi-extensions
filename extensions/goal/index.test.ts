@@ -619,9 +619,8 @@ test("unreconciled user input pauses before another continuation", async () => {
 
 	await emit(h, "input", { source: "interactive", text: "validate 100k hosts and sharding" });
 	expect(latestGoalState(h).reconciliationPending).toBe(true);
-	const [promptUpdate] = await emit(h, "before_agent_start", { systemPrompt: "base prompt" });
-	expect(promptUpdate.systemPrompt).toContain("Goal reconciliation required");
-	expect(promptUpdate.systemPrompt).toContain("latest user request has priority");
+	const sections = await reconciliationSections(h);
+	expect(sections.goal_reconciliation).toContain("latest user request has priority");
 
 	const prematureCompletion = await h.tools.goal_complete.execute("complete", {}, undefined, undefined, h.ctx);
 	expect(prematureCompletion.details).toMatchObject({ ok: false, reason: "reconciliation-required" });
@@ -651,12 +650,32 @@ test("pending reconciliation survives reload without resuming stale work", async
 
 	await emit(h, "session_start", { reason: "reload" });
 	expect(latestGoalState(h).reconciliationPending).toBe(true);
-	const [promptUpdate] = await emit(h, "before_agent_start", { systemPrompt: "base prompt" });
-	expect(promptUpdate.systemPrompt).toContain("latest user request has priority");
+	expect((await reconciliationSections(h)).goal_reconciliation).toContain("latest user request has priority");
 
 	await emit(h, "agent_settled");
 	expect(latestGoalState(h).status).toBe("paused");
 	expect(sentMessages(h, "goal-continuation")).toHaveLength(continuationCount);
+});
+
+// Run before_agent_start the way Pi does: handlers mutate structured prompt
+// sections, and a returned `systemPrompt` would force a full prompt rewrite.
+async function reconciliationSections(h: ReturnType<typeof makeHarness>, sections: Record<string, string> = {}) {
+	const results = await emit(h, "before_agent_start", { systemPrompt: "base prompt", systemPromptOptions: { sections } });
+	expect(results.every((result) => result?.systemPrompt === undefined)).toBe(true);
+	return sections;
+}
+
+test("reconciliation guidance is a prompt section that is removed once resolved", async () => {
+	const h = makeHarness();
+	await h.commands.goal.handler("ship the feature", h.ctx);
+	expect(await reconciliationSections(h)).toEqual({});
+
+	await emit(h, "input", { source: "interactive", text: "please continue" });
+	const sections = await reconciliationSections(h, { preamble: "base" });
+	expect(Object.keys(sections)).toEqual(["preamble", "goal_reconciliation"]);
+
+	await h.tools.goal_reconcile.execute("reconcile", { action: "keep" }, undefined, undefined, h.ctx);
+	expect(await reconciliationSections(h, sections)).toEqual({ preamble: "base" });
 });
 
 test("goal_reconcile revises scope while preserving goal identity and history", async () => {

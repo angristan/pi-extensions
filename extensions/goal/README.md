@@ -45,7 +45,10 @@ or blocked goal stays inactive unless the agent resumes it. When the agent resum
 one in response to a user request, reconciliation becomes mandatory before the
 loop can continue. Revisions preserve the goal's identity, timing, continuation
 count, and append-only history. If reconciliation is missing or invalid when the
-turn settles, the extension pauses instead of resuming the older objective.
+turn settles, the extension pauses instead of resuming the older objective. The
+reconciliation instruction is a structured `goal_reconciliation` system-prompt
+section, set while reconciliation is pending and removed afterwards; Pi records
+each change as a transcript delta instead of rewriting the cached prompt.
 
 ```
 /goal set <objective>

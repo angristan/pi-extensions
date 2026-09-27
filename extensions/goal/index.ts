@@ -25,6 +25,10 @@ const GOAL_CLEAR_TOOL_NAME = "goal_clear";
 const GOAL_TERMINAL_TOOL_NAMES = ["goal_complete", "goal_block"] as const;
 const GOAL_TOOL_NAMES = [...GOAL_TERMINAL_TOOL_NAMES, GOAL_RECONCILE_TOOL_NAME] as const;
 const GOAL_TOOL_NAME_SET = new Set<string>(GOAL_TOOL_NAMES);
+// Structured system-prompt section. Pi records section changes as a transcript
+// delta, so adding or removing it does not rewrite the cached prompt prefix.
+const GOAL_RECONCILIATION_SECTION = "goal_reconciliation";
+const GOAL_RECONCILIATION_PROMPT = "An active session goal predates the latest user request. The latest user request has priority wherever it conflicts with the stored goal. Before automatic goal continuation may resume, call goal_reconcile: use keep if the request leaves the objective unchanged, revise with the complete updated objective and validation criteria if it changes scope, or pause if this request should not continue the goal. Do not use goal_set or goal_resume for this reconciliation.";
 
 /**
  * Status lifecycle mirrors a persistent-objective goal system:
@@ -1328,11 +1332,13 @@ export default function (pi: ExtensionAPI, dependencies: GoalDependencies = {}) 
 		return { action: "continue" as const };
 	});
 
+	// Never return `systemPrompt` here: Pi treats it as a forced replacement of
+	// the whole prompt, which misses the prompt cache on this run and the next.
 	pi.on("before_agent_start", (event: any) => {
-		if (!state?.reconciliationPending) return;
-		return {
-			systemPrompt: `${event.systemPrompt}\n\n## Goal reconciliation required\nAn active session goal predates the latest user request. The latest user request has priority wherever it conflicts with the stored goal. Before automatic goal continuation may resume, call goal_reconcile: use keep if the request leaves the objective unchanged, revise with the complete updated objective and validation criteria if it changes scope, or pause if this request should not continue the goal. Do not use goal_set or goal_resume for this reconciliation.`,
-		};
+		const sections = event.systemPromptOptions?.sections;
+		if (!sections) return;
+		if (state?.status === "active" && state.reconciliationPending) sections[GOAL_RECONCILIATION_SECTION] = GOAL_RECONCILIATION_PROMPT;
+		else delete sections[GOAL_RECONCILIATION_SECTION];
 	});
 
 	pi.on("context", (event: any) => {
