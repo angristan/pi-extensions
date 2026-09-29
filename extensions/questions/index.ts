@@ -425,7 +425,13 @@ export default function (pi: ExtensionAPI) {
 	});
 	pi.on("tool_result", (event) => {
 		const redactor = new SecretRedactor();
-		return { content: redactor.value(event.content), details: redactor.value(event.details) };
+		// Pi uses the hook's structuredContent as-is, so omitting it would drop
+		// the structured result that codemode scripts receive.
+		return {
+			content: redactor.value(event.content),
+			details: redactor.value(event.details),
+			structuredContent: redactor.value((event as any).structuredContent),
+		};
 	});
 	pi.on("session_shutdown", () => {
 		unregisterSecrets();

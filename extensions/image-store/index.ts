@@ -552,6 +552,8 @@ export default function imageStoreExtension(pi: ExtensionAPI) {
 		return {
 			content: persistedContent,
 			details: { ...details, [DETAILS_KEY]: { version: 1, refs } satisfies StoredImageDetails },
+			// Pi uses the hook's structuredContent as-is; pass it through for codemode.
+			structuredContent: (event as any).structuredContent,
 		};
 	});
 

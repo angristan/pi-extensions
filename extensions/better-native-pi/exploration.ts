@@ -739,6 +739,8 @@ export default function (pi: ExtensionAPI) {
 				...details,
 				[EXPLORATION_DETAILS_KEY]: markerForCall(group, call, Boolean(event.isError)),
 			},
+			// Pi uses the hook's structuredContent as-is; pass it through for codemode.
+			structuredContent: event.structuredContent,
 		};
 	});
 
