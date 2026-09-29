@@ -102,11 +102,11 @@ function renderedWorkingDirectory(args: any, cwd: string | undefined, width: num
 	return fitToolLine(`  └ ${label}${hyperlinkPath(shortPath(effective), effective, current)}`, width);
 }
 
-function renderedCommand(command: string, width: number, expanded: boolean, theme: any): string[] {
-	const max = Math.max(1, width);
-	const normalized = command.replace(/\t/g, "   ").replace(/\s+$/, "");
-	const boxWidth = Math.max(1, max - COMMAND_INDENT.length);
-	const formatted = formatShellCommandForDisplay(normalized, Math.max(1, boxWidth - 4));
+/**
+ * Theme for the bordered tool code box: Pi's Markdown border colors with a
+ * caller-supplied highlighter. Shared by the bash command and codemode script.
+ */
+export function toolCodeBoxTheme(theme: any, highlightCode: (code: string) => string[]): any {
 	let markdownTheme: any;
 	try {
 		markdownTheme = getMarkdownTheme();
@@ -119,10 +119,18 @@ function renderedCommand(command: string, width: number, expanded: boolean, them
 			codeBlockBorder: (text: string) => typeof theme?.fg === "function" ? theme.fg("borderMuted", text) : text,
 		};
 	}
-	const commandTheme = {
-		...markdownTheme,
-		highlightCode: (code: string) => code.split("\n").map((line) => highlightedShellLine(line, theme)),
-	};
+	return { ...markdownTheme, highlightCode };
+}
+
+function renderedCommand(command: string, width: number, expanded: boolean, theme: any): string[] {
+	const max = Math.max(1, width);
+	const normalized = command.replace(/\t/g, "   ").replace(/\s+$/, "");
+	const boxWidth = Math.max(1, max - COMMAND_INDENT.length);
+	const formatted = formatShellCommandForDisplay(normalized, Math.max(1, boxWidth - 4));
+	const commandTheme = toolCodeBoxTheme(
+		theme,
+		(code: string) => code.split("\n").map((line) => highlightedShellLine(line, theme)),
+	);
 	return renderCodeBox(formatted.join("\n"), "bash", boxWidth, commandTheme, {
 		maxRows: expanded ? undefined : COMMAND_ROWS,
 		renderOmission: (omitted, innerWidth) => theme.fg(

@@ -42,6 +42,13 @@ Re-registers pi's built-in tools under their native names (`read`, `write`,
 - `bash` declares an output schema, so codemode scripts receive structured
   results instead of the rendered text: Pi's built-in shape on its own, or the
   managed shape from `background-jobs` when that extension is loaded
+- `codemode`, when Pi's built-in codemode extension is enabled, renders as the
+  same block: `Ran script · N calls in 100ms ✓`, the script in the bordered
+  code box, one `├`/`└` row per nested tool call with its reasoning (consecutive
+  identical calls collapse to `×N`), then the script output in the `│` gutter.
+  Only the renderers change; the tool definition is Pi's own. It is registered
+  at session start, which shadows the built-in without Pi's startup warning
+  about a replaced built-in extension
 - `grep` and `find` reject recursive searches rooted at the home directory, its
   ancestors, or broad macOS cloud-storage directories. Specific project and
   subdirectory searches remain allowed, including through symlink-safe checks
