@@ -30,8 +30,10 @@ import {
 	BASH_SESSION_ENV_GUIDELINE,
 	clearBackgroundTerminalService,
 	hasBetterNativeBashIntegration,
+	MANAGED_BASH_OUTPUT_SCHEMA,
 	setBackgroundTerminalService,
 	type BackgroundTerminalService,
+	type ManagedBashStructuredResult,
 } from "./service.js";
 import { isPtySupported, spawnTerminal } from "./terminal-process.js";
 import { registerProcessExitReaper } from "../../shared/process-exit-reaper.js";
@@ -50,6 +52,8 @@ const TOOL_OUTPUT_BYTES = 24 * 1024;
 const PARTIAL_OUTPUT_BYTES = 4 * 1024;
 const PERSISTED_OUTPUT_BYTES = 8 * 1024;
 const VIEWER_OUTPUT_BYTES = 64 * 1024;
+// Matches the CursorOutput tail, so scripts get all output the job retains.
+const STRUCTURED_OUTPUT_BYTES = 256 * 1024;
 const TERMINAL_TOOL_NAMES = ["job_output", "terminal_write", "job_kill"] as const;
 const TERMINAL_TOOL_NAME_SET = new Set<string>(TERMINAL_TOOL_NAMES);
 const PI_SESSION_ENV_KEYS = [
@@ -457,6 +461,23 @@ function formatSnapshotText(data: JobSnapshot): string {
 	if (data.stderr) lines.push("", "stderr:", data.stderr.trimEnd());
 	if (!data.stdout && !data.stderr) lines.push("", "(no output)");
 	return lines.join("\n");
+}
+
+/**
+ * Build the structured `bash` result that codemode scripts receive. It reads
+ * the whole retained output from cursor 0 rather than the model's delta, so a
+ * script sees the same text whether or not the call yielded.
+ */
+function structuredResult(job: ManagedJob): ManagedBashStructuredResult {
+	const read = job.output.read(0, STRUCTURED_OUTPUT_BYTES);
+	return {
+		output: read.text,
+		truncated: read.omittedBytes > 0,
+		...(job.exitCode === undefined ? {} : { exit_code: job.exitCode }),
+		wall_time_seconds: Math.round(duration(job) / 100) / 10,
+		status: job.status,
+		...(isActive(job) ? { job_id: job.id } : {}),
+	};
 }
 
 function formatDeltaText(job: ManagedJob, read: CursorRead): string {
@@ -1109,7 +1130,11 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		const outputBytes = outputBytesForTokens(params.max_output_tokens);
 		const { read, details } = readDelta(job, initialCursor, true, outputBytes);
 		const prefix = yielded ? `Terminal ${job.id} is still running. Use terminal_write or job_output with job_id=${job.id}.\n` : "";
-		return { content: [{ type: "text", text: `${prefix}${formatDeltaText(job, read)}` }], details };
+		return {
+			content: [{ type: "text", text: `${prefix}${formatDeltaText(job, read)}` }],
+			details,
+			structuredContent: structuredResult(job),
+		};
 	};
 	const terminalService: BackgroundTerminalService = {
 		execute: executeUnified,
@@ -1170,6 +1195,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 				},
 				required: ["reasoning", "command"],
 			} as any,
+			outputSchema: MANAGED_BASH_OUTPUT_SCHEMA as any,
 			executionMode: "sequential",
 			execute: executeUnified,
 			renderCall: (args: any, theme: any) => new Text(`${theme.fg("accent", "●")} ${theme.bold("Running bash")} ${compactCommand(normalizeToolReasoning(args.reasoning) || args.command || "")}`, 0, 0),

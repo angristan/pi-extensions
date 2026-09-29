@@ -17,6 +17,7 @@ import {
 	BASH_SESSION_ENV_GUIDELINE,
 	clearBetterNativeBashIntegration,
 	getBackgroundTerminalService,
+	MANAGED_BASH_OUTPUT_SCHEMA,
 	setBetterNativeBashIntegration,
 	type BackgroundTerminalService,
 	type BetterNativeBashIntegration,
@@ -447,6 +448,10 @@ export default function bash(pi: ExtensionAPI) {
 					: bashTool.description,
 				promptSnippet: bashTool.promptSnippet,
 				parameters: terminalEnabled ? withTerminalParameters(bashTool.parameters) : withReasoning(bashTool.parameters),
+				// Codemode scripts receive structuredContent matching this schema. The
+				// built-in executor returns Pi's own shape; managed terminals add
+				// status and job_id because commands can outlive the yield window.
+				outputSchema: terminalEnabled ? (MANAGED_BASH_OUTPUT_SCHEMA as any) : (bashTool as any).outputSchema,
 				promptGuidelines: terminalEnabled
 					? [...(bashTool.promptGuidelines ?? [BASH_SESSION_ENV_GUIDELINE]), BASH_MANAGED_TERMINAL_GUIDELINE]
 					: bashTool.promptGuidelines,

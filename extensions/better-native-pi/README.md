@@ -39,6 +39,9 @@ Re-registers pi's built-in tools under their native names (`read`, `write`,
   `background-jobs` is loaded in either order, `bash` refreshes to use its managed
   terminal service so quick commands, yielded processes, and `tty: true` prompts
   share one tool; either extension still provides a complete `bash` independently
+- `bash` declares an output schema, so codemode scripts receive structured
+  results instead of the rendered text: Pi's built-in shape on its own, or the
+  managed shape from `background-jobs` when that extension is loaded
 - `grep` and `find` reject recursive searches rooted at the home directory, its
   ancestors, or broad macOS cloud-storage directories. Specific project and
   subdirectory searches remain allowed, including through symlink-safe checks

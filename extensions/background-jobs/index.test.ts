@@ -387,6 +387,37 @@ describe("terminal tools", () => {
 		expect(result.content[0].text).toContain("standalone-managed");
 	});
 
+	test("returns structured results for codemode scripts in every load order", async () => {
+		for (const extensions of [
+			["background-jobs"],
+			["background-jobs", "better-native-pi"],
+			["better-native-pi", "background-jobs"],
+		] as const) {
+			const harness = createHarness({ extensions: [...extensions] });
+			await startHarness(harness);
+			const bash = harness.tools.get("bash");
+			expect(bash.outputSchema?.properties).toHaveProperty("exit_code");
+
+			// Scripts get the raw output and exit code, without the status line
+			// that prefixes the model-facing text.
+			const done = await bash.execute("exec", {
+				reasoning: "check structured result",
+				command: "printf 'a\\nb\\n'; exit 3",
+			}, undefined, undefined, harness.ctx);
+			expect(done.structuredContent).toMatchObject({ output: "a\nb\n", truncated: false, exit_code: 3, status: "failed" });
+			expect(done.structuredContent.job_id).toBeUndefined();
+
+			const yielded = await bash.execute("exec", {
+				reasoning: "check yielded structured result",
+				command: "printf started; sleep 5",
+				"yield-time_ms": 250,
+			}, undefined, undefined, harness.ctx);
+			expect(yielded.structuredContent).toMatchObject({ output: "started", status: "running", job_id: yielded.details.id });
+			expect(yielded.structuredContent.exit_code).toBeUndefined();
+			await shutdownHarness(harness);
+		}
+	});
+
 	test("integrates the managed schema in either extension load order", async () => {
 		for (const extensions of [
 			["background-jobs", "better-native-pi"],
