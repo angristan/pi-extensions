@@ -56,6 +56,31 @@ describe("codemode block", () => {
 		expect(lines.at(-1)).toBe("  └ bash scan shard · …");
 	});
 
+	test("labels calls whose reasoning Pi truncated away with the redacted command", () => {
+		// Mirrors Pi's preview: JSON.stringify(args) cut to 197 chars plus "...".
+		const full = JSON.stringify({
+			command: `AWS_SECRET_ACCESS_KEY='sbXD5/jtw' aws s3 ls --endpoint-url "https://x" ${"a".repeat(200)}`,
+			reasoning: "list buckets",
+		});
+		const calls = [{ name: "bash", args: `${full.slice(0, 197)}...`, status: "ok" as const, durationMs: 5 }];
+		const text = strip(renderCodemodeBlock(view({ result: settled("", calls) }), 300, theme)).join("\n");
+
+		expect(text).toContain(`bash AWS_SECRET_ACCESS_KEY=*** aws s3 ls --endpoint-url "https://x" aaa`);
+		expect(text).toContain("a… · 5ms ✓");
+		expect(text).not.toContain("sbXD5");
+		expect(text).not.toContain('{"command"');
+	});
+
+	test("hides the options pragma only while collapsed", () => {
+		const code = '// @options: {"timeout_ms": 1000}\nreturn 1;';
+		const collapsed = strip(renderCodemodeBlock(view({ code }), 80, theme)).join("\n");
+		const expanded = strip(renderCodemodeBlock(view({ code, expanded: true }), 80, theme)).join("\n");
+
+		expect(collapsed).not.toContain("@options");
+		expect(collapsed).toContain("return 1;");
+		expect(expanded).toContain("@options");
+	});
+
 	test("collapses long call lists and keeps every row within the width", () => {
 		const calls = Array.from({ length: 20 }, (_, index) => bashCall(`step ${index} with a long explanation that wraps`));
 		const lines = renderCodemodeBlock(view({ result: settled("x".repeat(300), calls) }), 40, theme);

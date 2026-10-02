@@ -59,17 +59,52 @@ function fg(theme: any, color: string, text: string): string {
 	return typeof theme?.fg === "function" ? theme.fg(color, text) : text;
 }
 
-/** Nested calls keep their `reasoning` argument; show it like other tool rows. */
-function callLabel(call: CodemodeCall): string {
-	const match = call.args.match(/"reasoning":"((?:[^"\\]|\\.)*)"/);
-	if (match) {
-		try {
-			return normalizeToolReasoning(JSON.parse(`"${match[1]}"`));
-		} catch {
-			// Pi truncates long argument JSON; fall through to the raw preview.
-		}
+/** Argument keys that best describe a call when it has no `reasoning`. */
+const PRIMARY_KEYS = ["command", "path", "pattern", "query", "url", "action"];
+/** Shell-style `NAME=value` assignments whose name suggests a credential. */
+const SECRET_ASSIGNMENT = /\b([A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIALS?)[A-Za-z0-9_]*)=(?:'[^']*'?|"[^"]*"?|\S+)/gi;
+
+export function redactSecrets(text: string): string {
+	return text.replace(SECRET_ASSIGNMENT, "$1=***");
+}
+
+/** Decode a JSON string body that Pi's 200-char preview may have cut mid-escape. */
+function decodeJsonString(body: string): string {
+	const safe = body.replace(/\\(u[0-9a-fA-F]{0,3})?$/, "");
+	try {
+		return JSON.parse(`"${safe}"`);
+	} catch {
+		return safe;
 	}
-	return call.args === "{}" ? "" : call.args;
+}
+
+/** Read a string field from argument JSON that may be truncated. */
+function stringField(args: string, key: string): { value: string; complete: boolean } | undefined {
+	const match = args.match(new RegExp(`"${key}":"((?:[^"\\\\]|\\\\.)*)("?)`));
+	if (!match) return undefined;
+	const complete = match[2] === '"';
+	// An unterminated value ends with the `...` Pi appends when truncating.
+	const body = complete ? match[1]! : match[1]!.replace(/\.\.\.$/, "");
+	return { value: decodeJsonString(body), complete };
+}
+
+/**
+ * Nested calls keep their `reasoning` argument; show it like other tool rows.
+ * Pi truncates the argument JSON to 200 chars, so a long `command` written
+ * before `reasoning` hides it. Fall back to the main argument value, dimmed,
+ * instead of raw JSON.
+ */
+function callLabel(call: CodemodeCall, theme: any): string {
+	const reasoning = stringField(call.args, "reasoning");
+	if (reasoning?.complete) return normalizeToolReasoning(reasoning.value);
+	if (call.args === "{}" || call.args === "") return "";
+	for (const key of PRIMARY_KEYS) {
+		const field = stringField(call.args, key);
+		if (!field) continue;
+		const value = redactSecrets(field.value.replace(/\s+/g, " ").trim());
+		return fg(theme, "dim", field.complete ? value : `${value}…`);
+	}
+	return fg(theme, "dim", redactSecrets(call.args));
 }
 
 interface CallGroup {
@@ -79,10 +114,10 @@ interface CallGroup {
 }
 
 /** Collapse consecutive calls with the same tool and reason, e.g. a fan-out loop. */
-function groupCalls(calls: readonly CodemodeCall[]): CallGroup[] {
+function groupCalls(calls: readonly CodemodeCall[], theme: any): CallGroup[] {
 	const groups: CallGroup[] = [];
 	for (const call of calls) {
-		const label = callLabel(call);
+		const label = callLabel(call, theme);
 		const last = groups.at(-1);
 		if (last && last.name === call.name && last.label === label) last.calls.push(call);
 		else groups.push({ name: call.name, label, calls: [call] });
@@ -108,7 +143,7 @@ function groupStatus(group: CallGroup): string {
 }
 
 function renderCalls(calls: readonly CodemodeCall[], width: number, expanded: boolean, theme: any): string[] {
-	let groups = groupCalls(calls);
+	let groups = groupCalls(calls, theme);
 	const lines: string[] = [];
 	if (!expanded && groups.length > CALL_ROWS) {
 		const hidden = groups.length - (CALL_ROWS - 1);
@@ -155,7 +190,9 @@ function highlightScript(code: string): string[] {
 }
 
 function renderScript(code: string, width: number, expanded: boolean, theme: any): string[] {
-	const normalized = code.replace(/\r/g, "").replace(/\t/g, "   ").replace(/\s+$/, "");
+	let normalized = code.replace(/\r/g, "").replace(/\t/g, "   ").replace(/\s+$/, "");
+	// The `// @options:` pragma is runner metadata; keep collapsed rows for code.
+	if (!expanded) normalized = normalized.replace(/^\s*\/\/\s*@options:.*(\n|$)/, "");
 	if (!normalized) return [];
 	const boxWidth = Math.max(1, width - INDENT.length);
 	return renderCodeBox(normalized, "javascript", boxWidth, toolCodeBoxTheme(theme, highlightScript), {

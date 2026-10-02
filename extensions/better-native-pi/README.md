@@ -46,6 +46,11 @@ Re-registers pi's built-in tools under their native names (`read`, `write`,
   same block: `Ran script · N calls in 100ms ✓`, the script in the bordered
   code box, one `├`/`└` row per nested tool call with its reasoning (consecutive
   identical calls collapse to `×N`), then the script output in the `│` gutter.
+  Pi keeps only 200 characters of each call's arguments, so a long `command`
+  can hide `reasoning`; the row then shows the dimmed command (or `path`,
+  `pattern`, `query`, `url`) instead of raw JSON, with credential-like
+  `NAME=value` assignments shown as `NAME=***`. The collapsed script box
+  hides the `// @options:` line.
   Only the renderers change; the tool definition is Pi's own. It is registered
   at session start, which shadows the built-in without Pi's startup warning
   about a replaced built-in extension
