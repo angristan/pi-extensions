@@ -118,8 +118,9 @@ function callParts(call: CodemodeCall, theme: any): CallParts {
 interface CallGroup {
 	name: string;
 	reason: string;
-	/** Shared by every call in the group; empty when their arguments differ. */
+	/** The first call's detail; `mixed` marks groups whose arguments differ. */
 	detail: string;
+	mixed: boolean;
 	calls: CodemodeCall[];
 }
 
@@ -135,10 +136,10 @@ function groupCalls(calls: readonly CodemodeCall[], expanded: boolean, theme: an
 		// Without a reason, the detail is the only thing that identifies the call.
 		const sameCall = last && last.name === call.name && last.reason === reason && (reason || last.detail === detail);
 		if (!expanded && sameCall) {
-			if (last.detail !== detail) last.detail = "";
+			if (last.detail !== detail) last.mixed = true;
 			last.calls.push(call);
 		} else {
-			groups.push({ name: call.name, reason, detail, calls: [call] });
+			groups.push({ name: call.name, reason, detail, mixed: false, calls: [call] });
 		}
 	}
 	return groups;
@@ -171,7 +172,9 @@ function renderCalls(calls: readonly CodemodeCall[], width: number, expanded: bo
 	}
 	groups.forEach((group, index) => {
 		const connector = index === groups.length - 1 ? "└" : "├";
-		const repeat = group.calls.length > 1 ? ` ${fg(theme, "dim", `×${group.calls.length}`)}` : "";
+		// `$ sleep 1 (+2)` when a fan-out runs different arguments, `×3` when identical.
+		const others = group.calls.length - 1;
+		const repeat = others === 0 ? "" : ` ${fg(theme, "dim", group.mixed ? `(+${others})` : `×${group.calls.length}`)}`;
 		const label = [group.reason, group.detail].filter(Boolean).map((part) => ` ${part}`).join("");
 		// fitToolLine keeps the trailing status after `·` when the label is cut.
 		lines.push(fitToolLine(

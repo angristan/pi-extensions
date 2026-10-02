@@ -48,7 +48,8 @@ Re-registers pi's built-in tools under their native names (`read`, `write`,
   the `│` gutter. Each row shows the call's reasoning and its dimmed main
   argument (`$ command`, `path`, `pattern`, `query`, or `url`), with
   credential-like `NAME=value` assignments shown as `NAME=***`. Collapsed,
-  consecutive calls with the same reasoning group to `×N`; Ctrl+O lists every
+  consecutive calls with the same reasoning group into one row: `×N` when
+  identical, or the first argument plus `(+N)` when they differ; Ctrl+O lists every
   call. Pi keeps only 200 characters of each call's arguments, so a long
   command can hide its reasoning. The collapsed script box hides the
   `// @options:` line.

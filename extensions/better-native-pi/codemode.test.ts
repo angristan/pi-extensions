@@ -62,7 +62,7 @@ describe("codemode block", () => {
 		const collapsed = strip(renderCodemodeBlock(view({ result }), 80, theme));
 		const expanded = strip(renderCodemodeBlock(view({ result, expanded: true }), 80, theme));
 
-		expect(collapsed).toContain("  └ bash fan out ×2 · ✓");
+		expect(collapsed).toContain("  └ bash fan out $ sleep 1 (+1) · ✓");
 		expect(expanded).toContain("  ├ bash fan out $ sleep 1 · ✓");
 		expect(expanded).toContain("  └ bash fan out $ sleep 2 · ✓");
 	});
