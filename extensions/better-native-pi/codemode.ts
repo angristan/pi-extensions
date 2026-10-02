@@ -3,7 +3,7 @@
  * bash: a status headline, the script in the bordered code box, one branch row
  * per nested tool call, and the script output in the dim `│` gutter.
  *
- *   • Ran script · 3 calls in 120ms ✓
+ *   • Ran script to collect repo stats · 3 calls in 120ms ✓
  *     ╭ javascript ──────────────────╮
  *     │ const rows = await Promise…  │
  *     ╰──────────────────────────────╯
@@ -211,10 +211,29 @@ function highlightScript(code: string): string[] {
 	}
 }
 
+const OPTIONS_LINE = /^\s*\/\/\s*@options:.*(?:\n|$)/;
+const INTENT_LINE = /^\s*\/\/[ \t]*([^@\s][^\n]*?)[ \t.]*(?:\n|$)/;
+
+/**
+ * Codemode has no `reasoning` argument: Pi matches its tool by schema identity
+ * and some providers sample the script as raw JavaScript, not JSON. The prompt
+ * guideline asks for a leading `// intent` comment instead, after the optional
+ * `// @options:` pragma; the headline shows it and the collapsed box hides both.
+ */
+export function splitScript(code: string): { intent: string; body: string } {
+	const normalized = code.replace(/\r/g, "").replace(/\t/g, "   ").replace(/\s+$/, "");
+	const afterOptions = normalized.replace(OPTIONS_LINE, "").replace(/^\s*\n/, "");
+	const match = afterOptions.match(INTENT_LINE);
+	if (!match) return { intent: "", body: afterOptions };
+	return { intent: normalizeToolReasoning(match[1]!.trim()), body: afterOptions.slice(match[0].length) };
+}
+
+export const INTENT_GUIDELINE = "Start each codemode script with a `// <≤8-word present-tense intent>` comment line, after any `// @options:` line.";
+
 function renderScript(code: string, width: number, expanded: boolean, theme: any): string[] {
-	let normalized = code.replace(/\r/g, "").replace(/\t/g, "   ").replace(/\s+$/, "");
-	// The `// @options:` pragma is runner metadata; keep collapsed rows for code.
-	if (!expanded) normalized = normalized.replace(/^\s*\/\/\s*@options:.*(\n|$)/, "");
+	const normalized = expanded
+		? code.replace(/\r/g, "").replace(/\t/g, "   ").replace(/\s+$/, "")
+		: splitScript(code).body;
 	if (!normalized) return [];
 	const boxWidth = Math.max(1, width - INDENT.length);
 	return renderCodeBox(normalized, "javascript", boxWidth, toolCodeBoxTheme(theme, highlightScript), {
@@ -230,14 +249,16 @@ export function renderCodemodeBlock(view: CodemodeView, width: number, theme: an
 	const { text, wallSeconds } = scriptOutput(view.result?.content);
 	const callCount = calls.length > 0 ? ` ${fg(theme, "dim", "·")} ${calls.length} ${calls.length === 1 ? "call" : "calls"}` : "";
 
+	const { intent } = splitScript(view.code);
+	const subject = intent ? `script ${fg(theme, "dim", "to")} ${fg(theme, "accent", intent)}` : fg(theme, "accent", "script");
 	let headline: string;
 	if (view.partial) {
-		headline = `${MAGENTA}•${RESET} Running ${fg(theme, "accent", "script")}${callCount} ${fg(theme, "dim", "·")} ${formatElapsed(view.elapsedMs)}`;
+		headline = `${MAGENTA}•${RESET} Running ${subject}${callCount} ${fg(theme, "dim", "·")} ${formatElapsed(view.elapsedMs)}`;
 	} else {
 		const mark = view.error ? `${RED}•${RESET}` : `${GREEN}•${RESET}`;
 		const status = view.error ? `${RED}✗${RESET}` : `${GREEN}✓${RESET}`;
 		const time = wallSeconds === undefined ? "" : `${DIM}in${RESET} ${formatElapsed(wallSeconds * 1000)} `;
-		headline = `${mark} Ran ${fg(theme, "accent", "script")}${callCount} ${time}${status}`;
+		headline = `${mark} Ran ${subject}${callCount} ${time}${status}`;
 	}
 
 	const lines = [fitToolLine(headline, max), ...renderScript(view.code, max, view.expanded, theme)];
@@ -301,6 +322,8 @@ function withRenderers(definition: any): any {
 	};
 	return {
 		...definition,
+		// Registered once per session start, so the system prompt stays stable.
+		promptGuidelines: [...(definition.promptGuidelines ?? []), INTENT_GUIDELINE],
 		renderShell: "self",
 		renderCall: (_args: any, theme: any, context: any) => viewFor(context, theme),
 		renderResult: (result: any, options: any, theme: any, context: any) => {

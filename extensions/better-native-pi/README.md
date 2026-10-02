@@ -52,7 +52,9 @@ Re-registers pi's built-in tools under their native names (`read`, `write`,
   identical, or the first argument plus `(+N)` when they differ; Ctrl+O lists every
   call. Pi keeps only 200 characters of each call's arguments, so a long
   command can hide its reasoning. The collapsed script box hides the
-  `// @options:` line.
+  `// @options:` line. Codemode has no `reasoning` argument, so a prompt
+  guideline asks for a leading `// intent` comment; the headline shows it as
+  `Ran script to <intent>` and the collapsed box hides that line.
   Only the renderers change; the tool definition is Pi's own. It is registered
   at session start, which shadows the built-in without Pi's startup warning
   about a replaced built-in extension

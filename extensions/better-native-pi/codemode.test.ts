@@ -82,6 +82,18 @@ describe("codemode block", () => {
 		expect(text).not.toContain('{"command"');
 	});
 
+	test("uses the leading comment as the headline intent and hides it while collapsed", () => {
+		const code = '// @options: {"timeout_ms": 1000}\n// Check S3 buckets.\nreturn 1;';
+		const collapsed = strip(renderCodemodeBlock(view({ code, result: settled("", []) }), 80, theme));
+		const expanded = strip(renderCodemodeBlock(view({ code, result: settled("", []), expanded: true }), 80, theme)).join("\n");
+		const running = strip(renderCodemodeBlock(view({ code, partial: true, elapsedMs: 1_000 }), 80, theme));
+
+		expect(collapsed[0]).toBe("• Ran script to check S3 buckets in 300ms ✓");
+		expect(collapsed.join("\n")).not.toContain("// Check");
+		expect(expanded).toContain("// Check S3 buckets.");
+		expect(running[0]).toBe("• Running script to check S3 buckets · 1s");
+	});
+
 	test("hides the options pragma only while collapsed", () => {
 		const code = '// @options: {"timeout_ms": 1000}\nreturn 1;';
 		const collapsed = strip(renderCodemodeBlock(view({ code }), 80, theme)).join("\n");
@@ -123,6 +135,7 @@ describe("codemode registration", () => {
 
 		expect(registered).toHaveLength(1);
 		expect(registered[0]).toMatchObject({ name: "codemode", renderShell: "self" });
+		expect(registered[0].promptGuidelines.at(-1)).toContain("// <≤8-word present-tense intent>");
 		expect(registered[0].execute()).toBe("ran");
 	});
 
