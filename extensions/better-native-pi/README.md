@@ -44,13 +44,14 @@ Re-registers pi's built-in tools under their native names (`read`, `write`,
   managed shape from `background-jobs` when that extension is loaded
 - `codemode`, when Pi's built-in codemode extension is enabled, renders as the
   same block: `Ran script · N calls in 100ms ✓`, the script in the bordered
-  code box, one `├`/`└` row per nested tool call with its reasoning (consecutive
-  identical calls collapse to `×N`), then the script output in the `│` gutter.
-  Pi keeps only 200 characters of each call's arguments, so a long `command`
-  can hide `reasoning`; the row then shows the dimmed command (or `path`,
-  `pattern`, `query`, `url`) instead of raw JSON, with credential-like
-  `NAME=value` assignments shown as `NAME=***`. The collapsed script box
-  hides the `// @options:` line.
+  code box, one `├`/`└` row per nested tool call, then the script output in
+  the `│` gutter. Each row shows the call's reasoning and its dimmed main
+  argument (`$ command`, `path`, `pattern`, `query`, or `url`), with
+  credential-like `NAME=value` assignments shown as `NAME=***`. Collapsed,
+  consecutive calls with the same reasoning group to `×N`; Ctrl+O lists every
+  call. Pi keeps only 200 characters of each call's arguments, so a long
+  command can hide its reasoning. The collapsed script box hides the
+  `// @options:` line.
   Only the renderers change; the tool definition is Pi's own. It is registered
   at session start, which shadows the built-in without Pi's startup warning
   about a replaced built-in extension

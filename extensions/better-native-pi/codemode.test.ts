@@ -30,8 +30,8 @@ describe("codemode block", () => {
 
 		expect(lines[0]).toBe("• Ran script · 3 calls in 300ms ✓");
 		expect(lines.some((line) => line.includes("const a = 1;"))).toBe(true);
-		expect(lines).toContain("  ├ bash collect repo stats ×2 · ✓");
-		expect(lines).toContain("  └ bash read readme · 12ms ✓");
+		expect(lines).toContain("  ├ bash collect repo stats $ git log ×2 · ✓");
+		expect(lines).toContain("  └ bash read readme $ git log · 12ms ✓");
 		expect(lines.at(-1)).toBe("  │ | a | b |");
 		expect(lines.join("\n")).not.toContain("Wall time");
 	});
@@ -43,7 +43,7 @@ describe("codemode block", () => {
 		const expanded = strip(renderCodemodeBlock(view({ result, error: true, expanded: true }), 80, theme));
 
 		expect(collapsed[0]).toBe("• Ran script · 1 call in 300ms ✗");
-		expect(collapsed).toContain("  └ bash fetch index · 12ms ✗");
+		expect(collapsed).toContain("  └ bash fetch index $ git log · 12ms ✗");
 		expect(collapsed.join("\n")).not.toContain("exit 2");
 		expect(expanded).toContain("      exit 2");
 	});
@@ -53,7 +53,18 @@ describe("codemode block", () => {
 		const lines = strip(renderCodemodeBlock(view({ partial: true, elapsedMs: 2_000, result }), 80, theme));
 
 		expect(lines[0]).toBe("• Running script · 1 call · 2s");
-		expect(lines.at(-1)).toBe("  └ bash scan shard · …");
+		expect(lines.at(-1)).toBe("  └ bash scan shard $ git log · …");
+	});
+
+	test("groups a fan-out while collapsed and lists each command when expanded", () => {
+		const sleep = (n: number) => ({ name: "bash", args: JSON.stringify({ reasoning: "fan out", command: `sleep ${n}` }), status: "ok" as const });
+		const result = settled("", [sleep(1), sleep(2)]);
+		const collapsed = strip(renderCodemodeBlock(view({ result }), 80, theme));
+		const expanded = strip(renderCodemodeBlock(view({ result, expanded: true }), 80, theme));
+
+		expect(collapsed).toContain("  └ bash fan out ×2 · ✓");
+		expect(expanded).toContain("  ├ bash fan out $ sleep 1 · ✓");
+		expect(expanded).toContain("  └ bash fan out $ sleep 2 · ✓");
 	});
 
 	test("labels calls whose reasoning Pi truncated away with the redacted command", () => {
@@ -65,7 +76,7 @@ describe("codemode block", () => {
 		const calls = [{ name: "bash", args: `${full.slice(0, 197)}...`, status: "ok" as const, durationMs: 5 }];
 		const text = strip(renderCodemodeBlock(view({ result: settled("", calls) }), 300, theme)).join("\n");
 
-		expect(text).toContain(`bash AWS_SECRET_ACCESS_KEY=*** aws s3 ls --endpoint-url "https://x" aaa`);
+		expect(text).toContain(`bash $ AWS_SECRET_ACCESS_KEY=*** aws s3 ls --endpoint-url "https://x" aaa`);
 		expect(text).toContain("a… · 5ms ✓");
 		expect(text).not.toContain("sbXD5");
 		expect(text).not.toContain('{"command"');

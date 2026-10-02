@@ -59,7 +59,7 @@ function fg(theme: any, color: string, text: string): string {
 	return typeof theme?.fg === "function" ? theme.fg(color, text) : text;
 }
 
-/** Argument keys that best describe a call when it has no `reasoning`. */
+/** Argument keys that show what a call acts on, in preference order. */
 const PRIMARY_KEYS = ["command", "path", "pattern", "query", "url", "action"];
 /** Shell-style `NAME=value` assignments whose name suggests a credential. */
 const SECRET_ASSIGNMENT = /\b([A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIALS?)[A-Za-z0-9_]*)=(?:'[^']*'?|"[^"]*"?|\S+)/gi;
@@ -88,39 +88,58 @@ function stringField(args: string, key: string): { value: string; complete: bool
 	return { value: decodeJsonString(body), complete };
 }
 
+interface CallParts {
+	/** The call's `reasoning`, when Pi's 200-char argument preview kept it whole. */
+	reason: string;
+	/** Dimmed main argument, e.g. `$ uname -r`, with credentials masked. */
+	detail: string;
+}
+
 /**
- * Nested calls keep their `reasoning` argument; show it like other tool rows.
- * Pi truncates the argument JSON to 200 chars, so a long `command` written
- * before `reasoning` hides it. Fall back to the main argument value, dimmed,
- * instead of raw JSON.
+ * Split a nested call into its reason and the main argument it acts on. Pi
+ * truncates the argument JSON to 200 chars, so a long `command` written before
+ * `reasoning` can hide the reason; the detail still shows what ran.
  */
-function callLabel(call: CodemodeCall, theme: any): string {
+function callParts(call: CodemodeCall, theme: any): CallParts {
 	const reasoning = stringField(call.args, "reasoning");
-	if (reasoning?.complete) return normalizeToolReasoning(reasoning.value);
-	if (call.args === "{}" || call.args === "") return "";
+	const reason = reasoning?.complete ? normalizeToolReasoning(reasoning.value) : "";
 	for (const key of PRIMARY_KEYS) {
 		const field = stringField(call.args, key);
 		if (!field) continue;
 		const value = redactSecrets(field.value.replace(/\s+/g, " ").trim());
-		return fg(theme, "dim", field.complete ? value : `${value}…`);
+		const text = `${key === "command" ? "$ " : ""}${value}${field.complete ? "" : "…"}`;
+		return { reason, detail: fg(theme, "dim", text) };
 	}
-	return fg(theme, "dim", redactSecrets(call.args));
+	// Unknown argument shapes: keep the JSON unless the reason already says enough.
+	const raw = reason || call.args === "{}" ? "" : redactSecrets(call.args);
+	return { reason, detail: raw && fg(theme, "dim", raw) };
 }
 
 interface CallGroup {
 	name: string;
-	label: string;
+	reason: string;
+	/** Shared by every call in the group; empty when their arguments differ. */
+	detail: string;
 	calls: CodemodeCall[];
 }
 
-/** Collapse consecutive calls with the same tool and reason, e.g. a fan-out loop. */
-function groupCalls(calls: readonly CodemodeCall[], theme: any): CallGroup[] {
+/**
+ * Collapse consecutive calls with the same tool and reason, e.g. a fan-out
+ * loop. Expanded views keep one row per call so every argument is visible.
+ */
+function groupCalls(calls: readonly CodemodeCall[], expanded: boolean, theme: any): CallGroup[] {
 	const groups: CallGroup[] = [];
 	for (const call of calls) {
-		const label = callLabel(call, theme);
+		const { reason, detail } = callParts(call, theme);
 		const last = groups.at(-1);
-		if (last && last.name === call.name && last.label === label) last.calls.push(call);
-		else groups.push({ name: call.name, label, calls: [call] });
+		// Without a reason, the detail is the only thing that identifies the call.
+		const sameCall = last && last.name === call.name && last.reason === reason && (reason || last.detail === detail);
+		if (!expanded && sameCall) {
+			if (last.detail !== detail) last.detail = "";
+			last.calls.push(call);
+		} else {
+			groups.push({ name: call.name, reason, detail, calls: [call] });
+		}
 	}
 	return groups;
 }
@@ -143,7 +162,7 @@ function groupStatus(group: CallGroup): string {
 }
 
 function renderCalls(calls: readonly CodemodeCall[], width: number, expanded: boolean, theme: any): string[] {
-	let groups = groupCalls(calls, theme);
+	let groups = groupCalls(calls, expanded, theme);
 	const lines: string[] = [];
 	if (!expanded && groups.length > CALL_ROWS) {
 		const hidden = groups.length - (CALL_ROWS - 1);
@@ -153,7 +172,7 @@ function renderCalls(calls: readonly CodemodeCall[], width: number, expanded: bo
 	groups.forEach((group, index) => {
 		const connector = index === groups.length - 1 ? "└" : "├";
 		const repeat = group.calls.length > 1 ? ` ${fg(theme, "dim", `×${group.calls.length}`)}` : "";
-		const label = group.label ? ` ${group.label}` : "";
+		const label = [group.reason, group.detail].filter(Boolean).map((part) => ` ${part}`).join("");
 		// fitToolLine keeps the trailing status after `·` when the label is cut.
 		lines.push(fitToolLine(
 			`${fg(theme, "dim", `  ${connector} `)}${fg(theme, "accent", group.name)}${label}${repeat} ${fg(theme, "dim", "·")} ${groupStatus(group)}`,
