@@ -75,9 +75,11 @@ children remain available through `/agents`, but keyboard navigation skips them.
 Children can use `report_to_parent` for material interim findings. Interim reports
 and final results enter a bounded parent mailbox.
 
-Updates do not force a parent model turn. Each automatic update is queued once as
-a visible custom message at the next safe turn boundary while the parent is
-running, or appended immediately when the parent is idle. Because the same
+A child's final result starts a parent turn when the parent is idle. While the
+parent is running, the result is steered in after the current tool results, so the
+parent cannot finish its run without reading it. Interim reports, and final
+results recovered after a reload, do not start a turn: they are appended at the
+next safe turn boundary, or immediately when the parent is idle. Because the same
 message is stored in session history and sent to the model, no model-only mailbox
 context can leak into a later task. Final results are persisted until delivered or
 consumed. Waited and automatic delivery do not produce duplicate completion

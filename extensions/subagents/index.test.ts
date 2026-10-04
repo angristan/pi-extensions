@@ -368,7 +368,7 @@ describe("subagents", () => {
 		expect(harness.sentMessages[0].message.content).toContain(`Agent: ${started.details.agents[0].name}`);
 		expect(harness.sentMessages[0].message.content).not.toContain(started.details.agents[0].id);
 		expect(harness.sentMessages[0].message.content).not.toContain("\u001b");
-		expect(harness.sentMessages[0].options).toEqual({ triggerTurn: false });
+		expect(harness.sentMessages[0].options).toEqual({ triggerTurn: true });
 		expect(harness.statuses.size).toBe(0);
 		const usageEntry = [...harness.parent.getEntries()].reverse().find((entry: any) => entry.customType === "subagent-usage");
 		expect(usageEntry).toMatchObject({
@@ -787,7 +787,7 @@ describe("subagents", () => {
 				content: expect.stringContaining("send this agent a follow-up"),
 				details: { status: "paused", error: limitError },
 			},
-			options: { triggerTurn: false },
+			options: { triggerTurn: true },
 		});
 		const completion = harness.messageRenderers.get("subagent-result")!(harness.sentMessages.at(-1)!.message, { expanded: false }, renderTheme);
 		const completionLines = rendered(completion);

@@ -406,9 +406,13 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			return;
 		}
 		try {
-			// Pi defers non-triggering custom messages until the current tool turn
-			// finishes, so the result is visible, persisted, and ordered safely.
-			const delivery = { triggerTurn: false };
+			// A live final result must reach the parent model even after the parent
+			// went idle, otherwise the result sits in the transcript until the user
+			// types. With triggerTurn, Pi starts a turn when idle and steers the
+			// message in after the current tool results while streaming, so ordering
+			// stays valid. Interim reports and finals recovered after a reload stay
+			// passive: Pi appends them at the next safe boundary without a turn.
+			const delivery = { triggerTurn: event.kind === "final" && agent !== undefined };
 			if (event.kind === "final") {
 				const data = event.final ?? snapshot(agent!);
 				pi.sendMessage({
@@ -696,7 +700,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 	pi.registerTool({
 		name: TOOL_NAME,
 		label: "Agents",
-		description: "Spawn and coordinate uniquely named child agents with isolated persistent context. Actions: spawn starts one; message queues context without starting an idle child turn; followup steers or resumes a child; send is a legacy followup alias; wait collects mailbox updates using configurable bounds and can wake on any update, final results only, or all selected finals; list shows status; read returns the latest response without restarting it; interrupt stops the current turn but preserves context; close deletes it. Children inherit the current model, tools, working directory, and project instructions and can report bounded interim progress. Provider quota exhaustion pauses a child with its conversation retained for follow-up. Reload, quit, and session replacement stop child processes but checkpoint open conversations for restoration with the same parent session. Mailbox updates enter the next safe model request, display when idle without starting a turn, and preserve unread finals across reloads.",
+		description: "Spawn and coordinate uniquely named child agents with isolated persistent context. Actions: spawn starts one; message queues context without starting an idle child turn; followup steers or resumes a child; send is a legacy followup alias; wait collects mailbox updates using configurable bounds and can wake on any update, final results only, or all selected finals; list shows status; read returns the latest response without restarting it; interrupt stops the current turn but preserves context; close deletes it. Children inherit the current model, tools, working directory, and project instructions and can report bounded interim progress. Provider quota exhaustion pauses a child with its conversation retained for follow-up. Reload, quit, and session replacement stop child processes but checkpoint open conversations for restoration with the same parent session. Final results start or steer a parent turn; interim reports enter the next safe model request without starting one. Unread finals persist across reloads without starting a turn.",
 		promptSnippet: "Spawn and coordinate isolated child agents for explicitly delegated work",
 		promptGuidelines: [
 			"Use agents only when the user or applicable project instructions request delegation, subagents, or parallel agent work.",
