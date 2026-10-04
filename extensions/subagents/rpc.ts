@@ -9,12 +9,39 @@ const STOP_GRACE_MS = 1_000;
 const KILL_CLOSE_MS = 1_000;
 const STDERR_LIMIT_BYTES = 16 * 1024;
 const STDOUT_LINE_LIMIT_BYTES = 2 * 1024 * 1024;
+// Enough of a skipped record to identify its event type and message role.
+const SKIPPED_RECORD_PREFIX_CHARS = 512;
 const CHILD_ENV = "PI_SUBAGENT_CHILD";
 const PARENT_SESSION_ENV = "PI_SUBAGENT_PARENT_SESSION_ID";
 
 export interface RpcAgentEvent {
 	type: string;
 	[key: string]: any;
+}
+
+/**
+ * Synthetic event for a child RPC record that exceeded the per-line limit.
+ * Pi's `agent_end` repeats every message from the run, so long child runs can
+ * legitimately emit records of several megabytes that the parent never reads.
+ */
+export const SKIPPED_RECORD_EVENT = "subagent_rpc_record_skipped";
+
+export interface SkippedRecordEvent extends RpcAgentEvent {
+	type: typeof SKIPPED_RECORD_EVENT;
+	/** Event type parsed from the record prefix, when present. */
+	recordType?: string;
+	/** Message role parsed from the record prefix, when present. */
+	role?: string;
+	bytes: number;
+	limitBytes: number;
+}
+
+function describeSkippedRecord(prefix: string, bytes: number): SkippedRecordEvent {
+	// Pi serializes `type` first and messages start with `role`, so a short prefix
+	// identifies the record without buffering or parsing the whole line.
+	const recordType = /^\s*\{\s*"type"\s*:\s*"([\w-]{1,64})"/.exec(prefix)?.[1];
+	const role = /"message"\s*:\s*\{\s*"role"\s*:\s*"([\w-]{1,32})"/.exec(prefix)?.[1];
+	return { type: SKIPPED_RECORD_EVENT, recordType, role, bytes, limitBytes: STDOUT_LINE_LIMIT_BYTES };
 }
 
 export interface AgentClient {
@@ -86,46 +113,56 @@ function boundedStderr(current: string, chunk: string): string {
 	return marker + tail;
 }
 
+/**
+ * Splits a JSONL stream into lines while holding at most one line-limit of text.
+ * An oversized line is discarded as it streams in; only a short prefix is kept so
+ * the caller can tell what was dropped. Later lines keep flowing normally.
+ */
 function attachJsonlReader(
 	stream: NodeJS.ReadableStream,
 	onLine: (line: string) => void,
-	onError: (error: Error) => void,
+	onSkipped: (event: SkippedRecordEvent) => void,
 ): () => void {
 	const decoder = new StringDecoder("utf8");
 	let buffer = "";
-	let failed = false;
-	const failOversizedRecord = () => {
-		if (failed) return;
-		failed = true;
-		buffer = "";
-		onError(new Error(`Agent RPC record exceeded ${STDOUT_LINE_LIMIT_BYTES} bytes`));
-	};
-	const drain = () => {
-		for (;;) {
-			const newline = buffer.indexOf("\n");
-			if (newline < 0) return;
-			let line = buffer.slice(0, newline);
-			buffer = buffer.slice(newline + 1);
-			if (Buffer.byteLength(line) > STDOUT_LINE_LIMIT_BYTES) {
-				failOversizedRecord();
+	// Set while discarding the rest of an oversized line.
+	let skipping: { prefix: string; bytes: number } | undefined;
+	const emitLine = (line: string) => onLine(line.endsWith("\r") ? line.slice(0, -1) : line);
+	const consume = (text: string) => {
+		let rest = text;
+		if (skipping) {
+			const newline = rest.indexOf("\n");
+			if (newline < 0) {
+				skipping.bytes += Buffer.byteLength(rest);
 				return;
 			}
-			if (line.endsWith("\r")) line = line.slice(0, -1);
-			onLine(line);
-			if (failed) return;
+			skipping.bytes += Buffer.byteLength(rest.slice(0, newline));
+			onSkipped(describeSkippedRecord(skipping.prefix, skipping.bytes));
+			skipping = undefined;
+			rest = rest.slice(newline + 1);
+		}
+		buffer += rest;
+		for (;;) {
+			const newline = buffer.indexOf("\n");
+			if (newline < 0) break;
+			const line = buffer.slice(0, newline);
+			buffer = buffer.slice(newline + 1);
+			const bytes = Buffer.byteLength(line);
+			if (bytes > STDOUT_LINE_LIMIT_BYTES) onSkipped(describeSkippedRecord(line.slice(0, SKIPPED_RECORD_PREFIX_CHARS), bytes));
+			else emitLine(line);
+		}
+		const pendingBytes = Buffer.byteLength(buffer);
+		if (pendingBytes > STDOUT_LINE_LIMIT_BYTES) {
+			skipping = { prefix: buffer.slice(0, SKIPPED_RECORD_PREFIX_CHARS), bytes: pendingBytes };
+			buffer = "";
 		}
 	};
-	const onData = (chunk: Buffer | string) => {
-		if (failed) return;
-		buffer += typeof chunk === "string" ? chunk : decoder.write(chunk);
-		drain();
-		if (!failed && Buffer.byteLength(buffer) > STDOUT_LINE_LIMIT_BYTES) failOversizedRecord();
-	};
+	const onData = (chunk: Buffer | string) => consume(typeof chunk === "string" ? chunk : decoder.write(chunk));
 	const onEnd = () => {
-		if (failed) return;
-		buffer += decoder.end();
-		if (Buffer.byteLength(buffer) > STDOUT_LINE_LIMIT_BYTES) failOversizedRecord();
-		else if (buffer) onLine(buffer.endsWith("\r") ? buffer.slice(0, -1) : buffer);
+		consume(decoder.end());
+		if (skipping) onSkipped(describeSkippedRecord(skipping.prefix, skipping.bytes));
+		else if (buffer) emitLine(buffer);
+		skipping = undefined;
 		buffer = "";
 	};
 	stream.on("data", onData);
@@ -206,10 +243,7 @@ export class RpcProcessClient implements AgentClient {
 		this.stopReading = attachJsonlReader(
 			child.stdout,
 			(line) => this.handleLine(line),
-			(error) => {
-				this.fail(error);
-				void this.stop().catch(() => { /* exit reaper remains armed */ });
-			},
+			(event) => this.emitEvent(event),
 		);
 		try {
 			await this.send({ type: "get_state" });
@@ -297,7 +331,11 @@ export class RpcProcessClient implements AgentClient {
 			else pending.reject(new Error(message.error || `RPC command ${message.command ?? "unknown"} failed`));
 			return;
 		}
-		for (const listener of [...this.eventListeners]) listener(message);
+		this.emitEvent(message);
+	}
+
+	private emitEvent(event: RpcAgentEvent): void {
+		for (const listener of [...this.eventListeners]) listener(event);
 	}
 
 	private cancelUiRequest(request: any): void {

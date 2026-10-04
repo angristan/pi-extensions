@@ -137,7 +137,10 @@ default values.
 - Interim reports: 4,000 characters
 - Final child result: 24 KiB
 - Combined tool output: below Pi's 50 KiB limit
-- Structured transport record: 2 MiB
+- Structured transport record: 2 MiB. Larger child records are skipped without
+  buffering them. These are usually `agent_end` records, which repeat the whole
+  run. An oversized assistant message is replaced by a note in the child's
+  result; the child session file keeps the full text.
 - Retained stderr: 16 KiB tail
 - Queue-only messages per idle child: 4
 - Open child conversations: 6

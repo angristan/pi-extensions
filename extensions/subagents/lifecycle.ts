@@ -1,5 +1,5 @@
 import type { ContextFork, ContextMode } from "./context.js";
-import type { AgentClient, AgentClientFactory, AgentClientOptions, RpcAgentEvent } from "./rpc.js";
+import { SKIPPED_RECORD_EVENT, type AgentClient, type AgentClientFactory, type AgentClientOptions, type RpcAgentEvent } from "./rpc.js";
 
 export const RESULT_BYTES = 24 * 1024;
 const SUSPEND_ABORT_MS = 500;
@@ -77,6 +77,10 @@ export function sanitizeTerminal(text: string): string {
 		.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
 		.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
 		.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+}
+
+function formatMiB(bytes: number): string {
+	return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 export function compact(text: string, limit = 100): string {
@@ -261,6 +265,21 @@ export function createAgentLifecycle(options: AgentLifecycleOptions) {
 				const message = event.message.errorMessage || `Agent ${event.message.stopReason}`;
 				agent.error = boundedText(sanitizeTerminal(message), 4 * 1024);
 			} else agent.error = undefined;
+			return;
+		}
+		if (event.type === SKIPPED_RECORD_EVENT) {
+			// Most oversized records (`agent_end`, streaming updates, large tool
+			// results) carry nothing the parent reads. An oversized assistant message
+			// still counts as a turn, and its text is replaced by an explicit note so
+			// the final result never silently shows an earlier turn's text.
+			const size = formatMiB(Number(event.bytes) || 0);
+			agent.activity.push(`skipped ${event.recordType ?? "unknown"} RPC record (${size})`);
+			if (agent.activity.length > 12) agent.activity.shift();
+			if (event.recordType === "message_end" && event.role === "assistant") {
+				agent.usage.turns += 1;
+				agent.output = `[Assistant message omitted: its RPC record was ${size}, above the ${formatMiB(Number(event.limitBytes) || 0)} limit. The child session file keeps the full message.]`;
+			}
+			options.updateOverlay();
 			return;
 		}
 		if (event.type === "extension_error") {

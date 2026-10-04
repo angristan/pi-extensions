@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RpcProcessClient, type RpcAgentEvent } from "./rpc";
+import { RpcProcessClient, SKIPPED_RECORD_EVENT, type RpcAgentEvent } from "./rpc";
 
 const directories: string[] = [];
 const cleanupPids = new Set<number>();
@@ -158,23 +158,38 @@ setInterval(() => {}, 1000);
 	expect(processExists(pid)).toBe(false);
 });
 
-test("rejects oversized RPC records and reaps the offending child", async () => {
+test("skips oversized RPC records and keeps reading later records", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "pi-subagent-rpc-oversized-"));
 	directories.push(directory);
-	const pidFile = join(directory, "pid");
 	const script = join(directory, "oversized-rpc.mjs");
+	// Long child runs end with an `agent_end` record that repeats every message.
+	// The pipe splits it into many chunks, so this covers streaming discard.
 	await writeFile(script, `
-import { writeFileSync } from "node:fs";
-writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
-process.stdin.once("data", () => {
-  process.stdout.write("x".repeat(2 * 1024 * 1024 + 1));
+process.stdin.once("data", (chunk) => {
+  const message = JSON.parse(String(chunk).trim());
+  const huge = "x".repeat(3 * 1024 * 1024);
+  process.stdout.write(JSON.stringify({ type: "agent_end", messages: [{ role: "assistant", content: huge }] }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "message_end", message: { role: "assistant", content: huge } }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "response", id: message.id, command: message.type, success: true, data: {} }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "agent_settled" }) + "\\n");
 });
 setInterval(() => {}, 1000);
 `, "utf8");
 	const client = new RpcProcessClient({ command: process.execPath, args: [script], cwd: directory });
-	await expect(client.start()).rejects.toThrow("RPC record exceeded");
-	const pid = Number(await Bun.file(pidFile).text());
-	expect(processExists(pid)).toBe(false);
+	const events: RpcAgentEvent[] = [];
+	client.onEvent((event) => events.push(event));
+	try {
+		await client.start();
+		for (let attempt = 0; attempt < 100 && !events.some((event) => event.type === "agent_settled"); attempt += 1) await Bun.sleep(5);
+		expect(events.map(({ type, recordType, role }) => ({ type, recordType, role }))).toEqual([
+			{ type: SKIPPED_RECORD_EVENT, recordType: "agent_end", role: undefined },
+			{ type: SKIPPED_RECORD_EVENT, recordType: "message_end", role: "assistant" },
+			{ type: "agent_settled", recordType: undefined, role: undefined },
+		]);
+		expect(events[0]!.bytes).toBeGreaterThan(3 * 1024 * 1024);
+	} finally {
+		await client.stop();
+	}
 }, 5_000);
 
 test("keeps stderr inside its advertised byte limit", async () => {

@@ -9,7 +9,7 @@ import { compactContext, createContextFork, forkableMessages, type CompactContex
 import registerSubagents, { boundedText, buildChildArgs } from "./index";
 import { isProviderLimitError, type AgentSnapshot } from "./lifecycle";
 import { formatAgent } from "./rendering";
-import { RpcProcessClient, type AgentClient, type AgentClientFactory, type AgentClientOptions, type RpcAgentEvent } from "./rpc";
+import { RpcProcessClient, SKIPPED_RECORD_EVENT, type AgentClient, type AgentClientFactory, type AgentClientOptions, type RpcAgentEvent } from "./rpc";
 
 initTheme("dark", false);
 
@@ -816,6 +816,22 @@ describe("subagents", () => {
 		harness.clients[0].emit({ type: "agent_settled" });
 		const listed = await harness.tool.execute("list-failed", { action: "list" }, undefined, undefined, harness.ctx);
 		expect(listed.details.agents[0]).toMatchObject({ status: "failed", error });
+	});
+
+	test("completes despite skipped oversized RPC records without reusing stale output", async () => {
+		const harness = createHarness();
+		await spawnAgent(harness, "Write a long report");
+		const client = harness.clients[0];
+		client.emit({ type: "message_end", message: assistant("Earlier progress note") });
+		client.emit({ type: SKIPPED_RECORD_EVENT, recordType: "message_end", role: "assistant", bytes: 3 * 1024 * 1024, limitBytes: 2 * 1024 * 1024 });
+		client.emit({ type: SKIPPED_RECORD_EVENT, recordType: "agent_end", bytes: 5 * 1024 * 1024, limitBytes: 2 * 1024 * 1024 });
+		client.emit({ type: "agent_settled" });
+		const listed = await harness.tool.execute("list-skipped", { action: "list" }, undefined, undefined, harness.ctx);
+		const agent = listed.details.agents[0];
+		expect(agent.status).toBe("completed");
+		expect(agent.output).toContain("Assistant message omitted");
+		expect(agent.output).not.toContain("Earlier progress note");
+		expect(agent.usage.turns).toBe(2);
 	});
 
 	test("forks inherited context before the unresolved delegating tool call", async () => {
