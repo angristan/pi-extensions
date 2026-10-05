@@ -74,6 +74,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | [`background-jobs`](extensions/background-jobs/) | Run long-lived shell commands in the background with live status, without blocking the agent transcript |
 | [`herdr-process`](extensions/herdr-process/) | Run visible long-lived commands in sibling Herdr panes and control them from Pi |
 | [`herdr-tab-title`](extensions/herdr-tab-title/) | Keep Herdr tab labels synchronized with Pi session names |
+| [`mistral-error-retry`](extensions/mistral-error-retry/) | Auto-retry Mistral turns that end with `Provider stopped with: error` |
 | [`notifications`](extensions/notifications/) | Desktop notifications for agent activity, so you can context-switch away and get pinged |
 | [`openai-codex-fast`](extensions/openai-codex-fast/) | Toggle OpenAI Codex Fast mode and show a purple `fast` footer indicator when active |
 | [`prevent-sleep`](extensions/prevent-sleep/) | Keep macOS awake while Pi is actively processing an agent run |
