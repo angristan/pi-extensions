@@ -91,7 +91,9 @@ When a yielded terminal exits or hits its hard timeout and the model has not
 seen its final state, the extension reports it once the agent is idle: a
 `Finished <terminal>` message with the exit status and the unread output tail
 (8 KiB shared across terminals), sent with `triggerTurn` so the agent can act
-on it. Terminals stopped through `job_kill` or `/ps` are not reported. The
+on it. Terminals stopped through `job_kill` or `/ps` are not reported, nor are
+successful exits within 2 seconds of yielding (for example `sleep 10` with the
+default 10-second yield); failures and timeouts always are. The
 agent can therefore end its turn instead of blocking on a long wait.
 
 No-op stop requests render as `◷ <id> is already timed out.` instead of plain
