@@ -1513,11 +1513,14 @@ describe("bounded waits", () => {
 		expect(rendered).toContain("interrupted after 0s");
 	}, 5_000);
 
-	test("wakes an idle agent when a yielded job finishes unread", async () => {
+	test("wakes an idle agent when a job it left running finishes", async () => {
 		if (process.platform === "win32") return;
 		const harness = createHarness();
-		await startYielded(harness, "sleep 2.3; echo done-marker");
-		await Bun.sleep(2_600);
+		await startYielded(harness, "sleep 0.6; echo done-marker");
+		// The run ends while the job is still running: the job is handed off.
+		await fireSettled(harness);
+		expect(harness.sentMessages).toHaveLength(0);
+		await Bun.sleep(800);
 
 		expect(harness.sentMessages).toHaveLength(1);
 		const [{ message, options }] = harness.sentMessages;
@@ -1529,39 +1532,37 @@ describe("bounded waits", () => {
 		expect(rendered).toContain("done-marker");
 	}, 5_000);
 
-	test("skips a success right after yielding but reports a quick failure", async () => {
-		if (process.platform === "win32") return;
-		const harness = createHarness();
-		await startYielded(harness, "sleep 0.4; echo ok");
-		await harness.tools.get("bash").execute("start", {
-			command: "sleep 0.4; echo broken; exit 3",
-			reasoning: "failing terminal",
-			"yield-time_ms": 250,
-		}, undefined, undefined, harness.ctx);
-		await Bun.sleep(800);
-
-		expect(harness.sentMessages).toHaveLength(1);
-		expect(harness.sentMessages[0].message.content).toContain("exit 3");
-		expect(harness.sentMessages[0].message.content).not.toContain("ok\n");
-	}, 5_000);
-
-	test("waits for the run to settle and skips jobs the agent already read", async () => {
+	test("does not report jobs that finish during the run, even unread or failed", async () => {
 		if (process.platform === "win32") return;
 		const harness = createHarness();
 		harness.ctx.idle = false;
-		const unread = await startYielded(harness, "sleep 0.4; echo unread; exit 1");
+		await startYielded(harness, "sleep 0.4; echo broken; exit 3");
+		await Bun.sleep(600);
+
+		harness.ctx.idle = true;
+		await fireSettled(harness);
+		expect(harness.sentMessages).toHaveLength(0);
+	}, 5_000);
+
+	test("reports a handed-off job at the next settle and skips ones the agent read", async () => {
+		if (process.platform === "win32") return;
+		const harness = createHarness();
+		const unread = await startYielded(harness, "sleep 0.8; echo unread");
 		const read = await harness.tools.get("bash").execute("start", {
-			command: "sleep 0.4; echo read; exit 1",
+			command: "sleep 0.8; echo read",
 			reasoning: "second terminal",
 			"yield-time_ms": 250,
 		}, undefined, undefined, harness.ctx);
+		await fireSettled(harness);
+		// A new run starts before either job finishes, and reads one of them.
+		harness.ctx.idle = false;
 		await harness.tools.get("job_output").execute("wait", {
 			reasoning: "collect result",
 			job_id: read.details.id,
 			wait: true,
 			waitMs: 5_000,
 		}, undefined, undefined, harness.ctx);
-		await Bun.sleep(400);
+		await Bun.sleep(300);
 		expect(harness.sentMessages).toHaveLength(0);
 
 		harness.ctx.idle = true;
@@ -1571,10 +1572,11 @@ describe("bounded waits", () => {
 		expect(harness.sentMessages[0].message.content).not.toContain(read.details.id);
 	}, 5_000);
 
-	test("does not report jobs the agent stopped", async () => {
+	test("does not report handed-off jobs the agent stopped", async () => {
 		if (process.platform === "win32") return;
 		const harness = createHarness({ killGraceMs: 50 });
 		const started = await startYielded(harness, "sleep 30");
+		await fireSettled(harness);
 		await harness.tools.get("job_kill").execute("kill", {
 			reasoning: "no longer needed",
 			job_id: started.details.id,

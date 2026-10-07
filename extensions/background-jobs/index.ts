@@ -169,10 +169,6 @@ const OUTPUT_QUIET_MS = 25;
 const COMPLETION_NOTICE_TYPE = "background-job-finished";
 // Total output budget for one completion notice, shared by its terminals.
 const COMPLETION_NOTICE_OUTPUT_BYTES = 8 * 1024;
-// A command that ends just after the yield window (`sleep 10` with the default
-// 10 s yield) is not news. Successful exits this soon after yielding are not
-// reported; failures and timeouts always are.
-const COMPLETION_NOTICE_MIN_BACKGROUND_MS = 2_000;
 
 export type JobStatus = "running" | "stopping" | "completed" | "failed" | "killed" | "timed_out";
 
@@ -253,8 +249,12 @@ interface ManagedJob {
 	killReason?: "user" | "timeout" | "shutdown";
 	/** The model has received a result showing this job's final status. */
 	exitReported?: boolean;
-	/** When the job yielded into the background. */
-	yieldedAt?: number;
+	/**
+	 * The agent ended a run while this job was still running, so it relies on a
+	 * completion notice. Jobs that finish during a run are the agent's to read;
+	 * in practice it has usually moved past them (a re-run test, a quick lookup).
+	 */
+	handedOff?: boolean;
 	suppressPersistence: boolean;
 	sessionGeneration: number;
 	activityListeners: Set<() => void>;
@@ -890,13 +890,10 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		job.resolveCompletion();
 		trimRetained();
 		updateUi();
-		// A stop requested by the model or the user needs no report; a natural exit
-		// or hard timeout of a yielded job may finish after the agent stopped looking.
+		// Report a natural exit or hard timeout of a job the agent left running when
+		// it went idle. A stop requested by the model or the user needs no report.
 		const stoppedOnRequest = job.killReason !== undefined && job.killReason !== "timeout";
-		const quickSuccess = job.status === "completed"
-			&& (job.endedAt ?? 0) - (job.yieldedAt ?? 0) < COMPLETION_NOTICE_MIN_BACKGROUND_MS;
-		const reportable = !stoppedOnRequest && !quickSuccess;
-		if (job.backgrounded && reportable && !job.suppressPersistence && job.sessionGeneration === sessionGeneration) {
+		if (job.handedOff && !stoppedOnRequest && !job.suppressPersistence && job.sessionGeneration === sessionGeneration) {
 			unreportedCompletions.add(job);
 			setTimeout(flushCompletionNotices, 0);
 		}
@@ -1290,7 +1287,6 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			// the terminal is genuinely managed in the background. Activate controls
 			// before returning so the next model turn can act on this terminal ID.
 			job.backgrounded = true;
-			job.yieldedAt = Date.now();
 			activateTerminalTools();
 			updateUi();
 		}
@@ -1536,9 +1532,12 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		return box;
 	});
 
-	// Jobs that finished during a run the agent then ended without reading are
-	// reported once the agent is idle again.
-	pi.on("agent_settled", () => { setTimeout(flushCompletionNotices, 0); });
+	// The agent went idle: jobs still running are now handed off, and handed-off
+	// jobs that finished during the last run (unread) are reported.
+	pi.on("agent_settled", () => {
+		for (const job of activeBackgroundJobs()) job.handedOff = true;
+		setTimeout(flushCompletionNotices, 0);
+	});
 
 	pi.registerCommand("jobs", {
 		description: "List, inspect, or stop managed background terminals",

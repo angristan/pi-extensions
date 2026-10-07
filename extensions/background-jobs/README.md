@@ -87,14 +87,18 @@ While `job_output` or `terminal_write` waits, its card shows `Waiting for
   stopped the wait and the terminal is still running, so a quiet terminal is
   not mistaken for a hung one. The card shows `interrupted after <elapsed>`.
 
-When a yielded terminal exits or hits its hard timeout and the model has not
-seen its final state, the extension reports it once the agent is idle: a
-`Finished <terminal>` message with the exit status and the unread output tail
-(8 KiB shared across terminals), sent with `triggerTurn` so the agent can act
-on it. Terminals stopped through `job_kill` or `/ps` are not reported, nor are
-successful exits within 2 seconds of yielding (for example `sleep 10` with the
-default 10-second yield); failures and timeouts always are. The
-agent can therefore end its turn instead of blocking on a long wait.
+When the agent ends a run while a yielded terminal is still running, that
+terminal is handed off. When it later exits or hits its hard timeout and the
+model has not seen its final state, the extension reports it once the agent is
+idle: a `Finished <terminal>` message with the exit status and the unread
+output tail (8 KiB shared across terminals), sent with `triggerTurn` so the
+agent can act on it. The agent can therefore end its turn instead of blocking
+on a long wait.
+
+Terminals that finish during a run are not reported, even unread: the agent is
+still active and can read them, and in past sessions it had usually moved past
+them (a re-run test, a reopened tunnel). Terminals stopped through `job_kill`
+or `/ps` are not reported either.
 
 No-op stop requests render as `◷ <id> is already timed out.` instead of plain
 status text. The `/jobs` and `/ps` live viewer uses that same normal
