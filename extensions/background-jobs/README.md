@@ -79,8 +79,8 @@ branch:
 ```
 
 While `job_output` or `terminal_write` waits, its card shows `Waiting for
-<terminal>`, the output received so far, and `<waited> / <limit>`, advancing
-once per second. The terminal's own runtime appears once the wait ends. A wait never holds the user behind it:
+<terminal>`, the output received so far, and `<waited> / <limit> · job running
+<runtime>`, advancing once per second. A wait never holds the user behind it:
 
 - it returns within 250 ms when a message is queued, and the result says so;
 - when the user interrupts it, the result tells the model that the user

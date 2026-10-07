@@ -1468,9 +1468,8 @@ describe("bounded waits", () => {
 		const partial = tool.renderResult(updates[0], { expanded: false, isPartial: true }, theme, { args: { reasoning: "follow progress" } });
 		const partialText = partial.render(160).join("\n");
 		expect(partialText).toContain("Waiting for");
-		expect(partialText).toMatch(/Waiting for .* · \d+s \/ 10s/);
-		// One timer while waiting: the job's runtime would tick beside it.
-		expect(partialText).not.toContain("running in");
+		// Both timers are labelled: the wait against its limit, then the job runtime.
+		expect(partialText).toMatch(/Waiting for .* · \d+s \/ 10s · job running \d+s/);
 		expect(partialText).toContain("(no new output yet)");
 	}, 8_000);
 

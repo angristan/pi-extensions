@@ -717,11 +717,11 @@ class TerminalInteractionComponent {
 		const terminal = this.theme.fg("mdHeading", compactCommand(name, 64));
 		const goal = reasoning ? ` ${this.theme.fg("dim", "to")} ${this.theme.fg("accent", reasoning)}` : "";
 		const elapsed = compactDuration(duration(details, this.observedAt));
-		// While waiting, show one timer: this wait against its limit. The job's own
-		// runtime would tick alongside it with a slightly different value.
+		// While waiting, label both timers: the wait against its limit, and the
+		// job's total runtime. Unlabelled, they read as two clocks for one thing.
 		const waited = wait ? compactDuration((wait.endedAt ?? this.observedAt) - wait.startedAt) : "";
 		const meta = waiting
-			? [this.theme.fg("dim", `· ${waited} / ${compactDuration(wait!.limitMs)}`)]
+			? [this.theme.fg("dim", `· ${waited} / ${compactDuration(wait!.limitMs)} · job ${details.status} ${elapsed}`)]
 			: [this.theme.fg("dim", `· ${details.status} in ${elapsed}`)];
 		if (wait?.end === "interrupted") meta.push(this.theme.fg("warning", `· interrupted after ${waited}`));
 		else if (wait?.end === "message") meta.push(this.theme.fg("dim", `· new message after ${waited}`));
