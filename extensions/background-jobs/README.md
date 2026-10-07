@@ -15,6 +15,8 @@ sessions without blocking the agent or losing track of child processes.
   - codemode scripts receive a structured result instead of the text: `output` (last 256 KiB), `truncated`, `exit_code`, `wall_time_seconds`, `status`, and `job_id` while the command is still running; the first four match Pi's built-in bash result
 - `terminal_write` — write characters to a yielded terminal or poll with empty input
 - `job_output` — read only output produced since the previous cursor
+  - `waitMs` (up to 5 minutes) waits for the next output; with `wait: true` it waits for exit instead and ignores progress output
+  - `wait: true` suits commands expected to finish within `waitMs`; to follow a watcher or progress log, omit it so each call returns on the next output
 - `job_kill` — stop one terminal immediately, with a required short reason
 
 All tool reasons start lowercase so they compose naturally after action verbs
@@ -75,6 +77,22 @@ branch:
 • Stopping Confirm application health to finish the demo
   └ ◌ confirm-app-he-ff5ed8c6 · SIGTERM sent
 ```
+
+While `job_output` or `terminal_write` waits, its card shows `Waiting for
+<terminal>`, the output received so far, and `waited <elapsed> of <limit>`,
+advancing once per second. A wait never holds the user behind it:
+
+- it returns within 250 ms when a message is queued, and the result says so;
+- when the user interrupts it, the result tells the model that the user
+  stopped the wait and the terminal is still running, so a quiet terminal is
+  not mistaken for a hung one. The card shows `interrupted after <elapsed>`.
+
+When a yielded terminal exits or hits its hard timeout and the model has not
+seen its final state, the extension reports it once the agent is idle: a
+`Finished <terminal>` message with the exit status and the unread output tail
+(8 KiB shared across terminals), sent with `triggerTurn` so the agent can act
+on it. Terminals stopped through `job_kill` or `/ps` are not reported. The
+agent can therefore end its turn instead of blocking on a long wait.
 
 No-op stop requests render as `◷ <id> is already timed out.` instead of plain
 status text. The `/jobs` and `/ps` live viewer uses that same normal
@@ -144,6 +162,7 @@ entry.
 - PTY wrapper and child process groups are both terminated to prevent orphans.
 - A process-global synchronous `exit` reaper is shared across extension reloads and tracks callbacks only while child PIDs are live. It remains a last resort for hard exits and does not install signal listeners or suppress default signal behavior.
 - Yielded command lifecycle changes update the shared overlay and any open live viewer without emitting desktop notifications or mutating historical transcript rows.
+- Wait cards tick only while their tool call runs; the settled result freezes its counters at the observation time.
 
 ## Dependencies
 

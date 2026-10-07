@@ -4,6 +4,7 @@ import { statSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
+	Box,
 	Container,
 	Key,
 	Text,
@@ -155,6 +156,19 @@ const MAX_POLL_MS = 5 * 60 * 1_000;
 // Cap it at MAX_POLL_MS so a stuck process still returns control to the model,
 // which can then re-poll or kill. No kill happens here — this is a soft wait.
 const DEFAULT_WAIT_COMPLETION_MS = MAX_POLL_MS;
+// A waiting job_output/terminal_write card advances its elapsed counters at
+// this rate, so a quiet terminal does not look frozen.
+const WAIT_PROGRESS_TICK_MS = 1_000;
+// Pi holds a message typed during a tool call until the call returns. Waits
+// check for one at this rate and return early, so the user is never stuck
+// behind a multi-minute wait.
+const PENDING_MESSAGE_POLL_MS = 250;
+// PTYs commonly echo input immediately and emit the program response in the
+// next chunk. A short quiet window returns both as one interaction.
+const OUTPUT_QUIET_MS = 25;
+const COMPLETION_NOTICE_TYPE = "background-job-finished";
+// Total output budget for one completion notice, shared by its terminals.
+const COMPLETION_NOTICE_OUTPUT_BYTES = 8 * 1024;
 
 export type JobStatus = "running" | "stopping" | "completed" | "failed" | "killed" | "timed_out";
 
@@ -177,6 +191,18 @@ export interface JobSnapshot {
 	outputCursor?: number;
 }
 
+/** Why a bounded wait returned. */
+type WaitEnd = "output" | "exit" | "deadline" | "interrupted" | "message";
+
+/** One bounded job_output/terminal_write wait; `end` is unset while waiting. */
+interface WaitInfo {
+	startedAt: number;
+	limitMs: number;
+	until: "output" | "exit";
+	endedAt?: number;
+	end?: WaitEnd;
+}
+
 interface JobToolDetails extends JobSnapshot {
 	managedTerminal: true;
 	/** Wall-clock time when this immutable tool-result snapshot was observed. */
@@ -184,6 +210,7 @@ interface JobToolDetails extends JobSnapshot {
 	output?: string;
 	cursor?: number;
 	outputOmittedBytes?: number;
+	wait?: WaitInfo;
 }
 
 interface JobViewerSnapshot extends JobSnapshot {
@@ -220,6 +247,8 @@ interface ManagedJob {
 	finalized: boolean;
 	backgrounded: boolean;
 	killReason?: "user" | "timeout" | "shutdown";
+	/** The model has received a result showing this job's final status. */
+	exitReported?: boolean;
 	suppressPersistence: boolean;
 	sessionGeneration: number;
 	activityListeners: Set<() => void>;
@@ -480,11 +509,26 @@ function structuredResult(job: ManagedJob): ManagedBashStructuredResult {
 	};
 }
 
-function formatDeltaText(job: ManagedJob, read: CursorRead): string {
+/**
+ * Explain a wait that ended for a reason other than the terminal itself. Without
+ * this, an interrupted wait reads like an empty poll, and the model can mistake
+ * a healthy quiet terminal for a hung one.
+ */
+function waitNote(job: ManagedJob, wait: WaitInfo | undefined): string | undefined {
+	if (!wait?.end || !isActive(job)) return undefined;
+	const waited = compactDuration((wait.endedAt ?? wait.startedAt) - wait.startedAt);
+	if (wait.end === "interrupted") return `(the user interrupted this wait after ${waited}; the terminal is still running, so this does not mean it hung)`;
+	if (wait.end === "message") return `(wait ended after ${waited} because a new message is queued; the terminal is still running)`;
+	return undefined;
+}
+
+function formatDeltaText(job: ManagedJob, read: CursorRead, wait?: WaitInfo): string {
 	const lines = [`${statusSymbol(job.status)} ${job.id} · ${job.status} · ${compactDuration(duration(job))}`];
 	if (job.exitCode !== undefined) lines[0] += ` · exit ${job.exitCode}`;
 	if (read.text) lines.push(read.text.trimEnd());
 	else lines.push(isActive(job) ? "(no new output; terminal is still running)" : "(no new output)");
+	const note = waitNote(job, wait);
+	if (note) lines.push(note);
 	return lines.join("\n");
 }
 
@@ -649,7 +693,7 @@ class TerminalInteractionComponent {
 		private readonly args: any,
 		private readonly expanded: boolean,
 		private readonly theme: any,
-		private readonly action: "read" | "write",
+		private readonly action: "read" | "write" | "finished",
 	) {
 		// Tool results are historical snapshots. Never let an active status make
 		// an old transcript row depend on Date.now(): unrelated streaming renders
@@ -662,18 +706,29 @@ class TerminalInteractionComponent {
 		const details = this.details;
 		if (!details) return [];
 		const wrote = this.action === "write" && typeof this.args?.chars === "string" && this.args.chars.length > 0;
-		const verb = this.action === "read" ? "Read from" : wrote ? "Interacted with" : "Waited for";
+		const wait = details.wait;
+		const waiting = Boolean(wait && !wait.end);
+		const verb = this.action === "finished"
+			? "Finished"
+			: waiting ? "Waiting for" : this.action === "read" ? "Read from" : wrote ? "Interacted with" : "Waited for";
 		const color = statusColor(details.status);
 		const name = details.description || details.id;
 		const reasoning = compactCommand(normalizeToolReasoning(this.args?.reasoning), 96);
 		const terminal = this.theme.fg("mdHeading", compactCommand(name, 64));
 		const goal = reasoning ? ` ${this.theme.fg("dim", "to")} ${this.theme.fg("accent", reasoning)}` : "";
 		const elapsed = compactDuration(duration(details, this.observedAt));
-		const header = `${this.theme.fg(color, "•")} ${verb} ${terminal}${goal} ${this.theme.fg("dim", `· ${details.status} in ${elapsed}`)}`;
+		const meta = [this.theme.fg("dim", `· ${details.status} in ${elapsed}`)];
+		if (wait) {
+			const waited = compactDuration((wait.endedAt ?? this.observedAt) - wait.startedAt);
+			if (waiting) meta.push(this.theme.fg("dim", `· waited ${waited} of ${compactDuration(wait.limitMs)}`));
+			else if (wait.end === "interrupted") meta.push(this.theme.fg("warning", `· interrupted after ${waited}`));
+			else if (wait.end === "message") meta.push(this.theme.fg("dim", `· new message after ${waited}`));
+		}
+		const header = `${this.theme.fg(color, "•")} ${verb} ${terminal}${goal} ${meta.join(" ")}`;
 		const output = details.output?.replace(/\s+$/, "") ?? "";
 		const rows = renderCommandOutput(output, max, {
 			maxRows: this.expanded ? undefined : 5,
-			emptyText: "(no new output)",
+			emptyText: waiting ? "(no new output yet)" : "(no new output)",
 		});
 		return [
 			fitToolLine(header, max),
@@ -691,6 +746,8 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	const registerCard = options.registerOverlayCard ?? registerOverlayCard;
 	let activeCtx: any;
 	let sessionGeneration = 0;
+	// Background jobs that finished without the model seeing their final state.
+	const unreportedCompletions = new Set<ManagedJob>();
 
 	const deactivateTerminalTools = () => {
 		const active = pi.getActiveTools();
@@ -826,6 +883,13 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		job.resolveCompletion();
 		trimRetained();
 		updateUi();
+		// A stop requested by the model or the user needs no report; a natural exit
+		// or hard timeout of a yielded job may finish after the agent stopped looking.
+		const reportable = job.killReason === undefined || job.killReason === "timeout";
+		if (job.backgrounded && reportable && !job.suppressPersistence && job.sessionGeneration === sessionGeneration) {
+			unreportedCompletions.add(job);
+			setTimeout(flushCompletionNotices, 0);
+		}
 
 		if (!job.suppressPersistence && job.sessionGeneration === sessionGeneration) {
 			pi.appendEntry(ENTRY_TYPE, snapshot(job, PERSISTED_OUTPUT_BYTES));
@@ -967,55 +1031,115 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		updateUi();
 		return job;
 	};
-	const waitForCompletion = async (job: ManagedJob, signal: AbortSignal | undefined, waitMs = DEFAULT_WAIT_COMPLETION_MS) => {
-		// Never block unboundedly: wait for completion OR a soft deadline,
-		// whichever comes first, then return so the model can re-decide
-		// (re-poll / kill / move on). The process is NOT killed here; only an
-		// explicit hard timeout or stop request ends a still-running terminal.
-		if (!isActive(job) || waitMs <= 0) return;
-		if (signal?.aborted) return;
-		await new Promise<void>((resolvePromise) => {
+	/**
+	 * Wait for new output (`until: "output"`) or exit (`until: "exit"`), bounded
+	 * by a soft deadline. Never kills the process: only an explicit hard timeout
+	 * or stop request ends a still-running terminal. Also returns when the tool
+	 * call is aborted or a message is queued, so a long wait never holds the user.
+	 */
+	const waitForJob = (job: ManagedJob, options: {
+		cursor: number;
+		waitMs: number;
+		until: "output" | "exit";
+		signal?: AbortSignal;
+		hasPendingMessages?: () => boolean;
+	}): Promise<WaitEnd> => {
+		const { cursor, waitMs, until, signal, hasPendingMessages } = options;
+		const messageQueued = () => {
+			try { return Boolean(hasPendingMessages?.()); } catch { return false; }
+		};
+		if (!isActive(job)) return Promise.resolve("exit");
+		if (signal?.aborted) return Promise.resolve("interrupted");
+		if (waitMs <= 0) return Promise.resolve("deadline");
+		if (messageQueued()) return Promise.resolve("message");
+		return new Promise<WaitEnd>((resolvePromise) => {
 			let settled = false;
-			const finish = () => {
-				if (settled) return;
-				settled = true;
-				if (deadline) clearTimeout(deadline);
-				signal?.removeEventListener("abort", finish);
-				resolvePromise();
-			};
-			const deadline = setTimeout(finish, waitMs);
-			job.completion.then(finish);
-			signal?.addEventListener("abort", finish, { once: true });
-		});
-	};
-	const waitForActivity = async (job: ManagedJob, cursor: number, waitMs: number, signal?: AbortSignal) => {
-		if (!isActive(job) || waitMs <= 0 || signal?.aborted) return;
-		await new Promise<void>((resolvePromise) => {
-			let settled = false;
-			let deadline: ReturnType<typeof setTimeout> | undefined;
 			let quietTimer: ReturnType<typeof setTimeout> | undefined;
-			const finish = () => {
+			const finish = (end: WaitEnd) => {
 				if (settled) return;
 				settled = true;
-				if (deadline) clearTimeout(deadline);
+				clearTimeout(deadline);
 				if (quietTimer) clearTimeout(quietTimer);
+				if (messagePoll) clearInterval(messagePoll);
 				job.activityListeners.delete(onActivity);
-				signal?.removeEventListener("abort", finish);
-				resolvePromise();
+				signal?.removeEventListener("abort", onAbort);
+				resolvePromise(end);
 			};
+			const onAbort = () => finish("interrupted");
+			// finalize() sets the final status before emitting activity, so this also
+			// observes exit for `until: "exit"` waits.
 			const onActivity = () => {
-				if (!isActive(job)) { finish(); return; }
-				if (job.output.cursor <= cursor) return;
+				if (!isActive(job)) { finish("exit"); return; }
+				if (until !== "output" || job.output.cursor <= cursor) return;
 				if (quietTimer) clearTimeout(quietTimer);
-				// PTYs commonly echo input immediately and emit the program response in
-				// the next chunk. A short quiet window returns both as one interaction.
-				quietTimer = setTimeout(finish, 25);
+				quietTimer = setTimeout(() => finish("output"), OUTPUT_QUIET_MS);
 			};
+			const deadline = setTimeout(() => finish("deadline"), waitMs);
+			const messagePoll = hasPendingMessages
+				? setInterval(() => { if (messageQueued()) finish("message"); }, PENDING_MESSAGE_POLL_MS)
+				: undefined;
 			job.activityListeners.add(onActivity);
-			deadline = setTimeout(finish, waitMs);
-			if (signal) signal.addEventListener("abort", finish, { once: true });
+			signal?.addEventListener("abort", onAbort, { once: true });
 			onActivity();
 		});
+	};
+	/**
+	 * Stream the wait into the tool card: new output as it arrives (coalesced)
+	 * and a once-per-second heartbeat for the elapsed counters. Without this the
+	 * card stays empty for the whole wait, which reads as a hang.
+	 */
+	const startWaitProgress = (job: ManagedJob, cursor: number, wait: WaitInfo, onUpdate: any): (() => void) => {
+		if (typeof onUpdate !== "function") return () => {};
+		const emit = () => {
+			const read = job.output.read(cursor, PARTIAL_OUTPUT_BYTES);
+			onUpdate({
+				content: [{ type: "text", text: formatDeltaText(job, read) }],
+				details: {
+					managedTerminal: true,
+					...snapshot(job, PERSISTED_OUTPUT_BYTES),
+					observedAt: Date.now(),
+					output: read.text,
+					cursor: read.cursor,
+					outputOmittedBytes: read.omittedBytes,
+					wait: { ...wait },
+				} satisfies JobToolDetails,
+			});
+		};
+		const refresh = new CoalescedRefresh(emit);
+		const onActivity = () => refresh.trigger();
+		job.activityListeners.add(onActivity);
+		const ticker = setInterval(emit, WAIT_PROGRESS_TICK_MS);
+		ticker.unref?.();
+		emit();
+		return () => {
+			clearInterval(ticker);
+			refresh.dispose();
+			job.activityListeners.delete(onActivity);
+		};
+	};
+	/** Run one bounded wait with live progress; undefined when no wait happened. */
+	const waitWithProgress = async (job: ManagedJob, options: {
+		cursor: number;
+		waitMs: number;
+		until: "output" | "exit";
+		signal?: AbortSignal;
+		onUpdate?: any;
+		ctx?: any;
+	}): Promise<WaitInfo | undefined> => {
+		if (!isActive(job) || options.waitMs <= 0) return undefined;
+		const wait: WaitInfo = { startedAt: Date.now(), limitMs: options.waitMs, until: options.until };
+		const ctx = options.ctx;
+		const stopProgress = startWaitProgress(job, options.cursor, wait, options.onUpdate);
+		try {
+			wait.end = await waitForJob(job, {
+				...options,
+				hasPendingMessages: typeof ctx?.hasPendingMessages === "function" ? () => ctx.hasPendingMessages() : undefined,
+			});
+		} finally {
+			stopProgress();
+		}
+		wait.endedAt = Date.now();
+		return wait;
 	};
 	const waitForYield = async (job: ManagedJob, yieldMs: number, signal?: AbortSignal) => {
 		if (!isActive(job)) return;
@@ -1037,6 +1161,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	const readDelta = (job: ManagedJob, cursor: number, advanceAgentCursor: boolean, outputBytes: number = TOOL_OUTPUT_BYTES): { read: CursorRead; details: JobToolDetails } => {
 		const read = job.output.read(cursor, outputBytes);
 		if (advanceAgentCursor) job.agentCursor = read.cursor;
+		if (!isActive(job)) job.exitReported = true;
 		return {
 			read,
 			details: {
@@ -1048,6 +1173,37 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 				outputOmittedBytes: read.omittedBytes,
 			},
 		};
+	};
+	/**
+	 * Report background jobs that finished without the model seeing their final
+	 * state, and start a turn so the agent can act on them. Only an idle agent is
+	 * woken: during a run the agent may still read the job, and agent_settled
+	 * retries once the run ends.
+	 */
+	const flushCompletionNotices = () => {
+		if (unreportedCompletions.size === 0 || !activeCtx?.isIdle?.()) return;
+		const finished = [...unreportedCompletions]
+			.filter((job) => !job.exitReported && job.sessionGeneration === sessionGeneration);
+		unreportedCompletions.clear();
+		if (finished.length === 0) return;
+		const outputBytes = Math.max(1_024, Math.floor(COMPLETION_NOTICE_OUTPUT_BYTES / finished.length));
+		const reports = finished.map((job) => ({ job, ...readDelta(job, job.agentCursor, true, outputBytes) }));
+		const intro = finished.length === 1
+			? "A background terminal finished after you last checked it."
+			: `${finished.length} background terminals finished after you last checked them.`;
+		try {
+			pi.sendMessage({
+				customType: COMPLETION_NOTICE_TYPE,
+				content: [
+					`${intro} Report the result if it matters to the user's task.`,
+					...reports.map(({ job, read }) => formatDeltaText(job, read)),
+				].join("\n\n"),
+				display: true,
+				details: { jobs: reports.map(({ details }) => details) },
+			}, { triggerTurn: true });
+		} catch {
+			// The session is shutting down; there is no agent left to notify.
+		}
 	};
 	const writeInput = async (job: ManagedJob, chars: string, closeStdin: boolean) => {
 		if (!isActive(job)) return;
@@ -1212,21 +1368,21 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	pi.registerTool({
 		name: "job_output",
 		label: "Job Output",
-		description: "Read only new bounded output from a managed terminal. Returns a cursor and can wait for new output or completion.",
+		description: "Read only new bounded output from a managed terminal. Returns a cursor and can wait for new output or completion. Waits end early when the user sends a message.",
 		parameters: {
 			type: "object",
 			properties: {
 				reasoning: { type: "string", description: REASONING_DESCRIPTION },
 				job_id: { type: "string", description: "Full terminal ID or an unambiguous prefix" },
 				cursor: { type: "integer", minimum: 0, description: "Optional output cursor; defaults to this tool's last read position" },
-				waitMs: { type: "integer", minimum: 0, maximum: MAX_POLL_MS, description: `Wait this many milliseconds for new output. Also caps wait:true. Defaults to 0 (instant) for read polls, ${DEFAULT_WAIT_COMPLETION_MS} ms for wait:true.` },
-				wait: { type: "boolean", description: "Wait for the terminal to finish, bounded by waitMs (no kill; returns 'still running' if not done).", default: false },
+				waitMs: { type: "integer", minimum: 0, maximum: MAX_POLL_MS, description: `Wait up to this many milliseconds; returns on the next output, or on exit with wait:true. Defaults to 0 (instant) for read polls, ${DEFAULT_WAIT_COMPLETION_MS} ms for wait:true.` },
+				wait: { type: "boolean", description: "Wait for exit and ignore progress output, bounded by waitMs (no kill). Use only when the command should finish within waitMs; to follow a watcher or progress log, omit it and set waitMs.", default: false },
 				max_output_tokens: { type: "integer", minimum: 1, description: `Output byte budget, expressed in tokens (~${BYTES_PER_TOKEN} bytes/token). Defaults to ${DEFAULT_OUTPUT_TOKENS}; larger requests cap at ${MAX_OUTPUT_BYTES} bytes.` },
 			},
 			required: ["reasoning", "job_id"],
 		} as any,
 		executionMode: "sequential",
-		async execute(_id: string, params: any, signal?: AbortSignal) {
+		async execute(_id: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) {
 			const job = findJob(params.job_id);
 			if (!job) throw new Error(`Background terminal not found or prefix is ambiguous: ${params.job_id}`);
 			const explicitCursor = params.cursor !== undefined;
@@ -1234,10 +1390,16 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			if (!Number.isInteger(cursor) || cursor < 0) throw new Error("cursor must be a non-negative integer");
 			const waitMs = params.waitMs ?? 0;
 			if (!Number.isInteger(waitMs) || waitMs < 0 || waitMs > MAX_POLL_MS) throw new Error(`waitMs must be an integer between 0 and ${MAX_POLL_MS}`);
-			if (params.wait) await waitForCompletion(job, signal, params.waitMs ?? DEFAULT_WAIT_COMPLETION_MS);
-			else await waitForActivity(job, cursor, waitMs, signal);
+			const wait = await waitWithProgress(job, {
+				cursor,
+				waitMs: params.wait ? params.waitMs ?? DEFAULT_WAIT_COMPLETION_MS : waitMs,
+				until: params.wait ? "exit" : "output",
+				signal,
+				onUpdate,
+				ctx,
+			});
 			const { read, details } = readDelta(job, cursor, !explicitCursor, outputBytesForTokens(params.max_output_tokens));
-			return { content: [{ type: "text", text: formatDeltaText(job, read) }], details };
+			return { content: [{ type: "text", text: formatDeltaText(job, read, wait) }], details: wait ? { ...details, wait } : details };
 		},
 		renderCall: () => new Container(),
 		renderResult: (result: any, options: any, theme: any, context: any) =>
@@ -1262,7 +1424,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			required: ["reasoning", "job_id"],
 		} as any,
 		executionMode: "sequential",
-		async execute(_id: string, params: any, signal?: AbortSignal) {
+		async execute(_id: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) {
 			const job = findJob(params.job_id);
 			if (!job) throw new Error(`Background terminal not found or prefix is ambiguous: ${params.job_id}`);
 			const chars = typeof params.chars === "string" ? params.chars : "";
@@ -1270,9 +1432,9 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			if (!Number.isInteger(yieldMs) || yieldMs < 0 || yieldMs > MAX_POLL_MS) throw new Error(`yield-time_ms must be an integer between 0 and ${MAX_POLL_MS}`);
 			const cursor = job.agentCursor;
 			if (chars || params.close_stdin) await writeInput(job, chars, Boolean(params.close_stdin));
-			await waitForActivity(job, cursor, yieldMs, signal);
+			const wait = await waitWithProgress(job, { cursor, waitMs: yieldMs, until: "output", signal, onUpdate, ctx });
 			const { read, details } = readDelta(job, cursor, true, outputBytesForTokens(params.max_output_tokens));
-			return { content: [{ type: "text", text: formatDeltaText(job, read) }], details };
+			return { content: [{ type: "text", text: formatDeltaText(job, read, wait) }], details: wait ? { ...details, wait } : details };
 		},
 		renderCall: () => new Container(),
 		renderResult: (result: any, options: any, theme: any, context: any) =>
@@ -1350,6 +1512,23 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		else if (choice === "Stop terminal" && !job.killReason && await confirmKill(job, ctx)) requestKill(job, "user");
 	};
 
+	pi.registerMessageRenderer?.(COMPLETION_NOTICE_TYPE, (message: any, options: any, theme: any) => {
+		const reports: JobToolDetails[] = Array.isArray(message.details?.jobs) ? message.details.jobs : [];
+		if (reports.length === 0) return new Text(String(message.content ?? ""), 0, 0);
+		const container = new Container();
+		for (const details of reports) {
+			container.addChild(new TerminalInteractionComponent(details, undefined, Boolean(options?.expanded), theme, "finished"));
+		}
+		if (!options?.outputPad) return container;
+		const box = new Box(options.outputPad, 0);
+		box.addChild(container);
+		return box;
+	});
+
+	// Jobs that finished during a run the agent then ended without reading are
+	// reported once the agent is idle again.
+	pi.on("agent_settled", () => { setTimeout(flushCompletionNotices, 0); });
+
 	pi.registerCommand("jobs", {
 		description: "List, inspect, or stop managed background terminals",
 		handler: handleJobsCommand,
@@ -1370,6 +1549,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		sessionGeneration += 1;
 		activeCtx = ctx;
 		jobs.clear();
+		unreportedCompletions.clear();
 		for (const entry of ctx.sessionManager.getEntries()) {
 			if (entry.type !== "custom" || entry.customType !== ENTRY_TYPE || !entry.data) continue;
 			const data = entry.data as JobSnapshot;
@@ -1397,6 +1577,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		for (const job of stopping) finalize(job, null, null);
 		activeCtx?.ui.setStatus(STATUS_KEY, undefined);
 		jobs.clear();
+		unreportedCompletions.clear();
 		overlayCard.invalidate();
 		clearBackgroundTerminalService(terminalService);
 		activeCtx = undefined;

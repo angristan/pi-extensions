@@ -23,6 +23,8 @@ interface Harness {
 	events: Array<{ name: string; payload: any }>;
 	entryRendererTypes: string[];
 	appendedEntries: Array<{ type: string; data: any }>;
+	sentMessages: Array<{ message: any; options: any }>;
+	messageRenderers: Map<string, any>;
 	overlay: { definition?: any; invalidations: number };
 	ctx: any;
 }
@@ -59,9 +61,15 @@ function createHarness(options: HarnessOptions = {}): Harness {
 	const events: Array<{ name: string; payload: any }> = [];
 	const entryRendererTypes: string[] = [];
 	const appendedEntries: Array<{ type: string; data: any }> = [];
+	const sentMessages: Array<{ message: any; options: any }> = [];
+	const messageRenderers = new Map<string, any>();
 	const overlay: { definition?: any; invalidations: number } = { invalidations: 0 };
 	const ctx = {
 		cwd: process.cwd(),
+		idle: true,
+		pendingMessages: false,
+		isIdle() { return this.idle; },
+		hasPendingMessages() { return this.pendingMessages; },
 		mode: "tui",
 		hasUI: true,
 		ui: {
@@ -94,6 +102,8 @@ function createHarness(options: HarnessOptions = {}): Harness {
 			handlers.set(name, registered);
 		},
 		appendEntry(type: string, data: any) { appendedEntries.push({ type, data }); },
+		sendMessage(message: any, options: any) { sentMessages.push({ message, options }); },
+		registerMessageRenderer(type: string, renderer: any) { messageRenderers.set(type, renderer); },
 		events: {
 			emit(name: string, payload: any) { events.push({ name, payload }); },
 			on() { return () => {}; },
@@ -130,6 +140,8 @@ function createHarness(options: HarnessOptions = {}): Harness {
 		events,
 		entryRendererTypes,
 		appendedEntries,
+		sentMessages,
+		messageRenderers,
 		overlay,
 		ctx,
 	};
@@ -1416,4 +1428,142 @@ describe("PTY terminals", () => {
 			await rm(directory, { recursive: true, force: true });
 		}
 	}, 3_000);
+});
+
+describe("bounded waits", () => {
+	const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+
+	async function startYielded(harness: Harness, command: string) {
+		await startHarness(harness);
+		return harness.tools.get("bash").execute("start", {
+			command,
+			reasoning: "start a quiet terminal",
+			timeout: 60,
+			"yield-time_ms": 250,
+		}, undefined, undefined, harness.ctx);
+	}
+
+	async function fireSettled(harness: Harness) {
+		for (const handler of harness.handlers.get("agent_settled") ?? []) await handler({}, harness.ctx);
+		await Bun.sleep(20);
+	}
+
+	test("streams progress while waiting and returns on the next output", async () => {
+		if (process.platform === "win32") return;
+		const harness = createHarness();
+		const started = await startYielded(harness, "sleep 1.3; echo tick; sleep 30");
+		const updates: any[] = [];
+		const tool = harness.tools.get("job_output");
+		const result = await tool.execute("read", {
+			reasoning: "follow progress",
+			job_id: started.details.id,
+			waitMs: 10_000,
+		}, undefined, (partial: any) => updates.push(partial), harness.ctx);
+
+		expect(result.content[0].text).toContain("tick");
+		expect(result.details.wait.end).toBe("output");
+		// The initial update mounts the card; the heartbeat advances it while quiet.
+		expect(updates.length).toBeGreaterThanOrEqual(2);
+		expect(updates.at(-1).details.observedAt).toBeGreaterThan(updates[0].details.observedAt);
+		const partial = tool.renderResult(updates[0], { expanded: false, isPartial: true }, theme, { args: { reasoning: "follow progress" } });
+		const partialText = partial.render(160).join("\n");
+		expect(partialText).toContain("Waiting for");
+		expect(partialText).toContain("of 10s");
+		expect(partialText).toContain("(no new output yet)");
+	}, 8_000);
+
+	test("returns early when the user queues a message", async () => {
+		if (process.platform === "win32") return;
+		const harness = createHarness();
+		const started = await startYielded(harness, "sleep 30");
+		setTimeout(() => { harness.ctx.pendingMessages = true; }, 200);
+		const t0 = Date.now();
+		const result = await harness.tools.get("job_output").execute("wait", {
+			reasoning: "wait for exit",
+			job_id: started.details.id,
+			wait: true,
+			waitMs: 60_000,
+		}, undefined, undefined, harness.ctx);
+
+		expect(Date.now() - t0).toBeLessThan(2_000);
+		expect(result.details.status).toBe("running");
+		expect(result.details.wait.end).toBe("message");
+		expect(result.content[0].text).toContain("a new message is queued");
+	}, 5_000);
+
+	test("tells the model that an aborted wait was the user, not a hang", async () => {
+		if (process.platform === "win32") return;
+		const harness = createHarness();
+		const started = await startYielded(harness, "sleep 30");
+		const controller = new AbortController();
+		setTimeout(() => controller.abort(), 200);
+		const tool = harness.tools.get("job_output");
+		const result = await tool.execute("wait", {
+			reasoning: "wait for exit",
+			job_id: started.details.id,
+			wait: true,
+			waitMs: 60_000,
+		}, controller.signal, undefined, harness.ctx);
+
+		expect(result.details.wait.end).toBe("interrupted");
+		expect(result.content[0].text).toContain("the user interrupted this wait");
+		const rendered = tool.renderResult(result, { expanded: false }, theme, { args: { reasoning: "wait for exit" } }).render(160).join("\n");
+		expect(rendered).toContain("Read from");
+		expect(rendered).toContain("interrupted after 0s");
+	}, 5_000);
+
+	test("wakes an idle agent when a yielded job finishes unread", async () => {
+		if (process.platform === "win32") return;
+		const harness = createHarness();
+		await startYielded(harness, "sleep 0.5; echo done-marker");
+		await Bun.sleep(1_000);
+
+		expect(harness.sentMessages).toHaveLength(1);
+		const [{ message, options }] = harness.sentMessages;
+		expect(options.triggerTurn).toBe(true);
+		expect(message.content).toContain("done-marker");
+		expect(message.content).toContain("exit 0");
+		const rendered = harness.messageRenderers.get(message.customType)(message, { expanded: false }, theme).render(160).join("\n");
+		expect(rendered).toContain("Finished");
+		expect(rendered).toContain("done-marker");
+	}, 5_000);
+
+	test("waits for the run to settle and skips jobs the agent already read", async () => {
+		if (process.platform === "win32") return;
+		const harness = createHarness();
+		harness.ctx.idle = false;
+		const unread = await startYielded(harness, "sleep 0.4; echo unread");
+		const read = await harness.tools.get("bash").execute("start", {
+			command: "sleep 0.4; echo read",
+			reasoning: "second terminal",
+			"yield-time_ms": 250,
+		}, undefined, undefined, harness.ctx);
+		await harness.tools.get("job_output").execute("wait", {
+			reasoning: "collect result",
+			job_id: read.details.id,
+			wait: true,
+			waitMs: 5_000,
+		}, undefined, undefined, harness.ctx);
+		await Bun.sleep(400);
+		expect(harness.sentMessages).toHaveLength(0);
+
+		harness.ctx.idle = true;
+		await fireSettled(harness);
+		expect(harness.sentMessages).toHaveLength(1);
+		expect(harness.sentMessages[0].message.content).toContain(unread.details.id);
+		expect(harness.sentMessages[0].message.content).not.toContain(read.details.id);
+	}, 5_000);
+
+	test("does not report jobs the agent stopped", async () => {
+		if (process.platform === "win32") return;
+		const harness = createHarness({ killGraceMs: 50 });
+		const started = await startYielded(harness, "sleep 30");
+		await harness.tools.get("job_kill").execute("kill", {
+			reasoning: "no longer needed",
+			job_id: started.details.id,
+		}, undefined, undefined, harness.ctx);
+		await Bun.sleep(300);
+		await fireSettled(harness);
+		expect(harness.sentMessages).toHaveLength(0);
+	}, 5_000);
 });
