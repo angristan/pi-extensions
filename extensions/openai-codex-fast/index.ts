@@ -34,8 +34,9 @@ export default function (pi: ExtensionAPI) {
 	let rejectedModel: string | undefined;
 
 	const updateStatus = (ctx: ExtensionContext) => {
-		const unavailable = !canRequestPriority(ctx.model) || rejectedModel === ctx.model?.id;
-		ctx.ui.setStatus("fast", enabled ? (unavailable ? "fast unavailable" : "fast") : undefined);
+		const visible = enabled && canRequestPriority(ctx.model);
+		const unavailable = rejectedModel === ctx.model?.id;
+		ctx.ui.setStatus("fast", visible ? (unavailable ? "fast unavailable" : "fast") : undefined);
 	};
 
 	const describeState = (ctx: ExtensionContext): string => {

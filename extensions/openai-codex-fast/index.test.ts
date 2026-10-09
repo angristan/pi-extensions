@@ -51,24 +51,30 @@ for (const id of ["gpt-5.4", "gpt-6.1-sol", "future-model"]) {
 	});
 }
 
-test("keeps other providers unchanged and explains the unavailable badge", async () => {
+test("hides the badge and leaves requests unchanged for other providers", async () => {
 	const h = harness();
-	h.ctx.model = { provider: "anthropic", id: "claude" };
-	h.emit("model_select");
-	expect(h.statuses.get("fast")).toBe("fast unavailable");
-	expect(h.emit("before_provider_request", { payload: { input: "hello" } })).toBeUndefined();
-	await h.command("status");
-	expect(h.notices.at(-1)?.[0]).toContain("only applies to openai-codex");
+	h.emit("session_start");
+	expect(h.statuses.get("fast")).toBe("fast");
+	for (const provider of ["anthropic", "openai", "mistral"]) {
+		h.ctx.model = { provider, id: "gpt-6.1-sol" };
+		h.emit("model_select");
+		expect(h.statuses.get("fast")).toBeUndefined();
+		expect(h.emit("before_provider_request", { payload: { input: "hello" } })).toBeUndefined();
+		await h.command("on");
+		expect(h.statuses.get("fast")).toBeUndefined();
+		await h.command("status");
+		expect(h.notices.at(-1)?.[0]).toContain("only applies to openai-codex");
+	}
 	h.ctx.model = { provider: "openai-codex", id: "future-model" };
 	h.emit("model_select");
 	expect(h.statuses.get("fast")).toBe("fast");
 });
 
-test("reports a missing model without claiming priority is active", async () => {
+test("hides the badge when no model is selected", async () => {
 	const h = harness();
 	h.ctx.model = undefined;
 	h.emit("session_start");
-	expect(h.statuses.get("fast")).toBe("fast unavailable");
+	expect(h.statuses.get("fast")).toBeUndefined();
 	await h.command("status");
 	expect(h.notices.at(-1)?.[0]).toContain("no model selected");
 });

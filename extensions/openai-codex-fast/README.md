@@ -9,9 +9,9 @@ Fast mode is off by default because priority service can consume ChatGPT credits
 at a higher rate. The bundled `footer` extension shows `fast` in purple when
 priority is requested. The badge does not confirm that the server used priority.
 
-When enabled with another provider or no selected model, the footer shows
-`fast unavailable` and requests are left unchanged. An explicit API error that
-rejects priority also shows `fast unavailable` and a warning. The extension
+With another provider or no selected model, the footer shows no fast-mode badge
+and requests are left unchanged. An explicit OpenAI Codex API error that rejects
+priority shows `fast unavailable` and a warning. The extension
 leaves the original error unchanged and sends no fallback request. Ordinary
 errors such as rate limits and timeouts do not change the badge.
 
