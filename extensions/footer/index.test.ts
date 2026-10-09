@@ -190,6 +190,13 @@ test("renders model and extension badges responsively", () => {
 	eventHandlers.get(FOOTER_MODEL_BADGE_EVENT)?.({ source: "routing" });
 	expect(plain()).not.toContain("priority badge");
 
+	extensionStatuses.set("fast", "fast");
+	expect(plain()).toContain("Test Model high fast");
+	extensionStatuses.set("fast", "fast unavailable");
+	expect(plain()).toContain("Test Model high fast unavailable");
+	extensionStatuses.delete("fast");
+	expect(plain()).not.toContain("fast");
+
 	extensionStatuses.set("plan", "plan 2/3 with a deliberately long description");
 	extensionStatuses.set("context-management", "ctx:auto");
 	expect(plain(32)).toContain("ctx:auto");
