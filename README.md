@@ -37,6 +37,7 @@ in a running session, or restart pi. Update later with `pi update --extensions`.
 | [`code-blocks`](extensions/code-blocks/) | Renders fenced code blocks with syntax highlighting, including Zig, horizontal rules, and copy-friendly unframed code rows |
 | [`footer`](extensions/footer/) | A status line below the transcript showing session, model, context usage, and cost |
 | [`hyperlinks`](extensions/hyperlinks/) | Render local file paths as clickable OSC 8 terminal hyperlinks, and expose the helper to other extensions |
+| [`image-paste`](extensions/image-paste/) | Pasted screenshots become highlighted `[Image N]` tokens with thumbnails, attachments, and a viewer |
 | [`overlay-stack`](extensions/overlay-stack/) | Composes independent top-right overlay cards and toggles them with `Ctrl+Shift+O` or `/overlay` |
 | [`petit-chat-input-bar`](extensions/petit-chat-input-bar/) | A tiny animated companion sprite above the editor, with smart and manual modes |
 | [`turn-separator`](extensions/turn-separator/) | Optional, default-off rule between tool loops with per-response TTFT/TPS |
@@ -105,6 +106,7 @@ A few extensions read optional config from Pi's agent directory (`~/.pi/agent` b
 
 - `auto-session-title.json` — `{"provider": "mistral", "model": "mistral-medium-3.5"}` (or `{"provider": "apple-foundation-models", "model": "system", "thinkingLevel": "off"}` for Apple's on-device model)
 - `accent-color.json` — `{"color": "#FF8205"}` (accepts `#RRGGBB` / `#RGB`)
+- `image-paste.json` — `{"promptPreview": true, "transcriptPreview": true, "previewRows": "auto", "tokenColor": "warning"}` (also set with `/images`)
 - `notifications.json` — `{"enabled": true}`
 - `openai-codex-fast.json` — `{"enabled": true}`
 - `telegram-notifications.json` — created with owner-only permissions by `/telegram setup`
