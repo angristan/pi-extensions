@@ -80,6 +80,16 @@ describe("serverConfig", () => {
 		expect(config).not.toHaveProperty("toolExposure");
 	});
 
+	test("applies per-tool overrides in both directions", () => {
+		const exposeWrite = serverConfig(notes, { ...DEFAULT_SETTINGS, tools: { Notes: { edit: true, search: false } } });
+		expect(exposeWrite).toMatchObject({ exposure: "hidden", toolExposure: { edit: "codemode" } });
+		expect(exposeWrite?.toolExposure).not.toHaveProperty("search");
+		expect(exposeWrite?.description).toEndWith("Some tools are hidden.");
+
+		const hideOne = serverConfig(notes, { ...DEFAULT_SETTINGS, allowWrites: ["notes"], tools: { notes: { guess: false } } });
+		expect(hideOne).toMatchObject({ exposure: "codemode", toolExposure: { guess: "hidden" } });
+	});
+
 	test("registers disabled connectors without enabling them", () => {
 		expect(serverConfig(notes, { ...DEFAULT_SETTINGS, disabled: ["notes"] })?.enabled).toBe(false);
 	});

@@ -45,15 +45,28 @@ write tools, and the extension does not register it.
 Tools that appear on the gateway after the last refresh stay hidden until the
 next refresh classifies them.
 
+## Choosing tools
+
+Per-tool overrides take precedence over these defaults in both directions:
+turn on one write tool without allowing the others, or turn off a read-only
+tool. Open the searchable checklist from the picker ("Choose tools…") or with
+`/mistral-connectors tools <name>`; Enter toggles a tool and Escape saves. Pi
+re-registers the server once, when the checklist closes.
+
+An override equal to the default is not saved, so allowing or hiding write
+tools later still applies to every tool you did not pick.
+
 ## Commands
 
 | Command | Action |
 |---|---|
-| `/mistral-connectors` | Pick a connector to enable, disable, rename, or allow write tools; connect another connector; or refresh |
+| `/mistral-connectors` | Pick a connector to enable, disable, rename, choose its tools, or allow write tools; connect another connector; or refresh |
 | `/mistral-connectors status` | List ready connectors, exposed tool counts, write access, and errors |
 | `/mistral-connectors refresh` | Fetch the connector list now |
 | `/mistral-connectors enable <name>` / `disable <name>` | Connect or keep a connector disconnected |
 | `/mistral-connectors writes <name> on\|off` | Allow or hide its write tools |
+| `/mistral-connectors tools <name>` | Open the tool checklist; outside the TUI, list tools with their state |
+| `/mistral-connectors tools <name> <tool> on\|off\|reset` | Override one tool, or return it to the default |
 | `/mistral-connectors rename <name> [short]` | Register it as `mistral_<short>`; without `short`, use the alias again |
 | `/mistral-connectors connect <name>` | Print the sign-in URL of an OAuth connector; run `refresh` afterwards |
 
@@ -72,6 +85,7 @@ The extension uses the `mistral` provider's API key: `MISTRAL_API_KEY`, or the
   "disabled": ["slack"],
   "allowWrites": ["notion"],
   "names": { "sentry_investigation_agent_v2_read_only_42a4": "sentry" },
+  "tools": { "gmail": { "create_draft": true }, "linear": { "list_users": false } },
   "exposure": "codemode",
   "baseUrl": "https://api.mistral.ai"
 }
@@ -79,6 +93,8 @@ The extension uses the `mistral` provider's API key: `MISTRAL_API_KEY`, or the
 
 - `disabled`: connector aliases that do not connect.
 - `allowWrites`: connector aliases whose write tools are exposed.
+- `tools`: per-tool overrides by connector alias, then tool name: `true`
+  exposes the tool and `false` hides it.
 - `names`: short server names by connector alias; letters, digits, `_`, and
   `-` only.
 - `exposure`: `codemode` (default), `deferred`, `direct`, or `hidden`. See

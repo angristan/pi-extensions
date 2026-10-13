@@ -2,7 +2,10 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import mistralConnectors from "./index";
+
+initTheme("dark", false);
 
 const originalAgentDirectory = process.env.PI_CODING_AGENT_DIR;
 const originalFetch = globalThis.fetch;
@@ -49,8 +52,20 @@ function load() {
 	} as any);
 	const ctx = {
 		hasUI: false,
+		mode: "tui",
 		modelRegistry: { getApiKeyForProvider: async (provider: string) => (provider === "mistral" ? "test-key" : undefined) },
-		ui: { notify: (message: string) => notices.push(message) },
+		ui: {
+			notify: (message: string) => notices.push(message),
+			// Drives the checklist like a user: render, toggle the first tool, then close with Escape.
+			custom: (factory: any) =>
+				new Promise<void>((resolve) => {
+					const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+					const component = factory({ requestRender: () => {} }, theme, {}, resolve);
+					notices.push(component.render(80).join("\n"));
+					component.handleInput("\r");
+					component.handleInput("\x1b");
+				}),
+		},
 	};
 	const run = (args: string) => command.handler(args, ctx);
 	const start = () => sessionStart({ type: "session_start" }, ctx);
@@ -116,6 +131,37 @@ test("warns once when a background refresh fails, even with a cached list", asyn
 	expect(notices).toHaveLength(1);
 	expect(notices[0]).toContain("refresh failed: HTTP 503");
 	expect(notices[0]).toContain("Using the list fetched");
+});
+
+test("saves per-tool overrides only when they differ from the default", async () => {
+	const notes = { ...connector("notes"), tools: [{ name: "read", annotations: { readOnlyHint: true } }, { name: "send" }] };
+	serve({ connectors: [notes] });
+	const { configs, run } = load();
+	const saved = () => JSON.parse(readFileSync(join(agentDirectory, "mistral-connectors.json"), "utf8")).tools;
+	await run("refresh");
+
+	await run("tools notes send on");
+	expect(saved()).toEqual({ notes: { send: true } });
+	expect(configs.get("mistral_notes").toolExposure).toEqual({ read: "codemode", send: "codemode" });
+
+	await run("tools notes read on");
+	expect(saved()).toEqual({ notes: { send: true } });
+
+	await run("tools notes send reset");
+	expect(saved()).toEqual({});
+	expect(configs.get("mistral_notes").toolExposure).toEqual({ read: "codemode" });
+});
+
+test("saves checklist changes once when it closes", async () => {
+	serve({ connectors: [connector("notes")] });
+	const { calls, notices, run } = load();
+	await run("refresh");
+
+	await run("tools notes");
+	expect(notices.at(-2)).toContain("notes tools");
+	expect(notices.at(-1)).toBe("notes: 0/1 tools exposed.");
+	// Hiding the only tool leaves nothing to expose, so the server is unregistered.
+	expect(calls).toEqual(["register mistral_notes", "unregister mistral_notes"]);
 });
 
 test("reports a missing connector instead of changing settings", async () => {

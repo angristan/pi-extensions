@@ -29,12 +29,14 @@ export interface ConnectorSettings {
 	allowWrites: string[];
 	/** Short server names by alias, for connectors whose aliases make tool names too long. */
 	names: Record<string, string>;
+	/** Per-tool overrides by alias, then tool name: `true` exposes, `false` hides, either way. */
+	tools: Record<string, Record<string, boolean>>;
 	exposure: McpExposure;
 	baseUrl: string;
 }
 
 export const DEFAULT_BASE_URL = "https://api.mistral.ai";
-export const DEFAULT_SETTINGS: ConnectorSettings = { disabled: [], allowWrites: [], names: {}, exposure: "codemode", baseUrl: DEFAULT_BASE_URL };
+export const DEFAULT_SETTINGS: ConnectorSettings = { disabled: [], allowWrites: [], names: {}, tools: {}, exposure: "codemode", baseUrl: DEFAULT_BASE_URL };
 /** Pi shortens longer `mcp__<server>__<tool>` names with a hash suffix, matching provider limits. */
 export const MAX_TOOL_NAME_LENGTH = 64;
 export const VALID_NAME = /^[A-Za-z0-9_-]+$/;
@@ -126,10 +128,27 @@ const listed = (aliases: readonly string[], alias: string) => aliases.some((item
 export const isDisabled = (settings: ConnectorSettings, alias: string) => listed(settings.disabled, alias);
 export const allowsWrites = (settings: ConnectorSettings, alias: string) => listed(settings.allowWrites, alias);
 
+/** Value of a settings map keyed by alias, matching the alias case-insensitively. */
+function byAlias<T>(map: Record<string, T>, alias: string): T | undefined {
+	return Object.entries(map).find(([key]) => key.toLowerCase() === alias.toLowerCase())?.[1];
+}
+
 /** Pi server name for a connector, using its configured short name when there is one. */
 export function connectorServerName(connector: Connector, settings: ConnectorSettings): string {
-	const entry = Object.entries(settings.names).find(([alias]) => alias.toLowerCase() === connector.alias.toLowerCase());
-	return serverName(entry?.[1] ?? connector.alias);
+	return serverName(byAlias(settings.names, connector.alias) ?? connector.alias);
+}
+
+export function toolOverrides(settings: ConnectorSettings, alias: string): Record<string, boolean> {
+	return byAlias(settings.tools, alias) ?? {};
+}
+
+/** Whether a tool is exposed without an override: read-only tools, or all tools once writes are allowed. */
+export function exposedByDefault(tool: ConnectorTool, settings: ConnectorSettings, alias: string): boolean {
+	return tool.readOnly || allowsWrites(settings, alias);
+}
+
+export function isToolExposed(tool: ConnectorTool, settings: ConnectorSettings, alias: string): boolean {
+	return toolOverrides(settings, alias)[tool.name] ?? exposedByDefault(tool, settings, alias);
 }
 
 /** Whether Pi would shorten some exposed tool names with a hash suffix. */
@@ -140,33 +159,42 @@ export function hasLongToolNames(connector: Connector, settings: ConnectorSettin
 
 /** Tools the model can reach for a connector under the current settings. */
 export function exposedTools(connector: Connector, settings: ConnectorSettings): ConnectorTool[] {
-	return allowsWrites(settings, connector.alias) ? connector.tools : connector.tools.filter((tool) => tool.readOnly);
+	return connector.tools.filter((tool) => isToolExposed(tool, settings, connector.alias));
 }
 
-function describe(connector: Connector, writes: boolean): string {
+function describe(connector: Connector, exposed: readonly ConnectorTool[]): string {
 	const summary = connector.description ? `${connector.displayName}: ${connector.description}` : `${connector.displayName} Mistral connector`;
 	const trimmed = summary.length > MAX_DESCRIPTION_CHARS ? `${summary.slice(0, MAX_DESCRIPTION_CHARS - 1)}…` : summary;
-	return writes ? trimmed : `${trimmed} Write tools are hidden.`;
+	// Tell the model what it cannot do, so it does not search for a missing tool.
+	if (exposed.length === connector.tools.length) return trimmed;
+	const writesHidden = exposed.every((tool) => tool.readOnly) && connector.tools.some((tool) => !tool.readOnly);
+	return `${trimmed} ${writesHidden ? "Write tools are hidden." : "Some tools are hidden."}`;
 }
 
 /**
  * Pi MCP config for one connector, or undefined when it is not ready or would expose no tools.
  *
- * Without write access, the server is `hidden` and only tools known to be read-only are
- * re-exposed by exact name. Tools the gateway adds later stay hidden until the next refresh
- * classifies them, so an unknown tool is never exposed as writable by accident.
+ * Without write access, the server is `hidden` and exposed tools are listed by exact name, so
+ * tools the gateway adds later stay hidden until the next refresh classifies them and an
+ * unknown tool is never exposed as writable by accident. With write access, the server uses
+ * the configured exposure and only tools turned off by an override are hidden.
  */
 export function serverConfig(connector: Connector, settings: ConnectorSettings): McpServerConfig | undefined {
 	if (!connector.ready) return undefined;
-	const writes = allowsWrites(settings, connector.alias);
-	const tools = exposedTools(connector, settings);
-	if (tools.length === 0) return undefined;
+	const exposed = exposedTools(connector, settings);
+	if (exposed.length === 0) return undefined;
+	const base: McpExposure = allowsWrites(settings, connector.alias) ? settings.exposure : "hidden";
+	const toolExposure = Object.fromEntries(
+		connector.tools
+			.map((tool): [string, McpExposure] => [tool.name, exposed.includes(tool) ? settings.exposure : "hidden"])
+			.filter(([, exposure]) => exposure !== base),
+	);
 	return {
 		url: gatewayUrl(settings.baseUrl, connector.id),
 		auth: { provider: AUTH_PROVIDER },
-		description: describe(connector, writes),
+		description: describe(connector, exposed),
 		enabled: !isDisabled(settings, connector.alias),
-		exposure: writes ? settings.exposure : "hidden",
-		...(writes ? {} : { toolExposure: Object.fromEntries(tools.map((tool) => [tool.name, settings.exposure])) }),
+		exposure: base,
+		...(Object.keys(toolExposure).length ? { toolExposure } : {}),
 	};
 }

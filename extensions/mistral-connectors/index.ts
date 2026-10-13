@@ -1,5 +1,5 @@
-import { getAgentDir, type ExtensionAPI, type ExtensionContext, type McpExposure, type McpServerConfig } from "@earendil-works/pi-coding-agent";
-import type { AutocompleteItem } from "@earendil-works/pi-tui";
+import { getAgentDir, getSettingsListTheme, type ExtensionAPI, type ExtensionContext, type McpExposure, type McpServerConfig } from "@earendil-works/pi-coding-agent";
+import { type AutocompleteItem, type SettingItem, SettingsList } from "@earendil-works/pi-tui";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -12,8 +12,11 @@ import {
 	connectorServerName,
 	type ConnectorSettings,
 	DEFAULT_SETTINGS,
+	exposedByDefault,
 	exposedTools,
 	hasLongToolNames,
+	isToolExposed,
+	toolOverrides,
 	isDisabled,
 	parseBootstrap,
 	serverConfig,
@@ -24,10 +27,11 @@ export const COMMAND = "mistral-connectors";
 /** Same lifetime as Mistral Vibe's bootstrap cache. */
 export const CACHE_TTL_MS = 10 * 60 * 1000;
 const EXPOSURES: readonly McpExposure[] = ["codemode", "deferred", "direct", "hidden"];
-const SUBCOMMANDS = ["status", "refresh", "enable", "disable", "writes", "rename", "connect"];
+const SUBCOMMANDS = ["status", "refresh", "enable", "disable", "writes", "tools", "rename", "connect"];
 /** Subcommands that take the alias of a ready connector. */
-const READY_SUBCOMMANDS = ["enable", "disable", "writes", "rename"];
-const USAGE = `Usage: /${COMMAND} [status|refresh|enable <name>|disable <name>|writes <name> on|off|rename <name> [short]|connect <name>]`;
+const READY_SUBCOMMANDS = ["enable", "disable", "writes", "tools", "rename"];
+const TOOL_STATES = ["on", "off", "reset"];
+const USAGE = `Usage: /${COMMAND} [status|refresh|enable <name>|disable <name>|writes <name> on|off|tools <name> [<tool> on|off|reset]|rename <name> [short]|connect <name>]`;
 
 export const settingsPath = () => join(getAgentDir(), "mistral-connectors.json");
 export const cachePath = () => join(getAgentDir(), "mistral-connectors-cache.json");
@@ -53,6 +57,7 @@ async function writeJson(path: string, value: unknown): Promise<void> {
 	await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
 
 export function loadSettings(): ConnectorSettings {
@@ -62,6 +67,11 @@ export function loadSettings(): ConnectorSettings {
 		allowWrites: strings(raw?.allowWrites),
 		names: Object.fromEntries(
 			Object.entries(raw?.names && typeof raw.names === "object" ? raw.names : {}).filter((entry): entry is [string, string] => typeof entry[1] === "string" && VALID_NAME.test(entry[1])),
+		),
+		tools: Object.fromEntries(
+			Object.entries(isRecord(raw?.tools) ? raw.tools : {}).flatMap(([alias, overrides]) =>
+				isRecord(overrides) ? [[alias, Object.fromEntries(Object.entries(overrides).filter((entry): entry is [string, boolean] => typeof entry[1] === "boolean"))]] : [],
+			),
 		),
 		exposure: EXPOSURES.includes(raw?.exposure as McpExposure) ? (raw!.exposure as McpExposure) : DEFAULT_SETTINGS.exposure,
 		baseUrl: typeof raw?.baseUrl === "string" && raw.baseUrl.trim() ? raw.baseUrl.trim() : DEFAULT_SETTINGS.baseUrl,
@@ -173,6 +183,8 @@ export default function (pi: ExtensionAPI) {
 		if (name !== connectorServerName(connector, DEFAULT_SETTINGS)) parts.push(`as ${name}`);
 		if (exposed === 0) parts.push(`not registered: no read-only tools, use /${COMMAND} writes ${connector.alias} on`);
 		else if (hasLongToolNames(connector, settings)) parts.push(`tool names too long, Pi adds hash suffixes: use /${COMMAND} rename ${connector.alias} <short>`);
+		const overrides = Object.keys(toolOverrides(settings, connector.alias)).filter((tool) => connector.tools.some((known) => known.name === tool)).length;
+		if (overrides) parts.push(`${overrides} tool override${overrides === 1 ? "" : "s"}`);
 		if (registrationErrors.has(connector.alias)) parts.push(`registration failed: ${registrationErrors.get(connector.alias)}`);
 		if (connector.error) parts.push(`error: ${connector.error}`);
 		return parts.join(" · ");
@@ -233,6 +245,65 @@ export default function (pi: ExtensionAPI) {
 		return `${connector.alias} is now the ${name} MCP server.`;
 	};
 
+	/**
+	 * Saves per-tool choices. A choice equal to the default removes the override, so allowing or
+	 * hiding write tools later still applies to tools the user never picked.
+	 */
+	const setTools = async (connector: Connector, changes: ReadonlyMap<string, boolean | "reset">) => {
+		await updateSettings((current) => {
+			const overrides = { ...toolOverrides(current, connector.alias) };
+			for (const [name, state] of changes) {
+				const tool = connector.tools.find((known) => known.name === name);
+				if (!tool) continue;
+				if (state === "reset" || state === exposedByDefault(tool, current, connector.alias)) delete overrides[name];
+				else overrides[name] = state;
+			}
+			const tools = Object.fromEntries(Object.entries(current.tools).filter(([alias]) => alias.toLowerCase() !== connector.alias.toLowerCase()));
+			return { ...current, tools: Object.keys(overrides).length ? { ...tools, [connector.alias]: overrides } : tools };
+		});
+		return `${connector.alias}: ${exposedTools(connector, settings).length}/${connector.tools.length} tools exposed.`;
+	};
+
+	const toolNote = (connector: Connector, name: string): string => {
+		const tool = connector.tools.find((known) => known.name === name)!;
+		const override = toolOverrides(settings, connector.alias)[name] !== undefined;
+		return `${tool.readOnly ? "read-only" : "may write"} · default ${exposedByDefault(tool, settings, connector.alias) ? "on" : "off"}${override ? " · overridden" : ""}`;
+	};
+
+	const toolsText = (connector: Connector): string => {
+		const width = Math.max(0, ...connector.tools.map((tool) => tool.name.length));
+		const lines = connector.tools.map((tool) => `  ${(isToolExposed(tool, settings, connector.alias) ? "on" : "off").padEnd(3)} ${tool.name.padEnd(width)}  ${toolNote(connector, tool.name)}`);
+		return [`${connector.alias} tools:`, ...lines, `Change one with /${COMMAND} tools ${connector.alias} <tool> on|off|reset.`].join("\n");
+	};
+
+	/** Searchable on/off list of a connector's tools; changes are saved once when it closes. */
+	const chooseTools = async (ctx: ExtensionContext, connector: Connector) => {
+		if (ctx.mode !== "tui") return toolsText(connector);
+		const changes = new Map<string, boolean>();
+		await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
+			const items: SettingItem[] = connector.tools.map((tool) => ({
+				id: tool.name,
+				label: tool.name,
+				description: toolNote(connector, tool.name),
+				currentValue: isToolExposed(tool, settings, connector.alias) ? "on" : "off",
+				values: ["on", "off"],
+			}));
+			const list = new SettingsList(items, Math.min(items.length + 2, 15), getSettingsListTheme(), (id, value) => changes.set(id, value === "on"), () => done(undefined), {
+				enableSearch: true,
+			});
+			const title = theme.fg("accent", theme.bold(`${connector.alias} tools`));
+			return {
+				render: (width: number) => [title, "", ...list.render(width)],
+				invalidate: () => list.invalidate(),
+				handleInput: (data: string) => {
+					list.handleInput(data);
+					tui.requestRender();
+				},
+			};
+		});
+		return changes.size ? setTools(connector, changes) : undefined;
+	};
+
 	/** Interactive picker: choose a connector, then an action. */
 	const pick = async (ctx: ExtensionContext) => {
 		const actions = new Map<string, () => Promise<string | void>>();
@@ -241,8 +312,9 @@ export default function (pi: ExtensionAPI) {
 			actions.set(`${connector.alias} (${state}) · ${describeState(connector)}`, async () => {
 				const enabled = !isDisabled(settings, connector.alias);
 				const writes = allowsWrites(settings, connector.alias);
-				const choice = await ctx.ui.select(connector.alias, [enabled ? "Disable" : "Enable", writes ? "Hide write tools" : "Allow write tools", "Rename server"]);
+				const choice = await ctx.ui.select(connector.alias, [enabled ? "Disable" : "Enable", writes ? "Hide write tools" : "Allow write tools", "Choose tools…", "Rename server"]);
 				if (choice === "Disable" || choice === "Enable") return setEnabled(connector, choice === "Enable");
+				if (choice === "Choose tools…") return chooseTools(ctx, connector);
 				if (choice === "Rename server") {
 					const short = await ctx.ui.input(`Short name for ${connector.alias} (empty resets)`, connector.alias.split(/[_-]/)[0]);
 					return short === undefined ? undefined : setName(connector, short.trim() || undefined);
@@ -266,11 +338,16 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const completions = (prefix: string): AutocompleteItem[] | null => {
-		const [sub = "", name, extra] = prefix.trimStart().split(/\s+/);
+		const [sub = "", name, third, fourth] = prefix.trimStart().split(/\s+/);
+		const complete = (options: string[], typed: string, head: string) =>
+			options.filter((option) => option.toLowerCase().startsWith(typed.toLowerCase())).map((option) => `${head} ${option}`);
 		let values: string[];
 		if (name === undefined) values = SUBCOMMANDS.filter((item) => item.startsWith(sub.toLowerCase()));
-		else if (extra !== undefined) values = sub === "writes" ? ["on", "off"].filter((item) => item.startsWith(extra)).map((item) => `${sub} ${name} ${item}`) : [];
-		else {
+		else if (fourth !== undefined) values = sub === "tools" ? complete(TOOL_STATES, fourth, `${sub} ${name} ${third}`) : [];
+		else if (third !== undefined) {
+			const tools = findConnector(name, ready())?.tools.map((tool) => tool.name) ?? [];
+			values = sub === "writes" ? complete(["on", "off"], third, `${sub} ${name}`) : sub === "tools" ? complete(tools, third, `${sub} ${name}`) : [];
+		} else {
 			const pool = sub === "connect" ? connectors().filter((connector) => !connector.ready) : READY_SUBCOMMANDS.includes(sub) ? ready() : [];
 			values = pool.map((connector) => connector.alias).filter((alias) => alias.toLowerCase().startsWith(name.toLowerCase())).map((alias) => `${sub} ${alias}`);
 		}
@@ -278,10 +355,10 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	pi.registerCommand(COMMAND, {
-		description: "Show, refresh, select, rename, or connect Mistral connectors exposed as MCP servers",
+		description: "Show, refresh, select, rename, or connect Mistral connectors and choose their tools",
 		getArgumentCompletions: completions,
 		handler: async (args, ctx) => {
-			const [sub = "", name, value] = args.trim().split(/\s+/).filter(Boolean);
+			const [sub = "", name, value, state] = args.trim().split(/\s+/).filter(Boolean);
 			try {
 				if (!sub && ctx.hasUI && cache) return await pick(ctx);
 				if (!sub || sub === "status") return ctx.ui.notify(statusText(), "info");
@@ -301,6 +378,15 @@ export default function (pi: ExtensionAPI) {
 					return ctx.ui.notify(await setWrites(connector, value === "on"), "info");
 				}
 				if (sub === "rename") return ctx.ui.notify(await setName(connector, value), "info");
+				if (sub === "tools") {
+					if (!value) {
+						const message = await chooseTools(ctx, connector);
+						return message ? ctx.ui.notify(message, "info") : undefined;
+					}
+					if (!connector.tools.some((tool) => tool.name === value)) return ctx.ui.notify(`${connector.alias} has no tool "${value}".`, "warning");
+					if (!state || !TOOL_STATES.includes(state)) return ctx.ui.notify(USAGE, "warning");
+					return ctx.ui.notify(await setTools(connector, new Map([[value, state === "reset" ? "reset" : state === "on"]])), "info");
+				}
 				ctx.ui.notify(await setEnabled(connector, sub === "enable"), "info");
 			} catch (error) {
 				ctx.ui.notify(`Mistral connectors: ${error instanceof Error ? error.message : String(error)}`, "error");
