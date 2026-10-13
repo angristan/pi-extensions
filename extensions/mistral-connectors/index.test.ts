@@ -39,11 +39,12 @@ function load() {
 	const calls: string[] = [];
 	const configs = new Map<string, any>();
 	let command: any;
-	let sessionStart: any;
+	const handlers = new Map<string, any>();
 	const notices: string[] = [];
+	const approvals: string[] = [];
 	mistralConnectors({
 		registerCommand: (_name: string, options: any) => (command = options),
-		on: (event: string, handler: any) => event === "session_start" && (sessionStart = handler),
+		on: (event: string, handler: any) => handlers.set(event, handler),
 		registerMcpServer: (name: string, config: any) => {
 			calls.push(`register ${name}`);
 			configs.set(name, config);
@@ -56,6 +57,10 @@ function load() {
 		modelRegistry: { getApiKeyForProvider: async (provider: string) => (provider === "mistral" ? "test-key" : undefined) },
 		ui: {
 			notify: (message: string) => notices.push(message),
+			confirm: async (title: string) => {
+				approvals.push(title);
+				return approvals.length === 1;
+			},
 			// Drives the checklist like a user: render, toggle the first tool, then close with Escape.
 			custom: (factory: any) =>
 				new Promise<void>((resolve) => {
@@ -68,8 +73,9 @@ function load() {
 		},
 	};
 	const run = (args: string) => command.handler(args, ctx);
-	const start = () => sessionStart({ type: "session_start" }, ctx);
-	return { calls, configs, notices, run, start };
+	const start = () => handlers.get("session_start")({ type: "session_start" }, ctx);
+	const callTool = (toolName: string, hasUI = true) => handlers.get("tool_call")({ type: "tool_call", toolCallId: "1", toolName, input: { q: 1 } }, { ...ctx, hasUI });
+	return { approvals, calls, callTool, configs, notices, run, start };
 }
 
 test("registers ready connectors on refresh and re-registers only changed servers", async () => {
@@ -159,9 +165,29 @@ test("saves checklist changes once when it closes", async () => {
 
 	await run("tools notes");
 	expect(notices.at(-2)).toContain("notes tools");
-	expect(notices.at(-1)).toBe("notes: 0/1 tools exposed.");
-	// Hiding the only tool leaves nothing to expose, so the server is unregistered.
-	expect(calls).toEqual(["register mistral_notes", "unregister mistral_notes"]);
+	// Enter cycles on → ask; approval is enforced in Pi, so the MCP config and connection stay unchanged.
+	expect(notices.at(-1)).toBe("notes: 1/1 tools exposed, 1 ask first.");
+	expect(calls).toEqual(["register mistral_notes"]);
+});
+
+test("asks before tools marked ask and blocks declined or headless calls", async () => {
+	const notes = { ...connector("notes"), tools: [{ name: "read", annotations: { readOnlyHint: true } }, { name: "send-now" }] };
+	serve({ connectors: [notes] });
+	const { approvals, callTool, configs, run } = load();
+	await run("refresh");
+	await run("tools notes send-now ask");
+	expect(configs.get("mistral_notes").toolExposure).toEqual({ read: "codemode", "send-now": "codemode" });
+
+	// Pi names the tool with `-` folded to `_`.
+	expect(await callTool("mcp__mistral_notes__send_now")).toBeUndefined();
+	expect(await callTool("mcp__mistral_notes__send_now")).toMatchObject({ block: true, reason: expect.stringContaining("declined") });
+	expect(await callTool("mcp__mistral_notes__send_now", false)).toMatchObject({ block: true });
+	expect(await callTool("mcp__mistral_notes__read")).toBeUndefined();
+	expect(approvals).toEqual(["Allow notes.send-now?", "Allow notes.send-now?"]);
+
+	await run("tools notes send-now reset");
+	expect(await callTool("mcp__mistral_notes__send_now")).toBeUndefined();
+	expect(configs.get("mistral_notes").toolExposure).toEqual({ read: "codemode" });
 });
 
 test("reports a missing connector instead of changing settings", async () => {
