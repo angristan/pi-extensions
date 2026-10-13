@@ -12,14 +12,10 @@ import {
 	connectorServerName,
 	type ConnectorSettings,
 	DEFAULT_SETTINGS,
-	type ConnectorTool,
 	exposedByDefault,
-	needsApproval,
-	piToolName,
-	toolState,
-	type ToolState,
 	exposedTools,
 	hasLongToolNames,
+	isToolExposed,
 	toolOverrides,
 	isDisabled,
 	parseBootstrap,
@@ -34,8 +30,7 @@ const EXPOSURES: readonly McpExposure[] = ["codemode", "deferred", "direct", "hi
 const SUBCOMMANDS = ["status", "refresh", "enable", "disable", "writes", "tools", "rename", "connect"];
 /** Subcommands that take the alias of a ready connector. */
 const READY_SUBCOMMANDS = ["enable", "disable", "writes", "tools", "rename"];
-const TOOL_STATES = ["on", "ask", "off", "reset"];
-const MAX_APPROVAL_INPUT_CHARS = 600;
+const TOOL_STATES = ["on", "off", "reset"];
 const USAGE = `Usage: /${COMMAND} [status|refresh|enable <name>|disable <name>|writes <name> on|off|tools <name> [<tool> on|off|reset]|rename <name> [short]|connect <name>]`;
 
 export const settingsPath = () => join(getAgentDir(), "mistral-connectors.json");
@@ -78,7 +73,6 @@ export function loadSettings(): ConnectorSettings {
 				isRecord(overrides) ? [[alias, Object.fromEntries(Object.entries(overrides).filter((entry): entry is [string, boolean] => typeof entry[1] === "boolean"))]] : [],
 			),
 		),
-		confirm: Object.fromEntries(Object.entries(isRecord(raw?.confirm) ? raw.confirm : {}).map(([alias, tools]) => [alias, strings(tools)])),
 		exposure: EXPOSURES.includes(raw?.exposure as McpExposure) ? (raw!.exposure as McpExposure) : DEFAULT_SETTINGS.exposure,
 		baseUrl: typeof raw?.baseUrl === "string" && raw.baseUrl.trim() ? raw.baseUrl.trim() : DEFAULT_SETTINGS.baseUrl,
 	};
@@ -108,8 +102,6 @@ export default function (pi: ExtensionAPI) {
 	const registered = new Map<string, string>();
 	/** Registration failures by connector alias. */
 	const registrationErrors = new Map<string, string>();
-	/** Pi tool name to its connector tool, for approval checks. */
-	const toolIndex = new Map<string, { connector: Connector; tool: ConnectorTool }>();
 
 	const connectors = () => cache?.connectors ?? [];
 	const ready = () => connectors().filter((connector) => connector.ready);
@@ -120,19 +112,14 @@ export default function (pi: ExtensionAPI) {
 	 */
 	const apply = () => {
 		registrationErrors.clear();
-		toolIndex.clear();
 		const desired = new Map<string, { alias: string; config: McpServerConfig }>();
 		for (const connector of connectors()) {
 			const config = serverConfig(connector, settings);
 			if (!config) continue;
 			const name = connectorServerName(connector, settings);
 			// A hand-edited short name can collide; the first connector keeps the name.
-			if (desired.has(name)) {
-				registrationErrors.set(connector.alias, `server name ${name} is already used by ${desired.get(name)!.alias}`);
-				continue;
-			}
-			desired.set(name, { alias: connector.alias, config });
-			for (const tool of connector.tools) toolIndex.set(piToolName(name, tool.name), { connector, tool });
+			if (desired.has(name)) registrationErrors.set(connector.alias, `server name ${name} is already used by ${desired.get(name)!.alias}`);
+			else desired.set(name, { alias: connector.alias, config });
 		}
 		for (const name of [...registered.keys()]) {
 			if (desired.has(name)) continue;
@@ -198,8 +185,6 @@ export default function (pi: ExtensionAPI) {
 		else if (hasLongToolNames(connector, settings)) parts.push(`tool names too long, Pi adds hash suffixes: use /${COMMAND} rename ${connector.alias} <short>`);
 		const overrides = Object.keys(toolOverrides(settings, connector.alias)).filter((tool) => connector.tools.some((known) => known.name === tool)).length;
 		if (overrides) parts.push(`${overrides} tool override${overrides === 1 ? "" : "s"}`);
-		const asking = connector.tools.filter((tool) => toolState(tool, settings, connector.alias) === "ask").length;
-		if (asking) parts.push(`${asking} ask first`);
 		if (registrationErrors.has(connector.alias)) parts.push(`registration failed: ${registrationErrors.get(connector.alias)}`);
 		if (connector.error) parts.push(`error: ${connector.error}`);
 		return parts.join(" · ");
@@ -264,56 +249,46 @@ export default function (pi: ExtensionAPI) {
 	 * Saves per-tool choices. A choice equal to the default removes the override, so allowing or
 	 * hiding write tools later still applies to tools the user never picked.
 	 */
-	const setTools = async (connector: Connector, changes: ReadonlyMap<string, ToolState | "reset">) => {
-		const withoutAlias = <T>(map: Record<string, T>) => Object.fromEntries(Object.entries(map).filter(([alias]) => alias.toLowerCase() !== connector.alias.toLowerCase()));
+	const setTools = async (connector: Connector, changes: ReadonlyMap<string, boolean | "reset">) => {
 		await updateSettings((current) => {
 			const overrides = { ...toolOverrides(current, connector.alias) };
-			const approvals = new Set(Object.entries(current.confirm).find(([alias]) => alias.toLowerCase() === connector.alias.toLowerCase())?.[1] ?? []);
 			for (const [name, state] of changes) {
 				const tool = connector.tools.find((known) => known.name === name);
 				if (!tool) continue;
-				const exposed = state !== "off";
-				if (state === "reset" || exposed === exposedByDefault(tool, current, connector.alias)) delete overrides[name];
-				else overrides[name] = exposed;
-				if (state === "ask") approvals.add(name);
-				else approvals.delete(name);
+				if (state === "reset" || state === exposedByDefault(tool, current, connector.alias)) delete overrides[name];
+				else overrides[name] = state;
 			}
-			const tools = withoutAlias(current.tools);
-			const confirm = withoutAlias(current.confirm);
-			return {
-				...current,
-				tools: Object.keys(overrides).length ? { ...tools, [connector.alias]: overrides } : tools,
-				confirm: approvals.size ? { ...confirm, [connector.alias]: [...approvals] } : confirm,
-			};
+			const tools = Object.fromEntries(Object.entries(current.tools).filter(([alias]) => alias.toLowerCase() !== connector.alias.toLowerCase()));
+			return { ...current, tools: Object.keys(overrides).length ? { ...tools, [connector.alias]: overrides } : tools };
 		});
-		const asking = connector.tools.filter((tool) => toolState(tool, settings, connector.alias) === "ask").length;
-		return `${connector.alias}: ${exposedTools(connector, settings).length}/${connector.tools.length} tools exposed${asking ? `, ${asking} ask first` : ""}.`;
+		return `${connector.alias}: ${exposedTools(connector, settings).length}/${connector.tools.length} tools exposed.`;
 	};
 
-	const toolNote = (connector: Connector, tool: ConnectorTool): string => {
-		const override = toolOverrides(settings, connector.alias)[tool.name] !== undefined;
+	const toolNote = (connector: Connector, name: string): string => {
+		const tool = connector.tools.find((known) => known.name === name)!;
+		const override = toolOverrides(settings, connector.alias)[name] !== undefined;
 		return `${tool.readOnly ? "read-only" : "may write"} · default ${exposedByDefault(tool, settings, connector.alias) ? "on" : "off"}${override ? " · overridden" : ""}`;
 	};
 
 	const toolsText = (connector: Connector): string => {
 		const width = Math.max(0, ...connector.tools.map((tool) => tool.name.length));
-		const lines = connector.tools.map((tool) => `  ${toolState(tool, settings, connector.alias).padEnd(3)} ${tool.name.padEnd(width)}  ${toolNote(connector, tool)}`);
-		return [`${connector.alias} tools:`, ...lines, `Change one with /${COMMAND} tools ${connector.alias} <tool> on|ask|off|reset.`].join("\n");
+		const lines = connector.tools.map((tool) => `  ${(isToolExposed(tool, settings, connector.alias) ? "on" : "off").padEnd(3)} ${tool.name.padEnd(width)}  ${toolNote(connector, tool.name)}`);
+		return [`${connector.alias} tools:`, ...lines, `Change one with /${COMMAND} tools ${connector.alias} <tool> on|off|reset.`].join("\n");
 	};
 
-	/** Searchable on/ask/off list of a connector's tools; changes are saved once when it closes. */
+	/** Searchable on/off list of a connector's tools; changes are saved once when it closes. */
 	const chooseTools = async (ctx: ExtensionContext, connector: Connector) => {
 		if (ctx.mode !== "tui") return toolsText(connector);
-		const changes = new Map<string, ToolState>();
+		const changes = new Map<string, boolean>();
 		await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
 			const items: SettingItem[] = connector.tools.map((tool) => ({
 				id: tool.name,
 				label: tool.name,
-				description: toolNote(connector, tool),
-				currentValue: toolState(tool, settings, connector.alias),
-				values: ["on", "ask", "off"],
+				description: toolNote(connector, tool.name),
+				currentValue: isToolExposed(tool, settings, connector.alias) ? "on" : "off",
+				values: ["on", "off"],
 			}));
-			const list = new SettingsList(items, Math.min(items.length + 2, 15), getSettingsListTheme(), (id, value) => changes.set(id, value as ToolState), () => done(undefined), {
+			const list = new SettingsList(items, Math.min(items.length + 2, 15), getSettingsListTheme(), (id, value) => changes.set(id, value === "on"), () => done(undefined), {
 				enableSearch: true,
 			});
 			const title = theme.fg("accent", theme.bold(`${connector.alias} tools`));
@@ -410,7 +385,7 @@ export default function (pi: ExtensionAPI) {
 					}
 					if (!connector.tools.some((tool) => tool.name === value)) return ctx.ui.notify(`${connector.alias} has no tool "${value}".`, "warning");
 					if (!state || !TOOL_STATES.includes(state)) return ctx.ui.notify(USAGE, "warning");
-					return ctx.ui.notify(await setTools(connector, new Map([[value, state as ToolState | "reset"]])), "info");
+					return ctx.ui.notify(await setTools(connector, new Map([[value, state === "reset" ? "reset" : state === "on"]])), "info");
 				}
 				ctx.ui.notify(await setEnabled(connector, sub === "enable"), "info");
 			} catch (error) {
@@ -422,18 +397,6 @@ export default function (pi: ExtensionAPI) {
 	// Register the cached catalog while loading, so the servers connect with the session and the
 	// first prompt already lists them. The refresh below only re-registers servers that changed.
 	apply();
-
-	// Ask before tools marked `ask`. Calls from codemode scripts pass through here too.
-	pi.on("tool_call", async (event, ctx) => {
-		const hit = toolIndex.get(event.toolName);
-		if (!hit || !needsApproval(settings, hit.connector.alias, hit.tool.name)) return;
-		const label = `${hit.connector.alias}.${hit.tool.name}`;
-		if (!ctx.hasUI) return { block: true, reason: `${label} needs user approval, and no interactive UI is available.` };
-		const input = JSON.stringify(event.input, null, 2);
-		const preview = input.length > MAX_APPROVAL_INPUT_CHARS ? `${input.slice(0, MAX_APPROVAL_INPUT_CHARS)}…` : input;
-		if (await ctx.ui.confirm(`Allow ${label}?`, preview)) return;
-		return { block: true, reason: `The user declined ${label}. Do not retry it without a new request.` };
-	});
 
 	let warned = false;
 	pi.on("session_start", (_event, ctx) => {

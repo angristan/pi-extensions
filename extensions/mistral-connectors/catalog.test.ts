@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { connectorServerName, DEFAULT_SETTINGS, hasLongToolNames, parseBootstrap, piToolName, serverConfig, serverName } from "./catalog";
+import { connectorServerName, DEFAULT_SETTINGS, hasLongToolNames, parseBootstrap, serverConfig, serverName } from "./catalog";
 
 const tool = (name: string, readOnlyHint?: boolean) => ({ name, ...(readOnlyHint === undefined ? {} : { annotations: { readOnlyHint } }) });
 
@@ -50,12 +50,6 @@ describe("server names", () => {
 	test("flags aliases that push exposed tool names past Pi's 64-character limit", () => {
 		expect(connectorServerName(long, DEFAULT_SETTINGS)).toBe("mistral_incident_investigation_agent_read_only_42a4");
 		expect(hasLongToolNames(long, DEFAULT_SETTINGS)).toBe(true);
-	});
-
-	test("names tools the way Pi does, including the hash suffix past 64 characters", () => {
-		expect(piToolName("mistral_notion", "notion-get-self")).toBe("mcp__mistral_notion__notion_get_self");
-		// A name Pi produced for a real connector.
-		expect(piToolName("mistral_sentry_investigation_agent_v2_read_only_42a4", "find_organizations")).toBe("mcp__mistral_sentry_investigation_agent_v2_read_only_42_6c708672");
 	});
 
 	test("uses a configured short name, matching the alias case-insensitively", () => {

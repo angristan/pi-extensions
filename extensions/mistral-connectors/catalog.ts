@@ -1,5 +1,4 @@
 import type { McpExposure, McpServerConfig } from "@earendil-works/pi-coding-agent";
-import { createHash } from "node:crypto";
 
 /** How a connector that is not ready can be connected, from the bootstrap `auth_action`. */
 export type ConnectorAuthAction = "none" | "oauth" | "credentials_setup" | "other";
@@ -32,14 +31,12 @@ export interface ConnectorSettings {
 	names: Record<string, string>;
 	/** Per-tool overrides by alias, then tool name: `true` exposes, `false` hides, either way. */
 	tools: Record<string, Record<string, boolean>>;
-	/** Tools by alias that ask the user before every call. */
-	confirm: Record<string, string[]>;
 	exposure: McpExposure;
 	baseUrl: string;
 }
 
 export const DEFAULT_BASE_URL = "https://api.mistral.ai";
-export const DEFAULT_SETTINGS: ConnectorSettings = { disabled: [], allowWrites: [], names: {}, tools: {}, confirm: {}, exposure: "codemode", baseUrl: DEFAULT_BASE_URL };
+export const DEFAULT_SETTINGS: ConnectorSettings = { disabled: [], allowWrites: [], names: {}, tools: {}, exposure: "codemode", baseUrl: DEFAULT_BASE_URL };
 /** Pi shortens longer `mcp__<server>__<tool>` names with a hash suffix, matching provider limits. */
 export const MAX_TOOL_NAME_LENGTH = 64;
 export const VALID_NAME = /^[A-Za-z0-9_-]+$/;
@@ -154,34 +151,10 @@ export function isToolExposed(tool: ConnectorTool, settings: ConnectorSettings, 
 	return toolOverrides(settings, alias)[tool.name] ?? exposedByDefault(tool, settings, alias);
 }
 
-/**
- * The name Pi gives an MCP tool, mirroring Pi's naming: `mcp__<server>__<tool>` with everything but
- * `[A-Za-z0-9_]` replaced by `_`, shortened with a hash suffix past 64 characters. Pi also hashes
- * names that collide after sanitizing; such tools are not matched here.
- */
-export function piToolName(server: string, tool: string): string {
-	const name = `mcp__${server}__${tool}`.replace(/[^A-Za-z0-9_]/g, "_");
-	if (name.length <= MAX_TOOL_NAME_LENGTH) return name;
-	const hash = createHash("sha256").update(`${server}\0${tool}`).digest("hex").slice(0, 8);
-	return `${name.slice(0, MAX_TOOL_NAME_LENGTH - hash.length - 1)}_${hash}`;
-}
-
 /** Whether Pi would shorten some exposed tool names with a hash suffix. */
 export function hasLongToolNames(connector: Connector, settings: ConnectorSettings): boolean {
 	const server = connectorServerName(connector, settings);
 	return exposedTools(connector, settings).some((tool) => `mcp__${server}__${tool.name}`.length > MAX_TOOL_NAME_LENGTH);
-}
-
-export type ToolState = "on" | "ask" | "off";
-
-export function needsApproval(settings: ConnectorSettings, alias: string, tool: string): boolean {
-	return (byAlias(settings.confirm, alias) ?? []).includes(tool);
-}
-
-/** `ask` is an exposed tool that the user approves before every call. */
-export function toolState(tool: ConnectorTool, settings: ConnectorSettings, alias: string): ToolState {
-	if (!isToolExposed(tool, settings, alias)) return "off";
-	return needsApproval(settings, alias, tool.name) ? "ask" : "on";
 }
 
 /** Tools the model can reach for a connector under the current settings. */

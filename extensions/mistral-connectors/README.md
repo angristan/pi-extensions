@@ -47,22 +47,14 @@ next refresh classifies them.
 
 ## Choosing tools
 
-Each tool is `on`, `ask`, or `off`. Per-tool choices take precedence over these
-defaults in both directions: turn on one write tool without allowing the
-others, or turn off a read-only tool. Open the searchable checklist from the
-picker ("Choose tools…") or with `/mistral-connectors tools <name>`; Enter
-cycles a tool through `on`, `ask`, and `off`, and Escape saves. Pi re-registers
-the server once, when the checklist closes.
+Per-tool overrides take precedence over these defaults in both directions:
+turn on one write tool without allowing the others, or turn off a read-only
+tool. Open the searchable checklist from the picker ("Choose tools…") or with
+`/mistral-connectors tools <name>`; Enter toggles a tool and Escape saves. Pi
+re-registers the server once, when the checklist closes.
 
 An override equal to the default is not saved, so allowing or hiding write
 tools later still applies to every tool you did not pick.
-
-`ask` exposes the tool but shows a confirmation with the call's arguments
-before every call, including calls from codemode scripts. Declining blocks the
-call and tells the model not to retry. Without an interactive UI, for example
-in print mode, `ask` tools are blocked. Use it for tools that can reach private
-data, such as Slack's `slack_read_channel`, which reads DMs and private
-channels as well as public ones.
 
 ## Commands
 
@@ -74,7 +66,7 @@ channels as well as public ones.
 | `/mistral-connectors enable <name>` / `disable <name>` | Connect or keep a connector disconnected |
 | `/mistral-connectors writes <name> on\|off` | Allow or hide its write tools |
 | `/mistral-connectors tools <name>` | Open the tool checklist; outside the TUI, list tools with their state |
-| `/mistral-connectors tools <name> <tool> on\|ask\|off\|reset` | Set one tool, or return it to the default |
+| `/mistral-connectors tools <name> <tool> on\|off\|reset` | Override one tool, or return it to the default |
 | `/mistral-connectors rename <name> [short]` | Register it as `mistral_<short>`; without `short`, use the alias again |
 | `/mistral-connectors connect <name>` | Print the sign-in URL of an OAuth connector; run `refresh` afterwards |
 
@@ -94,7 +86,6 @@ The extension uses the `mistral` provider's API key: `MISTRAL_API_KEY`, or the
   "allowWrites": ["notion"],
   "names": { "sentry_investigation_agent_v2_read_only_42a4": "sentry" },
   "tools": { "gmail": { "create_draft": true }, "linear": { "list_users": false } },
-  "confirm": { "gmail": ["create_draft"], "slack": ["slack_read_channel"] },
   "exposure": "codemode",
   "baseUrl": "https://api.mistral.ai"
 }
@@ -102,7 +93,6 @@ The extension uses the `mistral` provider's API key: `MISTRAL_API_KEY`, or the
 
 - `disabled`: connector aliases that do not connect.
 - `allowWrites`: connector aliases whose write tools are exposed.
-- `confirm`: tools by connector alias that ask before every call.
 - `tools`: per-tool overrides by connector alias, then tool name: `true`
   exposes the tool and `false` hides it.
 - `names`: short server names by connector alias; letters, digits, `_`, and
