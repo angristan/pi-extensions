@@ -27,12 +27,17 @@ export interface ConnectorSettings {
 	disabled: string[];
 	/** Aliases whose tools without `readOnlyHint: true` are exposed. */
 	allowWrites: string[];
+	/** Short server names by alias, for connectors whose aliases make tool names too long. */
+	names: Record<string, string>;
 	exposure: McpExposure;
 	baseUrl: string;
 }
 
 export const DEFAULT_BASE_URL = "https://api.mistral.ai";
-export const DEFAULT_SETTINGS: ConnectorSettings = { disabled: [], allowWrites: [], exposure: "codemode", baseUrl: DEFAULT_BASE_URL };
+export const DEFAULT_SETTINGS: ConnectorSettings = { disabled: [], allowWrites: [], names: {}, exposure: "codemode", baseUrl: DEFAULT_BASE_URL };
+/** Pi shortens longer `mcp__<server>__<tool>` names with a hash suffix, matching provider limits. */
+export const MAX_TOOL_NAME_LENGTH = 64;
+export const VALID_NAME = /^[A-Za-z0-9_-]+$/;
 /** Pi model provider whose API key authenticates bootstrap and gateway requests. */
 export const AUTH_PROVIDER = "mistral";
 const MAX_DESCRIPTION_CHARS = 240;
@@ -120,6 +125,18 @@ export function parseBootstrap(payload: unknown): Connector[] {
 const listed = (aliases: readonly string[], alias: string) => aliases.some((item) => item.toLowerCase() === alias.toLowerCase());
 export const isDisabled = (settings: ConnectorSettings, alias: string) => listed(settings.disabled, alias);
 export const allowsWrites = (settings: ConnectorSettings, alias: string) => listed(settings.allowWrites, alias);
+
+/** Pi server name for a connector, using its configured short name when there is one. */
+export function connectorServerName(connector: Connector, settings: ConnectorSettings): string {
+	const entry = Object.entries(settings.names).find(([alias]) => alias.toLowerCase() === connector.alias.toLowerCase());
+	return serverName(entry?.[1] ?? connector.alias);
+}
+
+/** Whether Pi would shorten some exposed tool names with a hash suffix. */
+export function hasLongToolNames(connector: Connector, settings: ConnectorSettings): boolean {
+	const server = connectorServerName(connector, settings);
+	return exposedTools(connector, settings).some((tool) => `mcp__${server}__${tool.name}`.length > MAX_TOOL_NAME_LENGTH);
+}
 
 /** Tools the model can reach for a connector under the current settings. */
 export function exposedTools(connector: Connector, settings: ConnectorSettings): ConnectorTool[] {

@@ -9,21 +9,25 @@ import {
 	allowsWrites,
 	AUTH_PROVIDER,
 	type Connector,
+	connectorServerName,
 	type ConnectorSettings,
 	DEFAULT_SETTINGS,
 	exposedTools,
+	hasLongToolNames,
 	isDisabled,
 	parseBootstrap,
 	serverConfig,
-	serverName,
+	VALID_NAME,
 } from "./catalog";
 
 export const COMMAND = "mistral-connectors";
 /** Same lifetime as Mistral Vibe's bootstrap cache. */
 export const CACHE_TTL_MS = 10 * 60 * 1000;
 const EXPOSURES: readonly McpExposure[] = ["codemode", "deferred", "direct", "hidden"];
-const SUBCOMMANDS = ["status", "refresh", "enable", "disable", "writes", "connect"];
-const USAGE = `Usage: /${COMMAND} [status|refresh|enable <name>|disable <name>|writes <name> on|off|connect <name>]`;
+const SUBCOMMANDS = ["status", "refresh", "enable", "disable", "writes", "rename", "connect"];
+/** Subcommands that take the alias of a ready connector. */
+const READY_SUBCOMMANDS = ["enable", "disable", "writes", "rename"];
+const USAGE = `Usage: /${COMMAND} [status|refresh|enable <name>|disable <name>|writes <name> on|off|rename <name> [short]|connect <name>]`;
 
 export const settingsPath = () => join(getAgentDir(), "mistral-connectors.json");
 export const cachePath = () => join(getAgentDir(), "mistral-connectors-cache.json");
@@ -56,6 +60,9 @@ export function loadSettings(): ConnectorSettings {
 	return {
 		disabled: strings(raw?.disabled),
 		allowWrites: strings(raw?.allowWrites),
+		names: Object.fromEntries(
+			Object.entries(raw?.names && typeof raw.names === "object" ? raw.names : {}).filter((entry): entry is [string, string] => typeof entry[1] === "string" && VALID_NAME.test(entry[1])),
+		),
 		exposure: EXPOSURES.includes(raw?.exposure as McpExposure) ? (raw!.exposure as McpExposure) : DEFAULT_SETTINGS.exposure,
 		baseUrl: typeof raw?.baseUrl === "string" && raw.baseUrl.trim() ? raw.baseUrl.trim() : DEFAULT_SETTINGS.baseUrl,
 	};
@@ -83,6 +90,7 @@ export default function (pi: ExtensionAPI) {
 	let inflight: Promise<void> | undefined;
 	/** Serialized config of each server this extension registered, to skip no-op re-registrations. */
 	const registered = new Map<string, string>();
+	/** Registration failures by connector alias. */
 	const registrationErrors = new Map<string, string>();
 
 	const connectors = () => cache?.connectors ?? [];
@@ -93,18 +101,22 @@ export default function (pi: ExtensionAPI) {
 	 * alone so their connections, and the prompt's server list, stay stable.
 	 */
 	const apply = () => {
-		const desired = new Map<string, McpServerConfig>();
+		registrationErrors.clear();
+		const desired = new Map<string, { alias: string; config: McpServerConfig }>();
 		for (const connector of connectors()) {
 			const config = serverConfig(connector, settings);
-			if (config) desired.set(serverName(connector.alias), config);
+			if (!config) continue;
+			const name = connectorServerName(connector, settings);
+			// A hand-edited short name can collide; the first connector keeps the name.
+			if (desired.has(name)) registrationErrors.set(connector.alias, `server name ${name} is already used by ${desired.get(name)!.alias}`);
+			else desired.set(name, { alias: connector.alias, config });
 		}
 		for (const name of [...registered.keys()]) {
 			if (desired.has(name)) continue;
 			pi.unregisterMcpServer(name);
 			registered.delete(name);
 		}
-		registrationErrors.clear();
-		for (const [name, config] of desired) {
+		for (const [name, { alias, config }] of desired) {
 			const serialized = JSON.stringify(config);
 			if (registered.get(name) === serialized) continue;
 			try {
@@ -112,7 +124,7 @@ export default function (pi: ExtensionAPI) {
 				registered.set(name, serialized);
 			} catch (error) {
 				// Another extension owns the name, or Pi rejected the config; keep the other servers.
-				registrationErrors.set(name, error instanceof Error ? error.message : String(error));
+				registrationErrors.set(alias, error instanceof Error ? error.message : String(error));
 			}
 		}
 	};
@@ -155,11 +167,13 @@ export default function (pi: ExtensionAPI) {
 	const describeState = (connector: Connector): string => {
 		const exposed = exposedTools(connector, settings).length;
 		const writes = allowsWrites(settings, connector.alias);
-		const name = serverName(connector.alias);
+		const name = connectorServerName(connector, settings);
 		const readOnly = connector.tools.every((tool) => tool.readOnly);
 		const parts = [`${exposed}/${connector.tools.length} tools`, readOnly ? "read-only" : writes ? "writes allowed" : "writes hidden"];
+		if (name !== connectorServerName(connector, DEFAULT_SETTINGS)) parts.push(`as ${name}`);
 		if (exposed === 0) parts.push(`not registered: no read-only tools, use /${COMMAND} writes ${connector.alias} on`);
-		if (registrationErrors.has(name)) parts.push(`registration failed: ${registrationErrors.get(name)}`);
+		else if (hasLongToolNames(connector, settings)) parts.push(`tool names too long, Pi adds hash suffixes: use /${COMMAND} rename ${connector.alias} <short>`);
+		if (registrationErrors.has(connector.alias)) parts.push(`registration failed: ${registrationErrors.get(connector.alias)}`);
 		if (connector.error) parts.push(`error: ${connector.error}`);
 		return parts.join(" · ");
 	};
@@ -205,6 +219,20 @@ export default function (pi: ExtensionAPI) {
 		return `${connector.alias}: write tools ${writes ? "allowed" : "hidden"}.`;
 	};
 
+	/** Sets a short server name, or clears it when `short` is empty. */
+	const setName = async (connector: Connector, short: string | undefined) => {
+		if (short && !VALID_NAME.test(short)) throw new Error(`"${short}" may only contain letters, digits, "_", and "-".`);
+		const next = (current: ConnectorSettings): ConnectorSettings => {
+			const names = Object.fromEntries(Object.entries(current.names).filter(([alias]) => alias.toLowerCase() !== connector.alias.toLowerCase()));
+			return { ...current, names: short ? { ...names, [connector.alias]: short } : names };
+		};
+		const name = connectorServerName(connector, next(settings));
+		const owner = ready().find((other) => other !== connector && connectorServerName(other, settings) === name);
+		if (owner) throw new Error(`${name} is already used by ${owner.alias}.`);
+		await updateSettings(next);
+		return `${connector.alias} is now the ${name} MCP server.`;
+	};
+
 	/** Interactive picker: choose a connector, then an action. */
 	const pick = async (ctx: ExtensionContext) => {
 		const actions = new Map<string, () => Promise<string | void>>();
@@ -213,8 +241,12 @@ export default function (pi: ExtensionAPI) {
 			actions.set(`${connector.alias} (${state}) · ${describeState(connector)}`, async () => {
 				const enabled = !isDisabled(settings, connector.alias);
 				const writes = allowsWrites(settings, connector.alias);
-				const choice = await ctx.ui.select(connector.alias, [enabled ? "Disable" : "Enable", writes ? "Hide write tools" : "Allow write tools"]);
+				const choice = await ctx.ui.select(connector.alias, [enabled ? "Disable" : "Enable", writes ? "Hide write tools" : "Allow write tools", "Rename server"]);
 				if (choice === "Disable" || choice === "Enable") return setEnabled(connector, choice === "Enable");
+				if (choice === "Rename server") {
+					const short = await ctx.ui.input(`Short name for ${connector.alias} (empty resets)`, connector.alias.split(/[_-]/)[0]);
+					return short === undefined ? undefined : setName(connector, short.trim() || undefined);
+				}
 				if (choice) return setWrites(connector, !writes);
 			});
 		}
@@ -239,14 +271,14 @@ export default function (pi: ExtensionAPI) {
 		if (name === undefined) values = SUBCOMMANDS.filter((item) => item.startsWith(sub.toLowerCase()));
 		else if (extra !== undefined) values = sub === "writes" ? ["on", "off"].filter((item) => item.startsWith(extra)).map((item) => `${sub} ${name} ${item}`) : [];
 		else {
-			const pool = sub === "connect" ? connectors().filter((connector) => !connector.ready) : ["enable", "disable", "writes"].includes(sub) ? ready() : [];
+			const pool = sub === "connect" ? connectors().filter((connector) => !connector.ready) : READY_SUBCOMMANDS.includes(sub) ? ready() : [];
 			values = pool.map((connector) => connector.alias).filter((alias) => alias.toLowerCase().startsWith(name.toLowerCase())).map((alias) => `${sub} ${alias}`);
 		}
 		return values.length ? values.map((value) => ({ value, label: value.split(" ").at(-1)! })) : null;
 	};
 
 	pi.registerCommand(COMMAND, {
-		description: "Show, refresh, select, or connect Mistral connectors exposed as MCP servers",
+		description: "Show, refresh, select, rename, or connect Mistral connectors exposed as MCP servers",
 		getArgumentCompletions: completions,
 		handler: async (args, ctx) => {
 			const [sub = "", name, value] = args.trim().split(/\s+/).filter(Boolean);
@@ -263,11 +295,12 @@ export default function (pi: ExtensionAPI) {
 					return await connect(ctx, connector);
 				}
 				const connector = findConnector(name, ready());
-				if (!connector || !["enable", "disable", "writes"].includes(sub)) return ctx.ui.notify(connector ? USAGE : `Unknown or unconnected connector "${name ?? ""}". ${USAGE}`, "warning");
+				if (!connector || !READY_SUBCOMMANDS.includes(sub)) return ctx.ui.notify(connector ? USAGE : `Unknown or unconnected connector "${name ?? ""}". ${USAGE}`, "warning");
 				if (sub === "writes") {
 					if (value !== "on" && value !== "off") return ctx.ui.notify(USAGE, "warning");
 					return ctx.ui.notify(await setWrites(connector, value === "on"), "info");
 				}
+				if (sub === "rename") return ctx.ui.notify(await setName(connector, value), "info");
 				ctx.ui.notify(await setEnabled(connector, sub === "enable"), "info");
 			} catch (error) {
 				ctx.ui.notify(`Mistral connectors: ${error instanceof Error ? error.message : String(error)}`, "error");
@@ -279,13 +312,16 @@ export default function (pi: ExtensionAPI) {
 	// first prompt already lists them. The refresh below only re-registers servers that changed.
 	apply();
 
+	let warned = false;
 	pi.on("session_start", (_event, ctx) => {
-		// Do not hold up session start on the network; refresh failures surface in the status.
+		// Do not hold up session start on the network. Warn once per runtime when a refresh fails,
+		// so a stale cached list is not silent; later failures only appear in the status.
 		refresh(ctx, false).catch((error: unknown) => {
-			if (cache) return;
-			// Without any catalog the extension does nothing visible, so explain why once.
-			if (/No API key/.test(String(error))) return;
-			ctx.ui.notify(`Mistral connectors: ${error instanceof Error ? error.message : String(error)}`, "warning");
+			// Without a Mistral key there is nothing to fix here; the status explains it.
+			if (warned || /No API key/.test(String(error))) return;
+			warned = true;
+			const stale = cache ? ` Using the list fetched ${age(Date.now() - cache.fetchedAt)}.` : "";
+			ctx.ui.notify(`Mistral connectors refresh failed: ${error instanceof Error ? error.message : String(error)}.${stale}`, "warning");
 		});
 	});
 }

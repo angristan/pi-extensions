@@ -23,7 +23,17 @@ The list is cached in `~/.pi/agent/mistral-connectors-cache.json`. On load, the
 extension registers servers from the cache, so they connect with the session.
 At session start, it refreshes the list in the background when the cache is
 older than 10 minutes or belongs to another API key. A refresh re-registers only
-servers whose configuration changed.
+servers whose configuration changed. The first failed background refresh in a Pi
+process shows a warning; later failures appear only in `status`.
+
+## Server names
+
+Pi limits tool names to 64 characters and shortens longer
+`mcp__<server>__<tool>` names with a hash suffix. Connector aliases such as
+`sentry_investigation_agent_v2_read_only_42a4` hit this limit. `status` flags
+these connectors; give one a short server name with
+`/mistral-connectors rename <alias> <short>`, for example `sentry`, to get
+`mcp__mistral_sentry__<tool>`.
 
 ## Write tools
 
@@ -39,11 +49,12 @@ next refresh classifies them.
 
 | Command | Action |
 |---|---|
-| `/mistral-connectors` | Pick a connector to enable, disable, or allow write tools; connect another connector; or refresh |
+| `/mistral-connectors` | Pick a connector to enable, disable, rename, or allow write tools; connect another connector; or refresh |
 | `/mistral-connectors status` | List ready connectors, exposed tool counts, write access, and errors |
 | `/mistral-connectors refresh` | Fetch the connector list now |
 | `/mistral-connectors enable <name>` / `disable <name>` | Connect or keep a connector disconnected |
 | `/mistral-connectors writes <name> on\|off` | Allow or hide its write tools |
+| `/mistral-connectors rename <name> [short]` | Register it as `mistral_<short>`; without `short`, use the alias again |
 | `/mistral-connectors connect <name>` | Print the sign-in URL of an OAuth connector; run `refresh` afterwards |
 
 Disabled connectors stay registered with `enabled: false`, so `/mcp` still
@@ -60,6 +71,7 @@ The extension uses the `mistral` provider's API key: `MISTRAL_API_KEY`, or the
 {
   "disabled": ["slack"],
   "allowWrites": ["notion"],
+  "names": { "sentry_investigation_agent_v2_read_only_42a4": "sentry" },
   "exposure": "codemode",
   "baseUrl": "https://api.mistral.ai"
 }
@@ -67,6 +79,8 @@ The extension uses the `mistral` provider's API key: `MISTRAL_API_KEY`, or the
 
 - `disabled`: connector aliases that do not connect.
 - `allowWrites`: connector aliases whose write tools are exposed.
+- `names`: short server names by connector alias; letters, digits, `_`, and
+  `-` only.
 - `exposure`: `codemode` (default), `deferred`, `direct`, or `hidden`. See
   Pi's MCP documentation for what each one does.
 - `baseUrl`: Mistral API root; `/v1` suffixes are accepted.

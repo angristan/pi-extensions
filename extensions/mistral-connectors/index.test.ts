@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import mistralConnectors from "./index";
@@ -36,10 +36,11 @@ function load() {
 	const calls: string[] = [];
 	const configs = new Map<string, any>();
 	let command: any;
+	let sessionStart: any;
 	const notices: string[] = [];
 	mistralConnectors({
 		registerCommand: (_name: string, options: any) => (command = options),
-		on: () => {},
+		on: (event: string, handler: any) => event === "session_start" && (sessionStart = handler),
 		registerMcpServer: (name: string, config: any) => {
 			calls.push(`register ${name}`);
 			configs.set(name, config);
@@ -52,7 +53,8 @@ function load() {
 		ui: { notify: (message: string) => notices.push(message) },
 	};
 	const run = (args: string) => command.handler(args, ctx);
-	return { calls, configs, notices, run };
+	const start = () => sessionStart({ type: "session_start" }, ctx);
+	return { calls, configs, notices, run, start };
 }
 
 test("registers ready connectors on refresh and re-registers only changed servers", async () => {
@@ -83,6 +85,37 @@ test("registers the cached catalog at load and unregisters connectors that disap
 
 	await run("refresh");
 	expect(calls.slice(2)).toEqual(["unregister mistral_notes"]);
+});
+
+test("renames a server by re-registering it and rejects names already in use", async () => {
+	serve({ connectors: [connector("incident_agent_42a4"), connector("docs")] });
+	const { calls, notices, run } = load();
+	await run("refresh");
+
+	await run("rename incident_agent_42a4 incidents");
+	expect(calls.slice(2)).toEqual(["unregister mistral_incident_agent_42a4", "register mistral_incidents"]);
+
+	await run("rename incident_agent_42a4 docs");
+	expect(notices.at(-1)).toContain("mistral_docs is already used by docs");
+	expect(calls).toHaveLength(4);
+
+	await run("rename incident_agent_42a4");
+	expect(calls.slice(4)).toEqual(["unregister mistral_incidents", "register mistral_incident_agent_42a4"]);
+});
+
+test("warns once when a background refresh fails, even with a cached list", async () => {
+	serve({ connectors: [connector("notes")] });
+	await load().run("refresh");
+	globalThis.fetch = (async () => new Response("down", { status: 503 })) as unknown as typeof fetch;
+	writeFileSync(join(agentDirectory, "mistral-connectors-cache.json"), readFileSync(join(agentDirectory, "mistral-connectors-cache.json"), "utf8").replace(/"fetchedAt": \d+/, '"fetchedAt": 0'));
+
+	const { notices, start } = load();
+	start();
+	start();
+	await Bun.sleep(10);
+	expect(notices).toHaveLength(1);
+	expect(notices[0]).toContain("refresh failed: HTTP 503");
+	expect(notices[0]).toContain("Using the list fetched");
 });
 
 test("reports a missing connector instead of changing settings", async () => {

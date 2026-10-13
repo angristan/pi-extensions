@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_SETTINGS, parseBootstrap, serverConfig, serverName } from "./catalog";
+import { connectorServerName, DEFAULT_SETTINGS, hasLongToolNames, parseBootstrap, serverConfig, serverName } from "./catalog";
 
 const tool = (name: string, readOnlyHint?: boolean) => ({ name, ...(readOnlyHint === undefined ? {} : { annotations: { readOnlyHint } }) });
 
@@ -39,6 +39,23 @@ describe("parseBootstrap", () => {
 	test("ignores tools of connectors that are not ready and keeps their auth action", () => {
 		expect(connectors[2]).toMatchObject({ ready: false, authAction: "oauth", tools: [] });
 		expect(connectors[3].error).toBe("slow; retry");
+	});
+});
+
+describe("server names", () => {
+	const [long] = parseBootstrap({
+		connectors: [{ id: "c-long", name: "incident_investigation_agent_read_only_42a4", status: { is_ready: true }, tools: [tool("get_issue_details", true)] }],
+	});
+
+	test("flags aliases that push exposed tool names past Pi's 64-character limit", () => {
+		expect(connectorServerName(long, DEFAULT_SETTINGS)).toBe("mistral_incident_investigation_agent_read_only_42a4");
+		expect(hasLongToolNames(long, DEFAULT_SETTINGS)).toBe(true);
+	});
+
+	test("uses a configured short name, matching the alias case-insensitively", () => {
+		const settings = { ...DEFAULT_SETTINGS, names: { INCIDENT_investigation_agent_read_only_42a4: "incidents" } };
+		expect(connectorServerName(long, settings)).toBe("mistral_incidents");
+		expect(hasLongToolNames(long, settings)).toBe(false);
 	});
 });
 
