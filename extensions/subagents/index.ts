@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
-import { withReasoning } from "../better-native-pi/core.js";
+import { reasoningToolSampling, withReasoning } from "../better-native-pi/core.js";
 import { registerOverlayCard } from "../overlay-stack/index.js";
 import {
 	resolveTranscriptOverlayHeight,
@@ -111,6 +111,7 @@ function registerChildReporter(pi: ExtensionAPI): void {
 		label: "Report to parent",
 		description: "Send one material interim update to the parent agent. Use sparingly for findings that can unblock or redirect parallel work; the final response is delivered automatically.",
 		promptSnippet: "Report a material interim update to the parent agent",
+		constrainedSampling: reasoningToolSampling(),
 		parameters: withReasoning({
 			type: "object",
 			properties: {
@@ -715,6 +716,7 @@ export default function registerSubagents(pi: ExtensionAPI, options: SubagentsOp
 			"After collecting a child's final result, call agents with action=close when no further follow-up is needed; settled children hibernate but retain a conversation slot until closed.",
 			"Give concurrently writing child agents disjoint file scopes to avoid conflicting edits.",
 		],
+		constrainedSampling: reasoningToolSampling(),
 		parameters: withReasoning({
 			type: "object",
 			properties: {

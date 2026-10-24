@@ -9,6 +9,7 @@
  */
 
 import { basename, dirname } from "node:path";
+import type { ConstrainedSamplingConfig } from "@earendil-works/pi-ai";
 import { Container, visibleWidth, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { hyperlinkPath } from "../hyperlinks/index.js";
 import {
@@ -340,6 +341,19 @@ export function withReasoning(parameters: any): any {
 	const properties = { reasoning, ...(parameters?.properties ?? {}) };
 	const required = Array.from(new Set(["reasoning", ...(parameters?.required ?? [])]));
 	return { ...parameters, properties, required };
+}
+
+/**
+ * Constrained-sampling config for a tool that carries the injected `reasoning`
+ * field. Pi sends `strict: true` only for tools that opt in, and re-registering a
+ * built-in drops its opt-in. Without strict sampling, some models misname or omit
+ * the required field and repeat the same rejected call. `prefer` falls back to
+ * non-strict when a schema cannot be made strict; an explicit `false` is kept.
+ */
+export function reasoningToolSampling(
+	base?: false | ConstrainedSamplingConfig,
+): false | ConstrainedSamplingConfig {
+	return base ?? { type: "json_schema", strict: "prefer" };
 }
 
 /** Strip our injected `reasoning` before delegating to the real tool. */

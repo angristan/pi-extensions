@@ -33,6 +33,11 @@ Re-registers pi's built-in tools under their native names (`read`, `write`,
   with no period and stays compact because it is repeated across all schemas.
   A shared normalizer also fixes legacy Title-case reasons before execution and
   rendering while preserving acronyms such as API and SSH.
+- strict schema sampling kept from the built-in (`constrainedSampling`, strict
+  `prefer`), so providers that support it constrain tool arguments to the
+  schema, including `reasoning`. Without it, some models misname or omit the
+  field and repeat the rejected call. Tools whose schema cannot be made strict
+  fall back to non-strict sampling.
 - `execute` delegates to the real built-in tool (reasoning stripped first) and
   preserves Pi's execution context, including the current `PI_SESSION_*`,
   `PI_PROVIDER`, `PI_MODEL`, and `PI_REASONING_LEVEL` bash environment; when

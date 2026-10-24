@@ -54,6 +54,7 @@ import {
 	WidthAwareLines,
 	buildToolBlock,
 	diffPalette,
+	reasoningToolSampling,
 	withReasoning,
 } from "./core.js";
 
@@ -133,6 +134,7 @@ export default function fileTools(pi: ExtensionAPI) {
 				: tool.description,
 			promptSnippet: tool.promptSnippet,
 			parameters: withReasoning(tool.parameters),
+			constrainedSampling: reasoningToolSampling(tool.constrainedSampling),
 			prepareArguments: tool.prepareArguments,
 			promptGuidelines: tool.promptGuidelines,
 			renderShell: "self",

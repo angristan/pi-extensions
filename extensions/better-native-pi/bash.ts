@@ -24,7 +24,7 @@ import {
 } from "../background-jobs/service.js";
 import { renderCodeBox } from "../code-blocks/index.js";
 import { hyperlinkPath } from "../hyperlinks/index.js";
-import { buildToolBlock, fitToolLine, formatShellCommandForDisplay, highlightedShellLine, renderCommandOutput, withReasoning } from "./core.js";
+import { buildToolBlock, fitToolLine, formatShellCommandForDisplay, highlightedShellLine, reasoningToolSampling, renderCommandOutput, withReasoning } from "./core.js";
 import { shortPath } from "./render.js";
 
 const OUTPUT_ROWS = 5;
@@ -456,6 +456,7 @@ export default function bash(pi: ExtensionAPI) {
 					: bashTool.description,
 				promptSnippet: bashTool.promptSnippet,
 				parameters: terminalEnabled ? withTerminalParameters(bashTool.parameters) : withReasoning(bashTool.parameters),
+				constrainedSampling: reasoningToolSampling(bashTool.constrainedSampling),
 				// Codemode scripts receive structuredContent matching this schema. The
 				// built-in executor returns Pi's own shape; managed terminals add
 				// status and job_id because commands can outlive the yield window.
