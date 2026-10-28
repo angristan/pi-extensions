@@ -10,8 +10,9 @@ cycle the whole stack through three modes:
 
 - **shown** — full cards with bodies.
 - **compact** — title-only cards, stacked without gaps and narrowed to the widest
-  title. Card titles already carry each section's summary (`Plan 3/7`,
-  `Agents ● 2 running`).
+  title. A card can set `compactTitle` to summarize its hidden body (for example
+  `File edits · 3 files +120 -30`); otherwise its normal title is used
+  (`Plan 3/7`, `Agents ● 2 running`).
 - **hidden** — no overlay. Hiding removes the overlay entry completely, so Pi can
   switch between regular and fullscreen TUI modes; showing it creates a fresh entry.
 

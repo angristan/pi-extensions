@@ -26,6 +26,9 @@ hides when a turn has no file edits, when the terminal is narrower than 72
 columns, or when the shared stack has insufficient room. The latest completed
 summary is stored in the session, so it survives reloads and resumes.
 
+In the stack's compact mode, the card collapses to one line with the totals:
+`File edits · 3 files +120 -30`.
+
 ## Commands
 
 - `/edit-summary` — toggle the overlay

@@ -33,6 +33,8 @@ export interface OverlayCardDefinition {
 	minTerminalHeight?: number;
 	visible: () => boolean;
 	title: (theme: Theme) => string;
+	/** Title used in compact mode; defaults to `title`. Should summarize the hidden body. */
+	compactTitle?: (theme: Theme) => string;
 	renderBody: (width: number, maxHeight: number, theme: Theme) => string[];
 }
 
@@ -108,9 +110,9 @@ function activeCards(terminalWidth: number, terminalHeight: number): OverlayCard
 		.sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
 }
 
-function cardTitle(card: OverlayCardDefinition, theme: Theme): string | undefined {
+function compactCardTitle(card: OverlayCardDefinition, theme: Theme): string | undefined {
 	try {
-		return card.title(theme);
+		return (card.compactTitle ?? card.title)(theme);
 	} catch {
 		return undefined;
 	}
@@ -146,7 +148,7 @@ class OverlayStackComponent implements Component {
 		// Title-only cards shrink to the widest title plus its corner glyphs, but
 		// never grow past the width the card asked for in the full layout.
 		return Math.max(1, ...visible.map((card) => {
-			const title = cardTitle(card, this.theme);
+			const title = compactCardTitle(card, this.theme);
 			return title === undefined ? 1 : Math.min(card.width, visibleWidth(title) + 2);
 		}));
 	}
@@ -208,7 +210,7 @@ class OverlayStackComponent implements Component {
 	private compactSections(selected: OverlayCardDefinition[]): OverlaySection[] {
 		const sections: OverlaySection[] = [];
 		for (const card of selected) {
-			const title = cardTitle(card, this.theme);
+			const title = compactCardTitle(card, this.theme);
 			if (title !== undefined) sections.push({ title, body: [] });
 		}
 		return sections;

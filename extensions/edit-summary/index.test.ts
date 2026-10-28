@@ -40,3 +40,35 @@ test("validates overlay command actions and offers completions", () => {
 	expect(notices.at(-1)?.[0]).toBe("Edit summary overlay hidden.");
 	handlers.get("session_shutdown")?.();
 });
+
+test("compact overlay title summarizes file and line totals", () => {
+	const handlers = new Map<string, any>();
+	editSummary({
+		registerCommand() {},
+		on: (name: string, handler: any) => handlers.set(name, handler),
+	} as any);
+	handlers.get("session_start")?.({}, {
+		sessionManager: {
+			getBranch: () => [{
+				type: "custom",
+				customType: "edit-summary-state-v1",
+				data: {
+					completedAt: 1,
+					files: [
+						{ path: "a.ts", status: "modified", additions: 3, removals: 1 },
+						{ path: "b.ts", status: "added", additions: 2, removals: 0 },
+					],
+				},
+			}],
+		},
+	});
+	try {
+		// The overlay registry is process-global so cards and the host share it.
+		const registry = (globalThis as any)[Symbol.for("pi-extensions.overlay-stack.registry.v1")];
+		const card = registry.cards.get("edit-summary").definition;
+		const theme = { bold: (text: string) => text, fg: (_color: string, text: string) => text };
+		expect(card.compactTitle(theme)).toBe(" File edits · 2 files +5 -1 ");
+	} finally {
+		handlers.get("session_shutdown")?.();
+	}
+});

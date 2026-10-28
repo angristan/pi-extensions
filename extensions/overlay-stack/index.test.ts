@@ -67,6 +67,7 @@ function makeHarness() {
 		minBodyHeight: 1,
 		visible: () => true,
 		title: () => " Test ",
+		compactTitle: () => " Test 1/2 ",
 		renderBody: () => ["body"],
 	});
 
@@ -113,9 +114,9 @@ test("Ctrl+Shift+O and /overlay cycle shown, compact, and hidden", () => {
 		expect(harness.overlayEntries.size).toBe(1);
 		expect(harness.overlayShows).toBe(1);
 		const compact = harness.renderOverlay()!;
-		expect(compact.width).toBe(" Test ".length + 2);
+		expect(compact.width).toBe(" Test 1/2 ".length + 2);
 		expect(compact.lines).toHaveLength(2);
-		expect(compact.lines[0]).toContain(" Test ");
+		expect(compact.lines[0]).toContain(" Test 1/2 ");
 		expect(compact.lines.join("\n")).not.toContain("body");
 
 		harness.shortcuts.get("ctrl+shift+o").handler(harness.ctx);

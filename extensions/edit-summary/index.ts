@@ -155,13 +155,18 @@ function renderEditSummaryBody(summary: DisplaySummary, width: number, theme: Th
 		lines.push(theme.fg("dim", `  … ${summary.files.length - visibleFiles.length} more`));
 	}
 
+	lines.push("", theme.fg("dim", summaryTotals(summary, theme, "  ")));
+	return lines;
+}
+
+/** File count plus colored line totals, e.g. `3 files +120 -30`. */
+function summaryTotals(summary: DisplaySummary, theme: Theme, separator: string): string {
 	const additions = summary.files.reduce((total, file) => total + file.additions, 0);
 	const removals = summary.files.reduce((total, file) => total + file.removals, 0);
 	const totalBits = [`${summary.files.length} ${summary.files.length === 1 ? "file" : "files"}`];
 	if (additions > 0) totalBits.push(theme.fg("success", `+${additions}`));
 	if (removals > 0) totalBits.push(theme.fg("error", `-${removals}`));
-	lines.push("", theme.fg("dim", totalBits.join("  ")));
-	return lines;
+	return totalBits.join(separator);
 }
 
 export default function (pi: ExtensionAPI) {
@@ -180,6 +185,8 @@ export default function (pi: ExtensionAPI) {
 		minTerminalWidth: 72,
 		visible: () => enabled && displaySummary.files.length > 0,
 		title: (theme) => `${theme.bold(" File edits ")}${theme.fg("dim", `· ${displaySummary.phase} `)}`,
+		// The phase alone says nothing once the body is collapsed; show totals.
+		compactTitle: (theme) => `${theme.bold(" File edits ")}${theme.fg("dim", "· ")}${summaryTotals(displaySummary, theme, " ")} `,
 		renderBody: (width, maxHeight, theme) => {
 			if (summaryBodyHeight(displaySummary) > maxHeight) return [];
 			return renderEditSummaryBody(displaySummary, width, theme);
