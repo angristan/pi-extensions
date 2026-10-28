@@ -12,6 +12,17 @@ import { accentBorder } from "../accent-color/index.js";
 const HOST_WIDGET_KEY = "overlay-stack-host";
 const OVERLAY_MAX_HEIGHT_RATIO = 0.8;
 
+/**
+ * User-selected stack display. `compact` keeps one title-only card per section;
+ * card titles already carry each section's summary, so bodies can be dropped.
+ */
+export type OverlayDisplayMode = "shown" | "compact" | "hidden";
+const DISPLAY_MODE_CYCLE: readonly OverlayDisplayMode[] = ["shown", "compact", "hidden"];
+
+function nextDisplayMode(mode: OverlayDisplayMode): OverlayDisplayMode {
+	return DISPLAY_MODE_CYCLE[(DISPLAY_MODE_CYCLE.indexOf(mode) + 1) % DISPLAY_MODE_CYCLE.length]!;
+}
+
 export interface OverlayCardDefinition {
 	id: string;
 	order: number;
@@ -28,6 +39,11 @@ export interface OverlayCardDefinition {
 export interface OverlayCardHandle {
 	invalidate(): void;
 	unregister(): void;
+}
+
+interface OverlaySection {
+	title: string;
+	body: string[];
 }
 
 interface RegisteredCard {
@@ -92,6 +108,14 @@ function activeCards(terminalWidth: number, terminalHeight: number): OverlayCard
 		.sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
 }
 
+function cardTitle(card: OverlayCardDefinition, theme: Theme): string | undefined {
+	try {
+		return card.title(theme);
+	} catch {
+		return undefined;
+	}
+}
+
 function minimumBodyHeight(card: OverlayCardDefinition): number {
 	try {
 		return Math.max(card.minBodyHeight, card.requiredBodyHeight?.() ?? 0);
@@ -103,6 +127,7 @@ function minimumBodyHeight(card: OverlayCardDefinition): number {
 class OverlayStackComponent implements Component {
 	private terminalWidth = 0;
 	private terminalHeight = 0;
+	private compact = false;
 
 	constructor(private readonly theme: Theme) {}
 
@@ -111,17 +136,32 @@ class OverlayStackComponent implements Component {
 		this.terminalHeight = height;
 	}
 
+	setCompact(compact: boolean) {
+		this.compact = compact;
+	}
+
 	preferredWidth(): number {
 		const visible = activeCards(this.terminalWidth, this.terminalHeight);
-		return Math.max(1, ...visible.map((card) => card.width));
+		if (!this.compact) return Math.max(1, ...visible.map((card) => card.width));
+		// Title-only cards shrink to the widest title plus its corner glyphs, but
+		// never grow past the width the card asked for in the full layout.
+		return Math.max(1, ...visible.map((card) => {
+			const title = cardTitle(card, this.theme);
+			return title === undefined ? 1 : Math.min(card.width, visibleWidth(title) + 2);
+		}));
 	}
 
 	private selectedCards(maxRows: number): OverlayCardDefinition[] {
 		const selected: OverlayCardDefinition[] = [];
 		for (const card of activeCards(this.terminalWidth, this.terminalHeight)) {
 			const next = [...selected, card];
-			const shellRows = next.length * 2 + Math.max(0, next.length - 1); // borders + gaps
-			const minimumBodyRows = next.reduce((total, item) => total + minimumBodyHeight(item), 0);
+			// Full cards need borders, bodies, and a blank gap between cards.
+			// Compact cards are just a top and bottom border, stacked without gaps.
+			const gapRows = this.compact ? 0 : Math.max(0, next.length - 1);
+			const shellRows = next.length * 2 + gapRows;
+			const minimumBodyRows = this.compact
+				? 0
+				: next.reduce((total, item) => total + minimumBodyHeight(item), 0);
 			if (shellRows + minimumBodyRows <= maxRows) selected.push(card);
 		}
 		return selected;
@@ -138,10 +178,46 @@ class OverlayStackComponent implements Component {
 		if (selected.length === 0) return [];
 
 		const contentWidth = Math.max(1, width - 4);
+		const sections = this.compact
+			? this.compactSections(selected)
+			: this.fullSections(selected, maxRows, contentWidth);
+		if (sections.length === 0) return [];
+
+		const topBorder = (rawTitle: string) => {
+			const title = truncateToWidth(rawTitle, Math.max(1, width - 2), "…");
+			const ruleWidth = Math.max(0, width - visibleWidth(title) - 2);
+			return `${accentBorder("╭")}${title}${accentBorder("─".repeat(ruleWidth))}${accentBorder("╮")}`;
+		};
+		const contentLine = (content: string) => {
+			const fitted = truncateToWidth(content, contentWidth, "…");
+			const padding = " ".repeat(Math.max(0, contentWidth - visibleWidth(fitted)));
+			return `${accentBorder("│ ")}${fitted}${padding}${accentBorder(" │")}`;
+		};
+
+		const lines: string[] = [];
+		for (let index = 0; index < sections.length; index++) {
+			const section = sections[index]!;
+			if (index > 0 && !this.compact) lines.push(" ".repeat(width));
+			lines.push(topBorder(section.title));
+			for (const bodyLine of section.body) lines.push(contentLine(bodyLine));
+			lines.push(accentBorder(`╰${"─".repeat(Math.max(0, width - 2))}╯`));
+		}
+		return lines;
+	}
+
+	private compactSections(selected: OverlayCardDefinition[]): OverlaySection[] {
+		const sections: OverlaySection[] = [];
+		for (const card of selected) {
+			const title = cardTitle(card, this.theme);
+			if (title !== undefined) sections.push({ title, body: [] });
+		}
+		return sections;
+	}
+
+	private fullSections(selected: OverlayCardDefinition[], maxRows: number, contentWidth: number): OverlaySection[] {
+		const sections: OverlaySection[] = [];
 		const shellRows = selected.length * 2 + Math.max(0, selected.length - 1);
 		let remainingBodyRows = maxRows - shellRows;
-		const sections: Array<{ title: string; body: string[] }> = [];
-
 		for (let index = 0; index < selected.length; index++) {
 			const card = selected[index]!;
 			const reservedForLater = selected
@@ -163,29 +239,7 @@ class OverlayStackComponent implements Component {
 			sections.push({ title, body });
 			remainingBodyRows -= body.length;
 		}
-
-		if (sections.length === 0) return [];
-
-		const topBorder = (rawTitle: string) => {
-			const title = truncateToWidth(rawTitle, Math.max(1, width - 2), "…");
-			const ruleWidth = Math.max(0, width - visibleWidth(title) - 2);
-			return `${accentBorder("╭")}${title}${accentBorder("─".repeat(ruleWidth))}${accentBorder("╮")}`;
-		};
-		const contentLine = (content: string) => {
-			const fitted = truncateToWidth(content, contentWidth, "…");
-			const padding = " ".repeat(Math.max(0, contentWidth - visibleWidth(fitted)));
-			return `${accentBorder("│ ")}${fitted}${padding}${accentBorder(" │")}`;
-		};
-
-		const lines: string[] = [];
-		for (let index = 0; index < sections.length; index++) {
-			const section = sections[index]!;
-			if (index > 0) lines.push(" ".repeat(width));
-			lines.push(topBorder(section.title));
-			for (const bodyLine of section.body) lines.push(contentLine(bodyLine));
-			lines.push(accentBorder(`╰${"─".repeat(Math.max(0, width - 2))}╯`));
-		}
-		return lines;
+		return sections;
 	}
 
 	invalidate(): void {}
@@ -198,7 +252,7 @@ class OverlayStackHost implements Component {
 	};
 	private readonly stopRegistrySubscription: () => void;
 	private disposed = false;
-	private hidden = false;
+	private mode: OverlayDisplayMode = "shown";
 
 	constructor(
 		private readonly tui: TUI,
@@ -215,8 +269,8 @@ class OverlayStackHost implements Component {
 		this.tui.requestRender();
 	}
 
-	setHidden(hidden: boolean) {
-		this.hidden = hidden;
+	setMode(mode: OverlayDisplayMode) {
+		this.mode = mode;
 		this.reconcileOverlay();
 		this.tui.requestRender();
 	}
@@ -248,7 +302,10 @@ class OverlayStackHost implements Component {
 		const terminalHeight = this.tui.terminal.rows;
 		const stack = this.current?.stack ?? new OverlayStackComponent(this.theme);
 		stack.setViewport(terminalWidth, terminalHeight);
-		if (this.hidden || !stack.canRender()) {
+		// Switching between shown and compact keeps the overlay entry; the
+		// visible() callback picks up the new width on the next render.
+		stack.setCompact(this.mode === "compact");
+		if (this.mode === "hidden" || !stack.canRender()) {
 			this.removeOverlay();
 			return;
 		}
@@ -281,14 +338,16 @@ class OverlayStackHost implements Component {
 
 export default function (pi: ExtensionAPI) {
 	let host: OverlayStackHost | undefined;
-	let userHidden = false;
+	let userMode: OverlayDisplayMode = "shown";
 	const modalOwners = new Set<string>();
 
-	const syncVisibility = () => host?.setHidden(userHidden || modalOwners.size > 0);
-	const toggleVisibility = (ctx: any) => {
-		userHidden = !userHidden;
+	// An open modal hides the stack without changing the user's choice, so
+	// closing the modal restores whichever mode was selected before.
+	const syncVisibility = () => host?.setMode(modalOwners.size > 0 ? "hidden" : userMode);
+	const cycleDisplayMode = (ctx: any) => {
+		userMode = nextDisplayMode(userMode);
 		syncVisibility();
-		ctx.ui.notify(`Overlay ${userHidden ? "hidden" : "shown"}`, "info");
+		ctx.ui.notify(`Overlay ${userMode}`, "info");
 	};
 	const clearHost = (ctx: any) => {
 		ctx.ui.setWidget(HOST_WIDGET_KEY, undefined);
@@ -318,12 +377,12 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("overlay", {
-		description: "Toggle the top-right overlay stack",
-		handler: (_args, ctx) => toggleVisibility(ctx),
+		description: "Cycle the top-right overlay stack: shown, compact, hidden",
+		handler: (_args, ctx) => cycleDisplayMode(ctx),
 	});
 	pi.registerShortcut("ctrl+shift+o", {
-		description: "Toggle the top-right overlay stack",
-		handler: toggleVisibility,
+		description: "Cycle the top-right overlay stack: shown, compact, hidden",
+		handler: cycleDisplayMode,
 	});
 
 	pi.on("session_start", (_event, ctx) => mountHost(ctx));

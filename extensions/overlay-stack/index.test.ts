@@ -13,6 +13,7 @@ function makeHarness() {
 	const overlayEntries = new Set<object>();
 	let overlayShows = 0;
 	let overlayHides = 0;
+	let overlay: { component: any; options: any } | undefined;
 
 	overlayStack({
 		events: {
@@ -44,8 +45,9 @@ function makeHarness() {
 	const tui = {
 		terminal: { columns: 100, rows: 30 },
 		requestRender() {},
-		showOverlay() {
+		showOverlay(component: any, options: any) {
 			overlayShows += 1;
+			overlay = { component, options };
 			const entry = {};
 			overlayEntries.add(entry);
 			return {
@@ -64,11 +66,19 @@ function makeHarness() {
 		width: 20,
 		minBodyHeight: 1,
 		visible: () => true,
-		title: () => "Test",
+		title: () => " Test ",
 		renderBody: () => ["body"],
 	});
 
+	// Render the way the TUI does: visible() updates the width, then render().
+	const renderOverlay = () => {
+		if (!overlay) return undefined;
+		overlay.options.visible(tui.terminal.columns, tui.terminal.rows);
+		return { width: overlay.options.width, lines: overlay.component.render(overlay.options.width) as string[] };
+	};
+
 	return {
+		renderOverlay,
 		commands,
 		shortcuts,
 		modal: (event: unknown) => modalListener?.(event),
@@ -86,13 +96,27 @@ function makeHarness() {
 	};
 }
 
-test("Ctrl+Shift+O and /overlay remove and recreate the overlay stack", () => {
+test("Ctrl+Shift+O and /overlay cycle shown, compact, and hidden", () => {
 	const harness = makeHarness();
 	try {
 		expect(harness.shortcuts.has("ctrl+shift+o")).toBe(true);
 		expect(harness.commands.has("overlay")).toBe(true);
 		expect(harness.overlayEntries.size).toBe(1);
 		expect(harness.overlayShows).toBe(1);
+		const full = harness.renderOverlay()!;
+		expect(full.width).toBe(20);
+		expect(full.lines.join("\n")).toContain("body");
+
+		// Compact keeps the same overlay entry and shrinks it to title-only cards.
+		harness.shortcuts.get("ctrl+shift+o").handler(harness.ctx);
+		expect(harness.notifications.at(-1)).toBe("Overlay compact");
+		expect(harness.overlayEntries.size).toBe(1);
+		expect(harness.overlayShows).toBe(1);
+		const compact = harness.renderOverlay()!;
+		expect(compact.width).toBe(" Test ".length + 2);
+		expect(compact.lines).toHaveLength(2);
+		expect(compact.lines[0]).toContain(" Test ");
+		expect(compact.lines.join("\n")).not.toContain("body");
 
 		harness.shortcuts.get("ctrl+shift+o").handler(harness.ctx);
 		expect(harness.overlayEntries.size).toBe(0);
@@ -103,6 +127,22 @@ test("Ctrl+Shift+O and /overlay remove and recreate the overlay stack", () => {
 		expect(harness.overlayEntries.size).toBe(1);
 		expect(harness.overlayShows).toBe(2);
 		expect(harness.notifications.at(-1)).toBe("Overlay shown");
+		expect(harness.renderOverlay()!.lines.join("\n")).toContain("body");
+	} finally {
+		harness.cleanup();
+	}
+});
+
+test("closing a modal restores compact mode instead of the full stack", () => {
+	const harness = makeHarness();
+	try {
+		harness.shortcuts.get("ctrl+shift+o").handler(harness.ctx);
+		harness.modal({ id: "context", hidden: true });
+		expect(harness.overlayEntries.size).toBe(0);
+		harness.modal({ id: "context", hidden: false });
+
+		expect(harness.overlayEntries.size).toBe(1);
+		expect(harness.renderOverlay()!.lines).toHaveLength(2);
 	} finally {
 		harness.cleanup();
 	}
@@ -111,6 +151,7 @@ test("Ctrl+Shift+O and /overlay remove and recreate the overlay stack", () => {
 test("closing a modal does not reveal a manually hidden overlay", () => {
 	const harness = makeHarness();
 	try {
+		harness.shortcuts.get("ctrl+shift+o").handler(harness.ctx);
 		harness.shortcuts.get("ctrl+shift+o").handler(harness.ctx);
 		harness.modal({ id: "context", hidden: true });
 		harness.modal({ id: "context", hidden: false });

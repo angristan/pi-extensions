@@ -6,12 +6,19 @@ a single non-capturing Pi overlay.
 Feature extensions register titled sections with an order, preferred width,
 visibility predicate, and body renderer. The stack owns consistent accent frames,
 spacing, shared sizing, and overlay lifecycle. Press `Ctrl+Shift+O` or run `/overlay` to
-hide or show the whole stack. Hiding removes the overlay entry completely, so Pi can
-switch between regular and fullscreen TUI modes; showing it creates a fresh entry.
-Manual visibility resets when extensions reload or a new session starts.
+cycle the whole stack through three modes:
+
+- **shown** — full cards with bodies.
+- **compact** — title-only cards, stacked without gaps and narrowed to the widest
+  title. Card titles already carry each section's summary (`Plan 3/7`,
+  `Agents ● 2 running`).
+- **hidden** — no overlay. Hiding removes the overlay entry completely, so Pi can
+  switch between regular and fullscreen TUI modes; showing it creates a fresh entry.
+
+The selected mode resets to shown when extensions reload or a new session starts.
 
 The stack also hides automatically while a modal overlay is open. Closing the
-modal restores the stack only when it was not manually hidden.
+modal restores the mode that was selected before it opened.
 
 Current cards:
 
