@@ -1,6 +1,8 @@
 const REQUEST_TIMEOUT_MS = 20_000;
-// Reasoning models may consume several hundred tokens before emitting the JSON.
-const MAX_TITLE_COMPLETION_TOKENS = 1_024;
+// Reasoning models can spend well over a thousand tokens thinking before
+// emitting the JSON. A smaller cap truncates the reply to reasoning only
+// (finish reason "length" with empty text), which reads as an invalid title.
+const MAX_TITLE_COMPLETION_TOKENS = 4_096;
 
 export type CompleteRequest = (
 	model: any,
