@@ -363,7 +363,12 @@ export class WidthAwareLines {
 
 		const lines = typeof this.source === "function" ? this.source() : this.source;
 		const rendered = lines.flatMap((line) => {
-			const info = diffLineInfo(line);
+			// The gutter-preserving wrap and tint need the gutter, marker, and at
+			// least one content column. Narrower viewports (e.g. a squeezed split
+			// pane) would emit rows wider than the terminal, which makes the TUI
+			// exit, so treat the row as plain text and truncate it instead.
+			const parsed = diffLineInfo(line);
+			const info = parsed && max > parsed.prefixWidth ? parsed : undefined;
 			const fitted = visibleWidth(line) <= max
 				? [line]
 				: info
