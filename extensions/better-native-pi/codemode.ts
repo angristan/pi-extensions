@@ -10,9 +10,9 @@
  *     └ bash collect repo stats ×3 ✓
  *     │ | Repo | Commits | …
  *
- * Only the renderers change. The definition comes from Pi's own
- * `createCodemodeExtension()`, so execution, loadout hooks, and settings stay
- * Pi's. Registration waits for `session_start`: Pi drops a replaceable built-in
+ * Rendering and usage guidance wrap Pi's own `createCodemodeExtension()`;
+ * execution, loadout hooks, and settings stay Pi's.
+ * Registration waits for `session_start`: Pi drops a replaceable built-in
  * extension, with a startup warning, when another extension registers the same
  * tool during load. A later registration keeps the built-in loaded and shadows
  * its definition, because Pi resolves tool names in extension order and
@@ -323,7 +323,11 @@ function withRenderers(definition: any): any {
 	return {
 		...definition,
 		// Registered once per session start, so the system prompt stays stable.
-		promptGuidelines: [...(definition.promptGuidelines ?? []), INTENT_GUIDELINE],
+		promptGuidelines: [
+			...(definition.promptGuidelines ?? []),
+			'Do not redeclare tools or other injected bindings. Discover tools with `const matches = await searchTools("query")`.',
+			INTENT_GUIDELINE,
+		],
 		renderShell: "self",
 		renderCall: (_args: any, theme: any, context: any) => viewFor(context, theme),
 		renderResult: (result: any, options: any, theme: any, context: any) => {

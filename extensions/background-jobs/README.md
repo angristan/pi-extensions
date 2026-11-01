@@ -12,13 +12,22 @@ sessions without blocking the agent or losing track of child processes.
   - an explicit integer `timeout` from 1 to 86,400 seconds kills the command at its deadline, even after yielding; `yield-time_ms` only controls when the tool returns
   - for dev servers, use a long timeout (for example, 3600 seconds) and a short yield (for example, 1000 ms), check readiness before use, and stop with `job_kill` when finished; do not pipe server output through `head`
   - run long-lived commands in the foreground and let the tool yield them; do not combine it with shell self-backgrounding such as `&`, `nohup`, `disown`, or `setsid`
+  - preserve failures when filtering check output: use `set -o pipefail` and chain checks with `&&`; shell defaults are unchanged
   - `tty: true` allocates a PTY for prompts, REPLs, watch processes, and control characters
   - codemode scripts receive a structured result instead of the text: `output` (last 256 KiB), `truncated`, `exit_code`, `wall_time_seconds`, `status`, and `job_id` while the command is still running; the first four match Pi's built-in bash result
-- `terminal_write` — write characters to a yielded terminal or poll with empty input
+- `terminal_write` — write characters to a yielded terminal started with `tty: true`, or poll with empty input
+  - Ctrl+C is PTY input, not a general stop operation; use `job_kill` to stop non-PTY commands
+  - rejected non-PTY input names `job_kill` and the terminal ID as the recovery action
 - `job_output` — read only output produced since the previous cursor
-  - `waitMs` (up to 5 minutes) waits for the next output; with `wait: true` it waits for exit instead and ignores progress output
+  - `waitMs` accepts 0–300000 milliseconds per call (up to 5 minutes); read again for longer jobs. The wait deadline never stops the command
+  - a read waits for the next output; with `wait: true` it waits for exit instead and ignores progress output
   - `wait: true` suits commands expected to finish within `waitMs`; to follow a watcher or progress log, omit it so each call returns on the next output
 - `job_kill` — stop one terminal immediately, with a required short reason
+
+Copy terminal IDs from the original `bash` result, or use an unambiguous prefix.
+Empty IDs are rejected. Unknown IDs and ambiguous prefixes fail without selecting
+a terminal and list up to five valid IDs with status and description. Lookup does
+not correct typos or stop a similar terminal. Existing terminal IDs remain valid.
 
 All tool reasons start lowercase so they compose naturally after action verbs
 and `to`; legacy Title-case reasons are normalized while acronyms stay intact.

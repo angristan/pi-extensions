@@ -136,6 +136,9 @@ describe("codemode registration", () => {
 		expect(registered).toHaveLength(1);
 		expect(registered[0]).toMatchObject({ name: "codemode", renderShell: "self" });
 		expect(registered[0].promptGuidelines.at(-1)).toContain("// <≤8-word present-tense intent>");
+		const guidance = registered[0].promptGuidelines.join("\n");
+		expect(guidance).toContain("Do not redeclare tools");
+		expect(guidance).toContain('const matches = await searchTools("query")');
 		expect(registered[0].execute()).toBe("ran");
 	});
 

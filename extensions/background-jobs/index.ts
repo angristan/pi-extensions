@@ -818,9 +818,27 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		}
 	};
 	const findJob = (idOrPrefix: string): ManagedJob | undefined => {
+		if (!idOrPrefix) return undefined;
 		if (jobs.has(idOrPrefix)) return jobs.get(idOrPrefix);
 		const matches = [...jobs.values()].filter((job) => job.id.startsWith(idOrPrefix));
 		return matches.length === 1 ? matches[0] : undefined;
+	};
+	const requireJob = (idOrPrefix: string): ManagedJob => {
+		const job = findJob(idOrPrefix);
+		if (job) return job;
+		const known = [...jobs.values()];
+		const matches = idOrPrefix ? known.filter((candidate) => candidate.id.startsWith(idOrPrefix)) : [];
+		const candidates = matches.length ? matches : known.sort((a, b) =>
+			Number(isActive(b)) - Number(isActive(a)) || b.startedAt - a.startedAt,
+		);
+		const shown = candidates.slice(0, 5);
+		const reason = matches.length > 1 ? "Terminal ID prefix is ambiguous" : "Terminal not found";
+		const listing = shown.length
+			? `Known terminals:${candidates.length > shown.length ? ` (showing ${shown.length} of ${candidates.length})` : ""}\n${shown.map((candidate) =>
+				`  ${candidate.id} · ${candidate.status} · ${plainPreview(candidate.description, 60)}`,
+			).join("\n")}\nCopy a listed ID exactly, or use the ID from the original bash result; do not guess.`
+			: "No managed terminals are retained in this session. Start a command with bash before using terminal controls.";
+		throw new Error(`${reason}: ${JSON.stringify(plainPreview(idOrPrefix, 80))}.\n${listing}`);
 	};
 	const signalPid = (pid: number | undefined, signal: NodeJS.Signals): boolean => {
 		if (!pid) return false;
@@ -1215,7 +1233,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	};
 	const writeInput = async (job: ManagedJob, chars: string, closeStdin: boolean) => {
 		if (!isActive(job)) return;
-		if (!job.tty) throw new Error(`Terminal ${job.id} does not accept input: started without tty=true`);
+		if (!job.tty) throw new Error(`Terminal ${job.id} does not accept input: started without tty=true. Use tty=true when starting interactive commands; to stop this one, use job_kill with job_id=${job.id}.`);
 		const stdin = job.process?.stdin;
 		if (!stdin || stdin.destroyed) throw new Error(`Terminal ${job.id} does not accept input`);
 		// Interactive input can introduce a secret after this command was started.
@@ -1376,14 +1394,14 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	pi.registerTool({
 		name: "job_output",
 		label: "Job Output",
-		description: "Read only new bounded output from a managed terminal. Returns a cursor and can wait for new output or completion. Waits end early when the user sends a message.",
+		description: "Read only new bounded output from a managed terminal, optionally waiting for output or exit. Waits never stop commands and end early when the user sends a message.",
 		parameters: {
 			type: "object",
 			properties: {
 				reasoning: { type: "string", description: REASONING_DESCRIPTION },
-				job_id: { type: "string", description: "Full terminal ID or an unambiguous prefix" },
+				job_id: { type: "string", description: "Copy the terminal ID returned by bash, or use an unambiguous prefix; do not guess IDs" },
 				cursor: { type: "integer", minimum: 0, description: "Optional output cursor; defaults to this tool's last read position" },
-				waitMs: { type: "integer", minimum: 0, maximum: MAX_POLL_MS, description: `Wait up to this many milliseconds; returns on the next output, or on exit with wait:true. Defaults to 0 (instant) for read polls, ${DEFAULT_WAIT_COMPLETION_MS} ms for wait:true.` },
+				waitMs: { type: "integer", minimum: 0, maximum: MAX_POLL_MS, description: `0–${MAX_POLL_MS} milliseconds per call; read again for longer jobs. Defaults to 0 (immediate), or ${DEFAULT_WAIT_COMPLETION_MS} with wait:true.` },
 				wait: { type: "boolean", description: "Wait for exit and ignore progress output, bounded by waitMs (no kill). Use only when the command should finish within waitMs; to follow a watcher or progress log, omit it and set waitMs.", default: false },
 				max_output_tokens: { type: "integer", minimum: 1, description: `Output byte budget, expressed in tokens (~${BYTES_PER_TOKEN} bytes/token). Defaults to ${DEFAULT_OUTPUT_TOKENS}; larger requests cap at ${MAX_OUTPUT_BYTES} bytes.` },
 			},
@@ -1391,8 +1409,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		} as any,
 		executionMode: "sequential",
 		async execute(_id: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) {
-			const job = findJob(params.job_id);
-			if (!job) throw new Error(`Background terminal not found or prefix is ambiguous: ${params.job_id}`);
+			const job = requireJob(params.job_id);
 			const explicitCursor = params.cursor !== undefined;
 			const cursor = explicitCursor ? params.cursor : job.agentCursor;
 			if (!Number.isInteger(cursor) || cursor < 0) throw new Error("cursor must be a non-negative integer");
@@ -1418,12 +1435,12 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 	pi.registerTool({
 		name: "terminal_write",
 		label: "Terminal Write",
-		description: "Write characters to a managed terminal, or poll with empty input. Supports PTY control characters such as \\u0003 for Ctrl+C.",
+		description: "Write characters to a managed terminal started with tty=true, or poll with empty input. Ctrl+C (\\u0003) is PTY input, not a general stop operation; use job_kill to stop non-PTY commands.",
 		parameters: {
 			type: "object",
 			properties: {
 				reasoning: { type: "string", description: REASONING_DESCRIPTION },
-				job_id: { type: "string", description: "Full terminal ID or an unambiguous prefix" },
+				job_id: { type: "string", description: "Copy the terminal ID returned by bash, or use an unambiguous prefix; do not guess IDs" },
 				chars: { type: "string", description: "Characters to write; empty polls without writing", default: "" },
 				"yield-time_ms": { type: "integer", minimum: 0, maximum: MAX_POLL_MS, description: `Wait for output after writing (default ${DEFAULT_POLL_MS} ms)` },
 				close_stdin: { type: "boolean", description: "Close stdin after writing", default: false },
@@ -1433,8 +1450,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		} as any,
 		executionMode: "sequential",
 		async execute(_id: string, params: any, signal?: AbortSignal, onUpdate?: any, ctx?: any) {
-			const job = findJob(params.job_id);
-			if (!job) throw new Error(`Background terminal not found or prefix is ambiguous: ${params.job_id}`);
+			const job = requireJob(params.job_id);
 			const chars = typeof params.chars === "string" ? params.chars : "";
 			const yieldMs = params["yield-time_ms"] ?? DEFAULT_POLL_MS;
 			if (!Number.isInteger(yieldMs) || yieldMs < 0 || yieldMs > MAX_POLL_MS) throw new Error(`yield-time_ms must be an integer between 0 and ${MAX_POLL_MS}`);
@@ -1458,14 +1474,13 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 			type: "object",
 			properties: {
 				reasoning: { type: "string", description: REASONING_DESCRIPTION },
-				job_id: { type: "string", description: "Full terminal ID or an unambiguous prefix" },
+				job_id: { type: "string", description: "Copy the terminal ID returned by bash, or use an unambiguous prefix; do not guess IDs" },
 			},
 			required: ["reasoning", "job_id"],
 		} as any,
 		executionMode: "sequential",
 		async execute(_id: string, params: any) {
-			const job = findJob(params.job_id);
-			if (!job) throw new Error(`Background terminal not found or prefix is ambiguous: ${params.job_id}`);
+			const job = requireJob(params.job_id);
 			if (!isActive(job)) return { content: [{ type: "text", text: `${job.id} is already ${job.status}.` }], details: snapshot(job, PERSISTED_OUTPUT_BYTES) };
 			if (job.killReason) return { content: [{ type: "text", text: `Stop already requested for background terminal ${job.id}.` }], details: snapshot(job, PERSISTED_OUTPUT_BYTES) };
 			requestKill(job, "user");

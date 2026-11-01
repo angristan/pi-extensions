@@ -493,6 +493,100 @@ describe("terminal tools", () => {
 		}
 	});
 
+	test("terminal controls explain input requirements and per-call wait limits", async () => {
+		const harness = createHarness();
+		await startHarness(harness);
+		expect(harness.tools.get("terminal_write").description).toContain("tty=true");
+		expect(harness.tools.get("terminal_write").description).toContain("job_kill");
+		const wait = harness.tools.get("job_output").parameters.properties.waitMs;
+		expect(wait.maximum).toBe(300_000);
+		expect(wait.description).toContain("300000");
+		expect(wait.description).toContain("per call");
+		expect(wait.description).toContain("read again");
+	});
+
+	test("filtered checks preserve failures with the advertised pipefail pattern", async () => {
+		for (const extensions of [
+			["background-jobs"], ["background-jobs", "better-native-pi"], ["better-native-pi", "background-jobs"], ["better-native-pi"],
+		] as HarnessOptions["extensions"][]) {
+			const harness = createHarness({ extensions });
+			await startHarness(harness);
+			const bash = harness.tools.get("bash");
+			expect(bash.description).toContain("set -o pipefail");
+			const execution = bash.execute("failed-check", {
+				reasoning: "verify filtered check failures",
+				command: "set -o pipefail; (printf 'check failed\\n'; exit 7) | tail -n 5 && printf 'UNEXPECTED_SUCCESS\\n'",
+			}, undefined, undefined, harness.ctx);
+			if (extensions?.includes("background-jobs")) {
+				const result = await execution;
+				expect(result.structuredContent.exit_code).toBe(7);
+				expect(result.structuredContent.output).toContain("check failed");
+				expect(result.structuredContent.output).not.toContain("UNEXPECTED_SUCCESS");
+			} else {
+				const message = await execution.then(() => "", (error: Error) => error.message);
+				expect(message).toContain("Command exited with code 7");
+				expect(message).toContain("check failed");
+				expect(message).not.toContain("UNEXPECTED_SUCCESS");
+			}
+			await shutdownHarness(harness);
+		}
+	});
+
+	test("bad terminal IDs show valid candidates without selecting or stopping one", async () => {
+		const harness = createHarness({ killGraceMs: 50 });
+		await startHarness(harness);
+		const bash = harness.tools.get("bash");
+		const first = await bash.execute("first", {
+			command: "sleep 30", reasoning: "lookup candidate one", "yield-time_ms": 250,
+		}, undefined, undefined, harness.ctx);
+		for (const name of ["job_output", "terminal_write", "job_kill"]) {
+			await expect(harness.tools.get(name).execute("empty-id", { job_id: "" }))
+				.rejects.toThrow("Known terminals:");
+		}
+		const second = await bash.execute("second", {
+			command: "sleep 30", reasoning: "lookup candidate two", "yield-time_ms": 250,
+		}, undefined, undefined, harness.ctx);
+		const prefix = first.details.id.slice(0, first.details.id.lastIndexOf("-") + 1);
+		expect(second.details.id.startsWith(prefix)).toBe(true);
+		for (const name of ["job_output", "terminal_write", "job_kill"]) {
+			for (const job_id of [`${first.details.id}x`, prefix]) {
+				const failed = harness.tools.get(name).execute("bad-id", { job_id });
+				await expect(failed).rejects.toThrow(first.details.id);
+				await expect(failed).rejects.toThrow(second.details.id);
+				await expect(failed).rejects.toThrow("Copy a listed ID exactly");
+				await expect(failed).rejects.toThrow(job_id === prefix ? "prefix is ambiguous" : "Terminal not found");
+			}
+		}
+		for (const job of [first, second]) {
+			const read = await harness.tools.get("job_output").execute("verify-running", { job_id: job.details.id });
+			expect(read.details.status).toBe("running");
+		}
+	});
+
+	test("terminal lookup hints stay bounded and preserve restored IDs", async () => {
+		const harness = createHarness();
+		harness.ctx.sessionManager.getEntries = () => Array.from({ length: 8 }, (_, index) => ({
+			type: "custom", customType: "background-job", data: {
+				id: `legacy-${index}`, description: "description ".repeat(100), command: "true", cwd: harness.ctx.cwd,
+				status: "completed", startedAt: index, endedAt: index + 1, exitCode: 0,
+				stdout: "", stderr: "", stdoutOmittedBytes: 0, stderrOmittedBytes: 0,
+			},
+		}));
+		await startHarness(harness);
+		let message = "";
+		try {
+			await harness.tools.get("job_kill").execute("missing", { job_id: "invalid".repeat(1000) });
+		} catch (error) {
+			message = String(error);
+		}
+		expect(message).toContain("showing 5 of 8");
+		expect(message.match(/^  legacy-\d+ ·/gm)).toHaveLength(5);
+		expect(message).toContain("legacy-7");
+		expect(message.length).toBeLessThan(1200);
+		const restored = await harness.tools.get("job_output").execute("restored", { job_id: "legacy-0" });
+		expect(restored.details.status).toBe("completed");
+	});
+
 	test("persists completion without a spacer-producing entry renderer", async () => {
 		const harness = createHarness();
 		await startHarness(harness);
@@ -948,8 +1042,8 @@ describe("terminal tools", () => {
 		await expect(harness.tools.get("terminal_write").execute("write", {
 			reasoning: "should fail on non-tty job",
 			job_id: stuck.details.id,
-			chars: "x\n",
-		})).rejects.toThrow("does not accept input");
+			chars: "\u0003",
+		})).rejects.toThrow(`use job_kill with job_id=${stuck.details.id}`);
 		await shutdownHarness(harness);
 	});
 

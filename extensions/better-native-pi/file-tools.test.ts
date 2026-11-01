@@ -1,5 +1,5 @@
 import { beforeEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { getCapabilities, setCapabilities } from "@earendil-works/pi-tui";
@@ -41,6 +41,82 @@ test("write results identify diffs that already show the complete file", async (
 			{ cwd: directory },
 		);
 		expect(overwritten.details.diffCoversFullContent).toBe(false);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("ambiguous edits show original line context without writing any replacements", async () => {
+	const tools = new Map<string, any>();
+	fileTools({ on() {}, registerTool(tool: any) { tools.set(tool.name, tool); } } as any);
+	const directory = await mkdtemp(join(tmpdir(), "better-native-pi-edit-"));
+	const path = join(directory, "fixture.ts");
+	const original = '\ufeffconst title = "original";\r\n\r\nfunction first() {\r\n  return value;\r\n}\r\n\r\nfunction second() {\r\n  return value;\r\n}\r\n';
+	await writeFile(path, original);
+	const edit = (edits: any[]) => tools.get("edit").execute(
+		"edit-fixture", { reasoning: "update fixture", path, edits }, undefined, undefined, { cwd: directory },
+	);
+	const titleEdit = { oldText: 'const title = "original";', newText: 'const title = "changed";' };
+	try {
+		const failed = edit([titleEdit, { oldText: "  return value;\r\n}", newText: "  return nextValue;\r\n}" }]);
+		await expect(failed).rejects.toThrow("edits[1]");
+		await expect(failed).rejects.toThrow("3: function first() {");
+		await expect(failed).rejects.toThrow("7: function second() {");
+		expect(await readFile(path, "utf8")).toBe(original);
+
+		await edit([titleEdit, {
+			oldText: "function second() {\n  return value;\n}",
+			newText: "function second() {\n  return nextValue;\n}",
+		}]);
+		expect(await readFile(path, "utf8")).toBe(original
+			.replace('title = "original"', 'title = "changed"')
+			.replace("function second() {\r\n  return value;", "function second() {\r\n  return nextValue;"));
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("ambiguous edit context limits locations and long lines", async () => {
+	const tools = new Map<string, any>();
+	fileTools({ on() {}, registerTool(tool: any) { tools.set(tool.name, tool); } } as any);
+	const directory = await mkdtemp(join(tmpdir(), "better-native-pi-edit-bounded-"));
+	const path = join(directory, "fixture.ts");
+	const content = Array.from({ length: 20 }, () => `${"x".repeat(1000)}\nneedle\nnext\n`).join("");
+	await writeFile(path, content);
+	try {
+		let message = "";
+		try {
+			await tools.get("edit").execute("ambiguous", {
+				reasoning: "update repeated line", path, edits: [{ oldText: "needle", newText: "replacement" }],
+			}, undefined, undefined, { cwd: directory });
+		} catch (error) {
+			message = String(error);
+		}
+		expect(message).toContain("Found 20 occurrences");
+		expect(message).toContain("1: ");
+		expect(message).toContain("8: needle");
+		expect(message).not.toContain("11: needle");
+		expect(message.length).toBeLessThan(2500);
+		expect(await readFile(path, "utf8")).toBe(content);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("normalized ambiguity asks for a fresh read when no exact locations exist", async () => {
+	const tools = new Map<string, any>();
+	fileTools({ on() {}, registerTool(tool: any) { tools.set(tool.name, tool); } } as any);
+	const directory = await mkdtemp(join(tmpdir(), "better-native-pi-edit-normalized-"));
+	const path = join(directory, "fixture.ts");
+	const content = 'const first = “hello”;\nconst second = “hello”;\n';
+	await writeFile(path, content);
+	try {
+		const failed = tools.get("edit").execute("normalized", {
+			reasoning: "update repeated string", path, edits: [{ oldText: '"hello"', newText: '"world"' }],
+		}, undefined, undefined, { cwd: directory });
+		await expect(failed).rejects.toThrow("Found 2 occurrences");
+		await expect(failed).rejects.toThrow("Read the current file");
+		expect(await readFile(path, "utf8")).toBe(content);
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}

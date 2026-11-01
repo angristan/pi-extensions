@@ -13,6 +13,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBashToolDefinition, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Container, truncateToWidth } from "@earendil-works/pi-tui";
 import {
+	BASH_CHECK_PIPELINE_GUIDANCE,
 	BASH_MANAGED_TERMINAL_GUIDELINE,
 	BASH_SESSION_ENV_GUIDELINE,
 	clearBetterNativeBashIntegration,
@@ -454,7 +455,7 @@ export default function bash(pi: ExtensionAPI) {
 				label: "bash",
 				description: terminalEnabled
 					? `${bashTool.description} ${MANAGED_BASH_GUIDANCE}`
-					: bashTool.description,
+					: `${bashTool.description} ${BASH_CHECK_PIPELINE_GUIDANCE}`,
 				promptSnippet: bashTool.promptSnippet,
 				parameters: terminalEnabled ? withTerminalParameters(bashTool.parameters) : withReasoning(bashTool.parameters),
 				constrainedSampling: reasoningToolSampling(bashTool.constrainedSampling),

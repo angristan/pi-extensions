@@ -44,6 +44,13 @@ Re-registers pi's built-in tools under their native names (`read`, `write`,
   `background-jobs` is loaded in either order, `bash` refreshes to use its managed
   terminal service so quick commands, yielded processes, and `tty: true` prompts
   share one tool; either extension still provides a complete `bash` independently
+- `bash` guidance asks for `set -o pipefail` when filtering check output and
+  `&&` between checks so failures stop the chain; shell defaults are unchanged
+- `edit` ambiguity errors include line numbers and one surrounding line for up
+  to three exact-match locations, with each line capped at 180 characters. The
+  context comes from the native tool's read inside its file mutation queue. If
+  only normalized matches exist, the error asks for a fresh read instead. The
+  native matching rules and all-or-nothing writes remain unchanged
 - `bash` declares an output schema, so codemode scripts receive structured
   results instead of the rendered text: Pi's built-in shape on its own, or the
   managed shape from `background-jobs` when that extension is loaded
@@ -60,8 +67,10 @@ Re-registers pi's built-in tools under their native names (`read`, `write`,
   `// @options:` line. Codemode has no `reasoning` argument, so a prompt
   guideline asks for a leading `// intent` comment; the headline shows it as
   `Ran script to <intent>` and the collapsed box hides that line.
-  Only the renderers change; the tool definition is Pi's own. It is registered
-  at session start, which shadows the built-in without Pi's startup warning
+  A second guideline warns against redeclaring injected bindings such as `tools`;
+  discovery examples use `const matches = await searchTools("query")` instead.
+  Execution, loadout hooks, and settings remain Pi's own. The wrapped tool is
+  registered at session start, which shadows the built-in without Pi's startup warning
   about a replaced built-in extension
 - `grep` and `find` reject recursive searches rooted at the home directory, its
   ancestors, or broad macOS cloud-storage directories. Specific project and

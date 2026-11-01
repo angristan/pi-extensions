@@ -34,7 +34,8 @@ import {
 	generateDiffString,
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import {
@@ -148,6 +149,7 @@ export default function fileTools(pi: ExtensionAPI) {
 					if (name === "grep" || name === "find") {
 						await assertSafeRecursiveSearchRoot(name, rest?.path, ctx.cwd);
 					}
+					if (name === "edit") return executeEditWithContext(id, rest, sig, up, ctx.cwd);
 					const runtimeTool = toolFactories[name]!(ctx.cwd);
 					return runtimeTool.execute(id, rest, sig, up);
 				}
@@ -243,6 +245,57 @@ export default function fileTools(pi: ExtensionAPI) {
 			},
 		});
 	}
+}
+
+async function executeEditWithContext(id: string, params: any, signal: any, onUpdate: any, cwd: string) {
+	let original: Buffer | undefined;
+	const tool = createEditTool(cwd, {
+		operations: {
+			access: (path) => access(path, constants.R_OK | constants.W_OK),
+			readFile: async (path) => {
+				const buffer = await readFile(path);
+				// Capture the native tool's read inside its mutation queue, not a later reread.
+				original = buffer;
+				return buffer;
+			},
+			writeFile: (path, content) => writeFile(path, content, "utf8"),
+		},
+	});
+	try {
+		return await tool.execute(id, params, signal, onUpdate);
+	} catch (error) {
+		if (!(error instanceof Error) || original === undefined) throw error;
+		const duplicate = /^Found \d+ occurrences of (?:edits\[(\d+)\]|the text) in /.exec(error.message);
+		if (!duplicate) throw error;
+		const oldText = params.edits?.[Number(duplicate[1] ?? 0)]?.oldText;
+		if (typeof oldText !== "string" || !oldText) throw error;
+		const context = exactMatchContext(original.toString("utf8"), oldText);
+		throw new Error([
+			error.message,
+			context,
+			"Use fresh surrounding lines to make oldText unique. No replacements were written.",
+		].filter(Boolean).join("\n"), { cause: error });
+	}
+}
+
+function exactMatchContext(original: string, oldText: string): string {
+	const content = original.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n");
+	const needle = oldText.replace(/\r\n/g, "\n");
+	const lines = content.split("\n");
+	const rows = new Set<number>();
+	let offset = 0;
+	for (let count = 0; count < 3; count += 1) {
+		const index = content.indexOf(needle, offset);
+		if (index < 0) break;
+		const line = content.slice(0, index).split("\n").length - 1;
+		for (let row = Math.max(0, line - 1); row <= Math.min(lines.length - 1, line + 1); row += 1) rows.add(row);
+		offset = index + needle.length;
+	}
+	if (!rows.size) return "Read the current file to locate matches normalized by the edit tool.";
+	return ["Exact-match context (up to 3 locations):", ...[...rows].map((row) => {
+		const text = lines[row]!;
+		return `  ${row + 1}: ${text.length > 180 ? `${text.slice(0, 179)}…` : text}`;
+	})].join("\n");
 }
 
 const MACOS_CLOUD_SEARCH_ROOTS = [
