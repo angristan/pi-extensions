@@ -31,6 +31,7 @@ import {
 	BASH_SESSION_ENV_GUIDELINE,
 	clearBackgroundTerminalService,
 	hasBetterNativeBashIntegration,
+	MANAGED_BASH_GUIDANCE,
 	MANAGED_BASH_OUTPUT_SCHEMA,
 	setBackgroundTerminalService,
 	type BackgroundTerminalService,
@@ -1342,7 +1343,7 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 		pi.registerTool({
 			name: "bash",
 			label: "bash",
-			description: "Run a shell command. Quick commands return normally; long-running commands yield a managed terminal ID. Set tty=true for prompts and REPLs.",
+			description: `Run a shell command. ${MANAGED_BASH_GUIDANCE}`,
 			promptSnippet: "Run shell commands with automatic background yielding and optional PTY interaction",
 			promptGuidelines: [BASH_SESSION_ENV_GUIDELINE, BASH_MANAGED_TERMINAL_GUIDELINE],
 			parameters: {
@@ -1350,10 +1351,10 @@ export default function registerBackgroundJobs(pi: ExtensionAPI, options: Backgr
 				properties: {
 					reasoning: { type: "string", description: REASONING_DESCRIPTION },
 					command: { type: "string", description: "Shell command to run" },
-					timeout: { type: "integer", minimum: 1, maximum: MAX_TIMEOUT_SECONDS, description: `Optional hard timeout from 1 to ${MAX_TIMEOUT_SECONDS} seconds. Omit to let the command run until completion or an explicit stop.` },
+					timeout: { type: "integer", minimum: 1, maximum: MAX_TIMEOUT_SECONDS, description: `Hard deadline in seconds (1–${MAX_TIMEOUT_SECONDS}); kills the command even after yielding. Omit for no hard deadline.` },
 					cwd: { type: "string", description: "Working directory, relative to the current project unless absolute" },
 					tty: { type: "boolean", description: "Allocate a PTY for prompts, REPLs, and control characters", default: false },
-					"yield-time_ms": { type: "integer", minimum: 250, maximum: 30_000, description: `Wait before yielding a terminal ID (default ${DEFAULT_YIELD_MS} ms)` },
+					"yield-time_ms": { type: "integer", minimum: 250, maximum: 30_000, description: `Wait before returning a terminal ID while the command keeps running (default ${DEFAULT_YIELD_MS} ms); not a lifetime limit` },
 					max_output_tokens: { type: "integer", minimum: 1, description: "Output byte budget in tokens (~4 bytes/token). Defaults to 10000; larger requests cap at 1 MiB." },
 				},
 				required: ["reasoning", "command"],

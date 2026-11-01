@@ -17,6 +17,7 @@ import {
 	BASH_SESSION_ENV_GUIDELINE,
 	clearBetterNativeBashIntegration,
 	getBackgroundTerminalService,
+	MANAGED_BASH_GUIDANCE,
 	MANAGED_BASH_OUTPUT_SCHEMA,
 	setBetterNativeBashIntegration,
 	type BackgroundTerminalService,
@@ -70,10 +71,10 @@ function withTerminalParameters(parameters: any): any {
 		...base,
 		properties: {
 			...base.properties,
-			timeout: { type: "integer", minimum: 1, maximum: 86_400, description: "Optional hard timeout from 1 to 86400 seconds. Omit to let the command run until completion or an explicit stop." },
+			timeout: { type: "integer", minimum: 1, maximum: 86_400, description: "Hard deadline in seconds (1–86400); kills the command even after yielding. Omit for no hard deadline." },
 			cwd: { type: "string", description: "Working directory, relative to the current project unless absolute" },
 			tty: { type: "boolean", description: "Allocate a PTY for prompts, REPLs, and control characters. Non-tty commands spawn with stdin closed (EOF) so a command that reads stdin with no input exits instead of hanging; use tty=true for commands you need to feed via terminal_write.", default: false },
-			"yield-time_ms": { type: "integer", minimum: 250, maximum: 30_000, description: "Wait before yielding a terminal ID (default 10000 ms)" },
+			"yield-time_ms": { type: "integer", minimum: 250, maximum: 30_000, description: "Wait before returning a terminal ID while the command keeps running (default 10000 ms); not a lifetime limit" },
 			max_output_tokens: { type: "integer", minimum: 1, description: "Output byte budget in tokens (~4 bytes/token). Defaults to 10000; larger requests cap at 1 MiB." },
 		},
 	};
@@ -452,7 +453,7 @@ export default function bash(pi: ExtensionAPI) {
 				name: "bash",
 				label: "bash",
 				description: terminalEnabled
-					? `${bashTool.description} Quick commands return normally; long-running commands yield a managed terminal ID. Set tty=true for prompts and REPLs.`
+					? `${bashTool.description} ${MANAGED_BASH_GUIDANCE}`
 					: bashTool.description,
 				promptSnippet: bashTool.promptSnippet,
 				parameters: terminalEnabled ? withTerminalParameters(bashTool.parameters) : withReasoning(bashTool.parameters),

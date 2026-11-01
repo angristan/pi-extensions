@@ -9,7 +9,8 @@ sessions without blocking the agent or losing track of child processes.
   - quick commands return their final output normally
   - commands still running after `yield-time_ms` return a terminal ID
   - omitting `timeout` sets no hard deadline; yielded commands keep running until completion, an explicit stop, or session shutdown
-  - an explicit integer `timeout` from 1 to 86,400 seconds enforces a hard deadline
+  - an explicit integer `timeout` from 1 to 86,400 seconds kills the command at its deadline, even after yielding; `yield-time_ms` only controls when the tool returns
+  - for dev servers, use a long timeout (for example, 3600 seconds) and a short yield (for example, 1000 ms), check readiness before use, and stop with `job_kill` when finished; do not pipe server output through `head`
   - run long-lived commands in the foreground and let the tool yield them; do not combine it with shell self-backgrounding such as `&`, `nohup`, `disown`, or `setsid`
   - `tty: true` allocates a PTY for prompts, REPLs, watch processes, and control characters
   - codemode scripts receive a structured result instead of the text: `output` (last 256 KiB), `truncated`, `exit_code`, `wall_time_seconds`, `status`, and `job_id` while the command is still running; the first four match Pi's built-in bash result

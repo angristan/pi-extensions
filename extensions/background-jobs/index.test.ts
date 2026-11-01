@@ -633,7 +633,7 @@ describe("terminal tools", () => {
 			minimum: 1,
 			maximum: 86_400,
 		});
-		expect(tool.parameters.properties.timeout.description).toContain("Omit to let the command run");
+		expect(tool.parameters.properties.timeout.description).toContain("Omit for no hard deadline");
 		await expect(tool.execute("start", {
 			command: "true",
 			reasoning: "validate timeout",

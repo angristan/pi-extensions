@@ -1,3 +1,5 @@
+export const MANAGED_BASH_GUIDANCE = "Quick commands return normally; long-running commands yield a managed terminal ID. timeout kills the command at its deadline; yield-time_ms only returns control while the command keeps running. For dev servers, use a long timeout (e.g. 3600 seconds) and a short yield-time_ms (e.g. 1000), check readiness before use, and stop with job_kill when done. Do not pipe server output through head. Set tty=true for prompts and REPLs.";
+
 export const BASH_SESSION_ENV_GUIDELINE = "Inspect PI_* environment variables for current model and session details.";
 export const BASH_MANAGED_TERMINAL_GUIDELINE = "Run long-lived commands in the foreground and let bash yield a managed terminal ID; do not use shell self-backgrounding such as &, nohup, disown, or setsid.";
 
