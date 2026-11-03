@@ -13,6 +13,7 @@ The extension activates only in a Herdr-managed Pi TUI. It adds one
 - `status` — inspect its current foreground process
 - `input` — send text and optionally Enter
 - `interrupt` — send Ctrl+C
+- `close` — close an idle created pane once its work is done
 
 `start` keeps focus in Pi. For the first automatic split, a very wide pane opens
 to the right; a taller or half-monitor pane opens below to preserve width. Each
@@ -25,7 +26,11 @@ Processes are intentionally not stopped during Pi session shutdown or reload.
 They continue while Herdr is detached and remain visible for manual control.
 The control actions accept only pane IDs created by the current Pi session;
 that ownership is restored from persisted tool results after a reload or resume.
-The extension never closes panes.
+
+`close` refuses while anything other than the pane's shell runs in the
+foreground, so a process must exit or be interrupted first. If the pane is
+already gone, `close` reports that and releases ownership. A closed pane ID is
+never controlled again, even after a reload.
 
 Recent output is read as plain text and capped at Pi's normal tool-output limit
 of 2,000 lines or 50 KB. `input` never echoes the submitted text in its result.

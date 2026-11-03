@@ -81,7 +81,7 @@ describe("herdr-process", () => {
 		expect(tool.promptSnippet).toBeUndefined();
 		const guidelines = tool.promptGuidelines as string[];
 		expect(guidelines).toEqual([
-			"Keep Herdr processes in the foreground. Use herdr_process action=interrupt to stop one; do not close its pane unless the user asks.",
+			"Keep Herdr processes in the foreground. Use herdr_process action=interrupt to stop one. After its work and any needed output are done, close its idle pane with action=close; start a fresh pane for later work.",
 		]);
 		expect(guidelines.join(" ")).not.toContain("instead of bash");
 	});
@@ -291,6 +291,85 @@ describe("herdr-process", () => {
 		const split = calls.find((call) => call.args[1] === "split");
 		expect(split?.args[split.args.indexOf("--direction") + 1]).toBe("down");
 		expect(calls.some((call) => call.args[1] === "layout")).toBe(false);
+	});
+
+	describe("close", () => {
+		// Mirrors Herdr's process-info payload: the shell owns the foreground
+		// process group when idle, and a child command owns it while running.
+		const processInfo = (foregroundGroup: number, name: string) => ok(JSON.stringify({ result: { process_info: {
+			shell_pid: 100,
+			foreground_process_group_id: foregroundGroup,
+			foreground_processes: [{ name, pid: foregroundGroup, cmdline: name }],
+		} } }));
+		const notFound = { stdout: JSON.stringify({ error: { code: "pane_not_found", message: "pane not found" } }), stderr: "", code: 1 };
+
+		async function startedHarness(respond: (args: string[]) => any) {
+			const calls: ExecCall[] = [];
+			const harness = createHarness({
+				exec: async (command, args, options) => {
+					calls.push({ command, args, options });
+					if (args[1] === "split") return ok(JSON.stringify({ result: { pane: { pane_id: "w1:p5" } } }));
+					return respond(args) ?? ok();
+				},
+			});
+			await harness.start();
+			const tool = harness.tools.get("herdr_process");
+			await tool.execute("start", { reasoning: "run server", action: "start", command: "bun run dev", direction: "right" }, undefined, undefined, harness.ctx);
+			const close = () => tool.execute("close", { reasoning: "clean up", action: "close", pane_id: "w1:p5" }, undefined, undefined, harness.ctx);
+			const list = async () => (await tool.execute("list", { reasoning: "list", action: "list" }, undefined, undefined, harness.ctx)).content[0].text;
+			return { calls, close, list };
+		}
+
+		test("closes an idle pane and releases ownership", async () => {
+			const { calls, close, list } = await startedHarness((args) => args[1] === "process-info" ? processInfo(100, "zsh") : undefined);
+			const result = await close();
+			expect(result).toMatchObject({ content: [{ text: "Closed Herdr pane w1:p5." }], details: { action: "close", paneId: "w1:p5" } });
+			expect(calls.some((call) => call.args.join(" ") === "pane close w1:p5")).toBe(true);
+			expect(await list()).toBe("No Herdr process panes were started by this session.");
+			await expect(close()).rejects.toThrow("Refusing to control unknown pane w1:p5");
+		});
+
+		test("refuses while a process runs and keeps the pane", async () => {
+			const { calls, close, list } = await startedHarness((args) => args[1] === "process-info" ? processInfo(200, "bun") : undefined);
+			await expect(close()).rejects.toThrow("use action=interrupt first");
+			expect(calls.some((call) => call.args[1] === "close")).toBe(false);
+			expect(await list()).toBe("w1:p5 — bun run dev");
+		});
+
+		test("treats unknown process state as busy", async () => {
+			const { calls, close } = await startedHarness((args) => args[1] === "process-info"
+				? ok(JSON.stringify({ result: { process_info: { foreground_processes: [] } } }))
+				: undefined);
+			await expect(close()).rejects.toThrow("Refusing to close");
+			expect(calls.some((call) => call.args[1] === "close")).toBe(false);
+		});
+
+		test("releases a pane that is already gone", async () => {
+			const { calls, close, list } = await startedHarness((args) => args[1] === "process-info" ? notFound : undefined);
+			await expect(close()).resolves.toMatchObject({ content: [{ text: "Herdr pane w1:p5 is already gone." }] });
+			expect(calls.some((call) => call.args[1] === "close")).toBe(false);
+			expect(await list()).toBe("No Herdr process panes were started by this session.");
+		});
+
+		test("surfaces other Herdr failures without releasing the pane", async () => {
+			const { close, list } = await startedHarness((args) => args[1] === "process-info"
+				? { stdout: "", stderr: "server unavailable", code: 1 }
+				: undefined);
+			await expect(close()).rejects.toThrow("server unavailable");
+			expect(await list()).toBe("w1:p5 — bun run dev");
+		});
+
+		test("persisted close results keep a closed pane released after reload", async () => {
+			const result = (details: any) => ({ type: "message", message: { role: "toolResult", toolName: "herdr_process", details } });
+			const harness = createHarness({ entries: [
+				result({ herdrProcess: true, action: "start", paneId: "w1:p8", label: "api", command: "bun run api", cwd: "/repo", direction: "right" }),
+				result({ herdrProcess: true, action: "close", paneId: "w1:p8", label: "api" }),
+			] });
+			await harness.start();
+			await expect(harness.tools.get("herdr_process").execute("read", {
+				reasoning: "read closed pane", action: "read", pane_id: "w1:p8",
+			}, undefined, undefined, harness.ctx)).rejects.toThrow("Refusing to control unknown pane w1:p8");
+		});
 	});
 
 	test("renders partial arguments before action arrives", async () => {

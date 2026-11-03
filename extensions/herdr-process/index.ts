@@ -17,7 +17,7 @@ const TOOL_NAME = "herdr_process";
 const DEFAULT_READ_LINES = 120;
 const HERDR_TIMEOUT_MS = 5_000;
 
-type HerdrAction = "start" | "list" | "read" | "status" | "input" | "interrupt";
+type HerdrAction = "start" | "list" | "read" | "status" | "input" | "interrupt" | "close";
 
 interface HerdrProcessArgs {
 	reasoning: string;
@@ -37,7 +37,7 @@ const parameters = {
 	type: "object",
 	properties: {
 		reasoning: { type: "string", description: REASONING_DESCRIPTION },
-		action: { type: "string", enum: ["start", "list", "read", "status", "input", "interrupt"], description: "Operation to perform." },
+		action: { type: "string", enum: ["start", "list", "read", "status", "input", "interrupt", "close"], description: "Operation to perform." },
 		command: { type: "string", minLength: 1, description: "Foreground shell command for action=start." },
 		label: { type: "string", minLength: 1, maxLength: 80, description: "Short pane label for action=start." },
 		direction: { type: "string", enum: ["right", "down"], description: "Split direction for action=start. The first automatic split follows pane proportions; later starts alternate direction." },
@@ -136,6 +136,7 @@ function actionVerb(action: HerdrAction | undefined, settled: boolean): string {
 		status: ["Inspecting", "Inspected"],
 		input: ["Sending input", "Sent input"],
 		interrupt: ["Interrupting", "Interrupted"],
+		close: ["Closing", "Closed"],
 	};
 	const pair = action ? verbs[action] : undefined;
 	return pair?.[settled ? 1 : 0] ?? (settled ? "Used Herdr process" : "Using Herdr process");
@@ -234,6 +235,24 @@ function processInfoText(payload: any, paneId: string): string {
 	}).join("\n");
 }
 
+/**
+ * Describes what still runs in a pane, or returns undefined when only its shell
+ * remains. Herdr reports the shell's own process group as the foreground group
+ * once a command exits or is interrupted. Missing or malformed fields count as
+ * busy so that close never guesses in favor of killing a process.
+ */
+function busyDescription(payload: any, paneId: string): string | undefined {
+	const info = payload?.result?.process_info;
+	const shellPid = info?.shell_pid;
+	const foregroundGroup = info?.foreground_process_group_id;
+	if (Number.isInteger(shellPid) && foregroundGroup === shellPid) return undefined;
+	return processInfoText(payload, paneId);
+}
+
+function isPaneNotFound(result: ExecResult): boolean {
+	return `${result.stdout}\n${result.stderr}`.includes("pane_not_found");
+}
+
 function restoredRecord(details: any): ProcessRecord | undefined {
 	if (details?.herdrProcess !== true || details?.action !== "start") return undefined;
 	if (typeof details.paneId !== "string" || typeof details.label !== "string" || typeof details.command !== "string") return undefined;
@@ -300,6 +319,12 @@ export default function herdrProcessExtension(pi: ExtensionAPI, dependencies: Ru
 		for (const entry of entries) {
 			const message = entry?.type === "message" ? entry.message : undefined;
 			if (message?.role !== "toolResult" || message.toolName !== TOOL_NAME) continue;
+			// A persisted close releases ownership, so a reload cannot target a pane
+			// ID that Herdr may later reuse for an unrelated pane.
+			if (message.details?.herdrProcess === true && message.details.action === "close") {
+				knownPanes.delete(message.details.paneId);
+				continue;
+			}
 			const record = restoredRecord(message.details);
 			if (record) {
 				knownPanes.set(record.paneId, record);
@@ -406,6 +431,33 @@ export default function herdrProcessExtension(pi: ExtensionAPI, dependencies: Ru
 					details: { herdrProcess: true, action: "interrupt", paneId: record.paneId, label: record.label } satisfies HerdrProcessDetails,
 				};
 			}
+
+			case "close": {
+				const record = requireKnownPane(params.pane_id);
+				const done = (text: string) => {
+					knownPanes.delete(record.paneId);
+					return {
+						content: [{ type: "text", text }],
+						details: { herdrProcess: true, action: "close", paneId: record.paneId, label: record.label } satisfies HerdrProcessDetails,
+					};
+				};
+
+				// Call exec directly so a pane that already disappeared (for example,
+				// the user closed it) releases ownership instead of failing.
+				const info = await exec("herdr", ["pane", "process-info", "--pane", record.paneId], { signal, timeout: HERDR_TIMEOUT_MS });
+				if (isPaneNotFound(info)) return done(`Herdr pane ${record.paneId} is already gone.`);
+				if (info.code !== 0) throw new Error(`Herdr pane process-info failed: ${failureMessage(info)}`);
+				const busy = busyDescription(parseJson(info.stdout, "pane process-info"), record.paneId);
+				if (busy) {
+					throw new Error(`Refusing to close Herdr pane ${record.paneId} while a process is running; use action=interrupt first.\n${busy}`);
+				}
+
+				const closed = await exec("herdr", ["pane", "close", record.paneId], { signal, timeout: HERDR_TIMEOUT_MS });
+				if (closed.code !== 0 && !isPaneNotFound(closed)) {
+					throw new Error(`Herdr pane close failed: ${failureMessage(closed)}`);
+				}
+				return done(`Closed Herdr pane ${record.paneId}.`);
+			}
 		}
 	};
 
@@ -417,7 +469,7 @@ export default function herdrProcessExtension(pi: ExtensionAPI, dependencies: Ru
 			label: "Herdr Process",
 			description: "Start and control long-running foreground commands in visible sibling Herdr panes. Processes remain attached to Herdr instead of blocking Pi. Control actions accept only pane IDs created by this Pi session. Read output is capped at 2,000 lines or 50KB.",
 			promptGuidelines: [
-				"Keep Herdr processes in the foreground. Use herdr_process action=interrupt to stop one; do not close its pane unless the user asks.",
+				"Keep Herdr processes in the foreground. Use herdr_process action=interrupt to stop one. After its work and any needed output are done, close its idle pane with action=close; start a fresh pane for later work.",
 			],
 			parameters,
 			executionMode: "sequential",
