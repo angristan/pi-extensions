@@ -99,7 +99,7 @@ describe("herdr-process", () => {
 
 		expect(harness.calls.map((call) => call.args)).toEqual([
 			["pane", "layout", "--current"],
-			["pane", "split", "--current", "--direction", "right", "--cwd", "/repo", "--no-focus"],
+			["pane", "split", "--current", "--direction", "right", "--ratio", "0.67", "--cwd", "/repo", "--no-focus"],
 			["pane", "rename", "w1:p2", "frontend dev server"],
 			["pane", "run", "w1:p2", "bun run dev"],
 		]);
@@ -139,14 +139,20 @@ describe("herdr-process", () => {
 		expect(calls[1]?.args).toContain("down");
 	});
 
-	test("alternates direction after the first automatic split", async () => {
+	test("later starts split the largest owned pane, never Pi or user panes", async () => {
 		const calls: ExecCall[] = [];
 		let pane = 1;
+		// w1:p1 is Pi, w1:u1 belongs to the user, w1:p2/w1:p3 are created here.
+		const rects: Record<string, { width: number; height: number }> = {
+			"w1:p1": { width: 100, height: 60 },
+			"w1:u1": { width: 200, height: 60 },
+		};
 		const harness = createHarness({
 			exec: async (command, args, options) => {
 				calls.push({ command, args, options });
 				if (args[1] === "layout") {
-					return ok(JSON.stringify({ result: { layout: { panes: [{ pane_id: "w1:p1", rect: { width: 160, height: 60 } }] } } }));
+					const panes = Object.entries(rects).map(([pane_id, rect]) => ({ pane_id, rect }));
+					return ok(JSON.stringify({ result: { layout: { panes } } }));
 				}
 				if (args[1] === "split") return ok(JSON.stringify({ result: { pane: { pane_id: `w1:p${++pane}` } } }));
 				return ok();
@@ -154,17 +160,52 @@ describe("herdr-process", () => {
 		});
 		await harness.start();
 		const tool = harness.tools.get("herdr_process");
-		for (const [label, command] of [["server", "bun run dev"], ["watcher", "bun test --watch"]]) {
-			await tool.execute("start", {
-				reasoning: `show ${label}`,
-				action: "start",
-				command,
-				label,
-			}, undefined, undefined, harness.ctx);
-		}
-		const splits = calls.filter((call) => call.args[1] === "split");
-		expect(splits.map((call) => call.args[call.args.indexOf("--direction") + 1])).toEqual(["right", "down"]);
-		expect(calls.filter((call) => call.args[1] === "layout")).toHaveLength(1);
+		const start = (label: string) => tool.execute("start", {
+			reasoning: `show ${label}`, action: "start", command: label, label,
+		}, undefined, undefined, harness.ctx);
+
+		await start("server");
+		rects["w1:p2"] = { width: 50, height: 60 };
+		await start("watcher");
+		rects["w1:p2"] = { width: 50, height: 20 };
+		rects["w1:p3"] = { width: 50, height: 40 };
+		await start("logs");
+
+		const splits = calls.filter((call) => call.args[1] === "split").map((call) => call.args.slice(2, -3));
+		expect(splits).toEqual([
+			["--current", "--direction", "down", "--ratio", "0.67"],
+			["--pane", "w1:p2", "--direction", "down"],
+			["--pane", "w1:p3", "--direction", "down"],
+		]);
+	});
+
+	test("falls back to Pi's pane when the owned pane vanished", async () => {
+		const entries = [{ type: "message", message: { role: "toolResult", toolName: "herdr_process", details: {
+			herdrProcess: true, action: "start", paneId: "w1:p8", label: "api", command: "bun run api", cwd: "/repo", direction: "right",
+		} } }];
+		const calls: ExecCall[] = [];
+		const harness = createHarness({
+			entries,
+			exec: async (command, args, options) => {
+				calls.push({ command, args, options });
+				if (args[1] === "layout") return ok("not-json");
+				if (args[1] === "split" && args.includes("w1:p8")) {
+					return { stdout: JSON.stringify({ error: { code: "pane_not_found" } }), stderr: "", code: 1 };
+				}
+				if (args[1] === "split") return ok(JSON.stringify({ result: { pane: { pane_id: "w1:p9" } } }));
+				return ok();
+			},
+		});
+		await harness.start();
+		const tool = harness.tools.get("herdr_process");
+		await tool.execute("start", { reasoning: "run tests", action: "start", command: "bun test" }, undefined, undefined, harness.ctx);
+		const splits = calls.filter((call) => call.args[1] === "split").map((call) => call.args.slice(2, -3));
+		expect(splits).toEqual([
+			["--pane", "w1:p8", "--direction", "down"],
+			["--current", "--direction", "right", "--ratio", "0.67"],
+		]);
+		const listed = await tool.execute("list", { reasoning: "list", action: "list" }, undefined, undefined, harness.ctx);
+		expect(listed.content[0].text).toBe("w1:p9 — bun test");
 	});
 
 	test("reads, inspects, writes to, and interrupts a known pane", async () => {
@@ -288,9 +329,9 @@ describe("herdr-process", () => {
 			command: "bun test --watch",
 			label: "test watcher",
 		}, undefined, undefined, harness.ctx);
+		// The restored pane, not Pi's pane, is split for the next process.
 		const split = calls.find((call) => call.args[1] === "split");
-		expect(split?.args[split.args.indexOf("--direction") + 1]).toBe("down");
-		expect(calls.some((call) => call.args[1] === "layout")).toBe(false);
+		expect(split?.args.slice(2, 4)).toEqual(["--pane", "w1:p8"]);
 	});
 
 	describe("close", () => {

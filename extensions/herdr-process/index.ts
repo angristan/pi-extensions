@@ -16,6 +16,8 @@ import {
 const TOOL_NAME = "herdr_process";
 const DEFAULT_READ_LINES = 120;
 const HERDR_TIMEOUT_MS = 5_000;
+// Share of the Pi pane kept on the first split, so Pi keeps two-thirds of the tab.
+const PRIMARY_KEEP_RATIO = "0.67";
 
 type HerdrAction = "start" | "list" | "read" | "status" | "input" | "interrupt" | "close";
 
@@ -40,7 +42,7 @@ const parameters = {
 		action: { type: "string", enum: ["start", "list", "read", "status", "input", "interrupt", "close"], description: "Operation to perform." },
 		command: { type: "string", minLength: 1, description: "Foreground shell command for action=start." },
 		label: { type: "string", minLength: 1, maxLength: 80, description: "Short pane label for action=start." },
-		direction: { type: "string", enum: ["right", "down"], description: "Split direction for action=start. The first automatic split follows pane proportions; later starts alternate direction." },
+		direction: { type: "string", enum: ["right", "down"], description: "Split direction for action=start. Defaults to the split pane's longer side." },
 		pane_id: { type: "string", minLength: 1, description: "Pane ID returned by action=start." },
 		lines: { type: "integer", minimum: 1, maximum: DEFAULT_MAX_LINES, description: `Recent lines for action=read. Defaults to ${DEFAULT_READ_LINES}.` },
 		text: { type: "string", description: "Text for action=input. It is not echoed in the tool result." },
@@ -239,7 +241,8 @@ function processInfoText(payload: any, paneId: string): string {
  * Describes what still runs in a pane, or returns undefined when only its shell
  * remains. Herdr reports the shell's own process group as the foreground group
  * once a command exits or is interrupted. Missing or malformed fields count as
- * busy so that close never guesses in favor of killing a process.
+ * busy so that close never guesses in favor of killing a process. A command
+ * the shell has not started yet (right after action=start) also looks idle.
  */
 function busyDescription(payload: any, paneId: string): string | undefined {
 	const info = payload?.result?.process_info;
@@ -247,6 +250,32 @@ function busyDescription(payload: any, paneId: string): string | undefined {
 	const foregroundGroup = info?.foreground_process_group_id;
 	if (Number.isInteger(shellPid) && foregroundGroup === shellPid) return undefined;
 	return processInfoText(payload, paneId);
+}
+
+interface PaneRect {
+	width: number;
+	height: number;
+}
+
+interface SplitPlan {
+	/** Owned pane to split, or undefined for Pi's own pane. */
+	target?: string;
+	direction: "right" | "down";
+	ratio?: string;
+}
+
+function area(rect: PaneRect): number {
+	return rect.width * rect.height;
+}
+
+/**
+ * Splits along the pane's visually longer side. Terminal cells are about twice
+ * as tall as they are wide, so a pane at least twice as many columns as rows
+ * stays readable side by side; anything narrower splits top and bottom.
+ */
+function longerSide(rect: PaneRect | undefined): "right" | "down" | undefined {
+	if (!rect) return undefined;
+	return rect.width / rect.height >= 2 ? "right" : "down";
 }
 
 function isPaneNotFound(result: ExecResult): boolean {
@@ -272,7 +301,6 @@ export default function herdrProcessExtension(pi: ExtensionAPI, dependencies: Ru
 
 	const exec = dependencies.exec ?? ((command, args, options) => pi.exec(command, args, options));
 	const knownPanes = new Map<string, ProcessRecord>();
-	let lastDirection: "right" | "down" | undefined;
 	let toolRegistered = false;
 
 	const runHerdr = async (args: string[], signal?: AbortSignal): Promise<ExecResult> => {
@@ -281,27 +309,52 @@ export default function herdrProcessExtension(pi: ExtensionAPI, dependencies: Ru
 		return result;
 	};
 
-	const chooseDirection = async (requested: HerdrProcessArgs["direction"], signal?: AbortSignal): Promise<"right" | "down"> => {
-		if (requested) return requested;
-		if (lastDirection) return lastDirection === "right" ? "down" : "right";
+	/** Pane sizes in the current tab, keyed by pane ID; undefined when Herdr cannot report them. */
+	const readLayout = async (signal?: AbortSignal): Promise<Map<string, PaneRect> | undefined> => {
 		try {
 			const result = await runHerdr(["pane", "layout", "--current"], signal);
-			const layout = parseJson(result.stdout, "pane layout")?.result?.layout;
-			const panes = Array.isArray(layout?.panes) ? layout.panes : [];
-			const pane = panes.find((candidate: any) => candidate?.pane_id === env.HERDR_PANE_ID)
-				?? (panes.length === 1 ? panes[0] : undefined);
-			const width = pane?.rect?.width;
-			const height = pane?.rect?.height;
-			if (typeof width === "number" && typeof height === "number" && height > 0) {
-				// A very wide MacBook-style terminal remains useful side-by-side. A
-				// taller half-monitor terminal keeps more width when split top/bottom.
-				return width / height >= 2 ? "right" : "down";
+			const panes = parseJson(result.stdout, "pane layout")?.result?.layout?.panes;
+			if (!Array.isArray(panes)) return undefined;
+			const rects = new Map<string, PaneRect>();
+			for (const pane of panes) {
+				const { width, height } = pane?.rect ?? {};
+				if (typeof pane?.pane_id === "string" && typeof width === "number" && typeof height === "number" && height > 0) {
+					rects.set(pane.pane_id, { width, height });
+				}
 			}
+			return rects;
 		} catch {
-			// Layout is an optimization only. Splitting right is Herdr's normal default.
+			return undefined;
 		}
-		return "right";
 	};
+
+	/**
+	 * Picks where a new process pane goes. The first one takes a third of Pi's
+	 * pane. Later ones split the largest process pane this session owns, so Pi
+	 * keeps its two-thirds and user-created panes are never touched.
+	 */
+	const planSplit = async (requested: HerdrProcessArgs["direction"], signal?: AbortSignal): Promise<SplitPlan> => {
+		const layout = await readLayout(signal);
+		const owned = [...knownPanes.keys()];
+		// Without a layout, assume the newest owned pane still exists; start
+		// falls back to splitting Pi's pane if Herdr reports it gone.
+		const auxiliary = layout
+			? owned
+				.filter((paneId) => layout.has(paneId))
+				.sort((a, b) => area(layout.get(b)!) - area(layout.get(a)!))[0]
+			: owned.at(-1);
+		if (auxiliary) {
+			return { target: auxiliary, direction: requested ?? longerSide(layout?.get(auxiliary)) ?? "down" };
+		}
+		const primary = env.HERDR_PANE_ID ? layout?.get(env.HERDR_PANE_ID) : undefined;
+		return { target: undefined, direction: requested ?? longerSide(primary) ?? "right", ratio: PRIMARY_KEEP_RATIO };
+	};
+
+	const splitPane = (plan: SplitPlan, cwd: string, signal?: AbortSignal) => exec("herdr", [
+		"pane", "split", ...(plan.target ? ["--pane", plan.target] : ["--current"]),
+		"--direction", plan.direction, ...(plan.ratio ? ["--ratio", plan.ratio] : []),
+		"--cwd", cwd, "--no-focus",
+	], { signal, timeout: HERDR_TIMEOUT_MS });
 
 	const requireKnownPane = (paneId: unknown): ProcessRecord => {
 		if (typeof paneId !== "string" || !paneId.trim()) throw new Error("pane_id is required for this action.");
@@ -312,7 +365,6 @@ export default function herdrProcessExtension(pi: ExtensionAPI, dependencies: Ru
 
 	const restoreKnownPanes = (ctx: any) => {
 		knownPanes.clear();
-		lastDirection = undefined;
 		const entries = typeof ctx.sessionManager?.getBranch === "function"
 			? ctx.sessionManager.getBranch()
 			: ctx.sessionManager?.getEntries?.() ?? [];
@@ -326,10 +378,7 @@ export default function herdrProcessExtension(pi: ExtensionAPI, dependencies: Ru
 				continue;
 			}
 			const record = restoredRecord(message.details);
-			if (record) {
-				knownPanes.set(record.paneId, record);
-				lastDirection = record.direction;
-			}
+			if (record) knownPanes.set(record.paneId, record);
 		}
 	};
 
@@ -339,11 +388,17 @@ export default function herdrProcessExtension(pi: ExtensionAPI, dependencies: Ru
 				const command = params.command?.trim();
 				if (!command) throw new Error("command is required for action=start.");
 				const label = compactLabel(params.label ?? commandLabel(command));
-				const direction = await chooseDirection(params.direction, signal);
-				const split = await runHerdr([
-					"pane", "split", "--current", "--direction", direction,
-					"--cwd", ctx.cwd, "--no-focus",
-				], signal);
+				let plan = await planSplit(params.direction, signal);
+				let split = await splitPane(plan, ctx.cwd, signal);
+				if (plan.target && isPaneNotFound(split)) {
+					// The owned pane vanished outside this tool; forget it and start over
+					// from the next owned pane or Pi's pane.
+					knownPanes.delete(plan.target);
+					plan = await planSplit(params.direction, signal);
+					split = await splitPane(plan, ctx.cwd, signal);
+				}
+				if (split.code !== 0) throw new Error(`Herdr pane split failed: ${failureMessage(split)}`);
+				const direction = plan.direction;
 				const paneId = parseJson(split.stdout, "pane split")?.result?.pane?.pane_id;
 				if (typeof paneId !== "string" || !paneId) throw new Error("Herdr pane split did not return a pane ID.");
 
@@ -357,7 +412,6 @@ export default function herdrProcessExtension(pi: ExtensionAPI, dependencies: Ru
 
 				const record: ProcessRecord = { paneId, label, command, cwd: ctx.cwd, direction };
 				knownPanes.set(paneId, record);
-				lastDirection = direction;
 				const warning = renameWarning ? ` Pane rename warning: ${renameWarning}` : "";
 				return {
 					content: [{ type: "text", text: `Started ${label} in visible Herdr pane ${paneId}.${warning}` }],

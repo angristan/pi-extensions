@@ -15,10 +15,20 @@ The extension activates only in a Herdr-managed Pi TUI. It adds one
 - `interrupt` — send Ctrl+C
 - `close` — close an idle created pane once its work is done
 
-`start` keeps focus in Pi. For the first automatic split, a very wide pane opens
-to the right; a taller or half-monitor pane opens below to preserve width. Each
-later process alternates direction, producing a useful mixed layout. An explicit
-direction overrides that choice and becomes the basis for the next alternation.
+`start` keeps focus in Pi, and Pi keeps two-thirds of its pane. The first
+process pane takes the remaining third. Later process panes split the largest
+process pane this session owns, so Pi's pane and user-created panes keep their
+size. Each split follows the split pane's longer side: a pane with at least
+twice as many columns as rows splits to the right, and a narrower one splits
+down. An explicit `direction` overrides that choice.
+
+```text
+┌──────────────────┬─────────┐
+│                  │ process │
+│        Pi        ├─────────┤
+│                  │ process │
+└──────────────────┴─────────┘
+```
 The command runs at Pi's current working directory and stays attached to Herdr's
 terminal.
 
